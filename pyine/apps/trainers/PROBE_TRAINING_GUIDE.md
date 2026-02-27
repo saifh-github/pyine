@@ -44,7 +44,7 @@ useful for smoke tests and verifying your setup before training on real data:
 
 ```bash
 # Generate a debug LMDB
-uv run python -m pyine.probes.data.debug_dataset --output /tmp/probe-debug-lmdb
+uv run python -m pyine.guardrails.data.debug_dataset --output /tmp/probe-debug-lmdb
 ```
 
 The debug LMDB contains records with a learnable keyword-correlated signal, so probes can actually learn
@@ -57,7 +57,7 @@ augmentation suffixes matching `TraceIdentifier` conventions.
 Options:
 
 ```bash
-uv run python -m pyine.probes.data.debug_dataset \
+uv run python -m pyine.guardrails.data.debug_dataset \
     --output /tmp/probe-debug-lmdb \
     --n-train 200 \           # Number of training records (default: 200)
     --n-eval-families 30 \    # Number of eval families, each produces 3 records (default: 30)
@@ -67,7 +67,7 @@ uv run python -m pyine.probes.data.debug_dataset \
 Or from Python:
 
 ```python
-from pyine.probes.data.debug_dataset import create_debug_probe_lmdb, create_debug_probe_dataset
+from pyine.guardrails.data.debug_dataset import create_debug_probe_lmdb, create_debug_probe_dataset
 
 # Create a debug LMDB on disk
 create_debug_probe_lmdb("/tmp/probe-debug-lmdb", n_train=200, n_eval_families=30, seed=42)
@@ -451,10 +451,12 @@ replica index) and support filtering, sorting, and CSV export in the W&B UI.
 ```
 <output_dir>/probes/
   mean_L16_r0/
-    probe_state_dict.pt
-    probe_config.json
+    final/
+      probe_state_dict.pt
+      probe_config.json
   mean_L16_r1/
-    ...
+    final/
+      ...
   replica_summary.json       # Aggregated final metrics per base config
 ```
 
@@ -657,6 +659,8 @@ config:
   eval_steps: -1                    # Validate every N steps; -1 = epoch end only (default: -1)
   dataloader_num_workers: 4         # DataLoader workers (default: 4)
   save_probes: true                 # Save probe checkpoints after training (default: true)
+  save_steps: -1                    # Save every N optimizer steps; -1 = end only (default: -1)
+  save_total_limit: null            # Max mid-training checkpoints to keep; null = all (default: null)
 
   # Model loading options
   auto_model_config:
@@ -694,6 +698,69 @@ effective_batch_size = train_batch_size x num_gpus x gradient_accumulation_steps
 
 Mid-epoch validation is useful for long epochs or when you want to monitor convergence more frequently.
 
+## Checkpoint Saving
+
+### Mid-Training Checkpoints
+
+By default, probe checkpoints are only saved at the end of training. For long runs, enable
+periodic mid-training saves:
+
+```yaml
+config:
+  save_probes: true
+  save_steps: 100           # Save every 100 optimizer steps (-1 = end only)
+  save_total_limit: 5       # Keep at most 5 mid-training checkpoints (null = keep all)
+```
+
+Checkpoints are saved under each probe's architecture folder:
+
+```
+<output_dir>/probes/
+  mean_L16/
+    step-0100/
+      probe_state_dict.pt
+      probe_config.json
+    step-0200/
+      ...
+    final/                    # Always saved at end-of-training
+      probe_state_dict.pt
+      probe_config.json
+  max_L16/
+    step-0100/
+      ...
+    final/
+      ...
+```
+
+### Checkpoint Retention
+
+When `save_total_limit` is set, the trainer automatically deletes the oldest mid-training
+checkpoint inside each probe folder after each save to stay within the limit. The `final/`
+checkpoint is never deleted by the retention policy.
+
+### Loading Checkpoints
+
+To load probes from the final checkpoint:
+
+```python
+from pyine.guardrails.probes.collection import ProbeCollection
+
+collection = ProbeCollection.load_from_checkpoint(
+    checkpoint_dir=Path("<output_dir>/probes"),
+    hidden_dim=model.config.hidden_size,
+)
+```
+
+To load from a specific mid-training checkpoint:
+
+```python
+collection = ProbeCollection.load_from_checkpoint(
+    checkpoint_dir=Path("<output_dir>/probes"),
+    hidden_dim=model.config.hidden_size,
+    checkpoint_name="step-0100",
+)
+```
+
 ## Output Structure
 
 When `save_probes: true`, probe checkpoints are saved at the end of training:
@@ -701,13 +768,29 @@ When `save_probes: true`, probe checkpoints are saved at the end of training:
 ```
 <output_dir>/
   probes/
-    mean_L8/
-      probe_state_dict.pt       # PyTorch state_dict
-      probe_config.json         # ProbeConfig as JSON (architecture, layer, hyperparams)
     mean_L16/
+      final/
+        probe_state_dict.pt       # PyTorch state_dict
+        probe_config.json         # ProbeConfig as JSON
+    max_L16/
+      final/
+        probe_state_dict.pt
+        probe_config.json
+    ...
+```
+
+With replicas:
+
+```
+<output_dir>/probes/
+  mean_L16_r0/
+    final/
       probe_state_dict.pt
       probe_config.json
-    ...
+  mean_L16_r1/
+    final/
+      ...
+  replica_summary.json           # Aggregated final metrics per base config
 ```
 
 ### Loading Saved Probes
@@ -717,14 +800,14 @@ Saved probes can be reconstructed from their config and state dict:
 ```python
 import json
 import torch
-from pyine.probes import ProbeConfig, build_probe
+from pyine.guardrails.probes import ProbeConfig, build_probe
 
 # Load config
-config = ProbeConfig(**json.loads(open("probes/mean_L16/probe_config.json").read()))
+config = ProbeConfig(**json.loads(open("probes/mean_L16/final/probe_config.json").read()))
 
 # Build probe and load weights
 probe = build_probe(config)
-state_dict = torch.load("probes/mean_L16/probe_state_dict.pt", weights_only=True)
+state_dict = torch.load("probes/mean_L16/final/probe_state_dict.pt", weights_only=True)
 probe.load_state_dict(state_dict)
 probe.eval()
 ```

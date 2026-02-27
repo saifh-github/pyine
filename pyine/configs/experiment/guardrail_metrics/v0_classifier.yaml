@@ -1,0 +1,40 @@
+# @package _global_
+#
+# Guardrail metrics: benchmark LLM classifier
+#
+# Usage:
+#   python -m pyine.apps.guardrail_metrics.guardrail_metrics \
+#       +experiment=guardrail_metrics/v0_classifier \
+#       config.classifier_checkpoint_dir=/path/to/classifier
+
+defaults:
+  - override /config: base
+  - _self_
+
+runtime:
+  exp_name: guardrail_metrics/v0_classifier
+  run_name: "${runtime.exp_name}"
+  tags: ["guardrail-metrics", "llm-classifier"]
+  seed: 42
+
+config:
+  _target_: pyine.apps.guardrail_metrics.guardrail_metrics_configs.GuardrailMetricsAppMainConfig
+
+  use_wandb_logging: true
+
+  # LLM classifier (override on CLI)
+  classifier_checkpoint_dir: null  # REQUIRED: /path/to/classifier/output. #./logs/runs/llm_classifier_trainer/llm_classifier/v0_modernbert/llm_classifier/v0_modernbert/checkpoint-4750
+
+  classifier_auto_model_config:
+    attn_implementation: "flash_attention_2"
+
+  # Benchmarking
+  num_warmup_iterations: 10
+  num_benchmark_iterations: 100
+  batch_sizes: [1, 4, 8, 16, 32]
+  use_synthetic_data: true
+  synthetic_seq_lengths: [128, 256, 512, 1024, 2048]
+  max_seq_length: 3000
+  device: auto
+
+  output_format: both

@@ -12,6 +12,7 @@ import json
 import logging
 import math
 import pathlib
+import shutil
 import statistics
 import typing
 
@@ -28,8 +29,8 @@ import pyine.evals.correctness._impl as correctness_impl
 import pyine.evals.correctness.configs as correctness_configs
 import pyine.evals.correctness.datamodule as correctness_datamodule
 import pyine.evals.correctness.scorers as correctness_scorers
-import pyine.probes.collection
-import pyine.probes.extraction
+import pyine.guardrails.probes.collection
+import pyine.guardrails.probes.extraction
 import pyine.utils.distrib  # pyright: ignore[reportUnusedImport]
 
 if typing.TYPE_CHECKING:
@@ -37,10 +38,10 @@ if typing.TYPE_CHECKING:
     import numpy as np
     import numpy.typing as npt
 
-    import pyine.probes.base
+    import pyine.guardrails.probes.base
 
     _DL = torch.utils.data.DataLoader[dict[str, torch.Tensor]]
-    _PreparedResult = tuple[pyine.probes.collection.ProbeCollection, torch.optim.AdamW, _DL, _DL]
+    _PreparedResult = tuple[pyine.guardrails.probes.collection.ProbeCollection, torch.optim.AdamW, _DL, _DL]
 
 logger = logging.getLogger(__name__)
 
@@ -116,10 +117,10 @@ def _stable_replica_seed(
 
 
 def expand_probe_configs_with_replicas(
-    probe_configs: list[pyine.probes.base.ProbeConfig],
+    probe_configs: list[pyine.guardrails.probes.base.ProbeConfig],
     num_replicas: int,
     replica_base_seed: int,
-) -> list[pyine.probes.base.ProbeConfig]:
+) -> list[pyine.guardrails.probes.base.ProbeConfig]:
     """Expand probe configs by creating N replicas of each, with unique seeds.
 
     When num_replicas == 1, returns the original list unchanged (no modification).
@@ -135,7 +136,7 @@ def expand_probe_configs_with_replicas(
     if num_replicas <= 1:
         return probe_configs
 
-    expanded: list[pyine.probes.base.ProbeConfig] = []
+    expanded: list[pyine.guardrails.probes.base.ProbeConfig] = []
     for probe_config in probe_configs:
         for replica_idx in range(num_replicas):
             seed = _stable_replica_seed(replica_base_seed, probe_config.name, replica_idx)
@@ -154,7 +155,7 @@ def expand_probe_configs_with_replicas(
 
 def aggregate_replica_metrics(
     per_probe_values: dict[str, float],
-    probe_configs_by_name: dict[str, pyine.probes.base.ProbeConfig],
+    probe_configs_by_name: dict[str, pyine.guardrails.probes.base.ProbeConfig],
 ) -> dict[str, dict[str, float]]:
     """Group metric values by base_name and compute mean/std/min/max.
 
@@ -203,7 +204,7 @@ def aggregate_replica_metrics(
 
 def build_train_replica_table(
     per_probe_losses: dict[str, float],
-    expanded_configs_by_name: dict[str, pyine.probes.base.ProbeConfig],
+    expanded_configs_by_name: dict[str, pyine.guardrails.probes.base.ProbeConfig],
     global_step: int,
     epoch: int,
 ) -> typing.Any:
@@ -244,7 +245,7 @@ def build_train_replica_table(
 
 def build_valid_replica_table(
     per_probe_metrics: dict[str, dict[str, float]],
-    expanded_configs_by_name: dict[str, pyine.probes.base.ProbeConfig],
+    expanded_configs_by_name: dict[str, pyine.guardrails.probes.base.ProbeConfig],
     global_step: int,
 ) -> typing.Any:
     """Build a W&B Table with raw per-replica validation metrics.
@@ -285,7 +286,7 @@ def build_valid_replica_table(
 def save_replica_summary(
     output_dir: pathlib.Path,
     final_metrics: dict[str, dict[str, float]],
-    expanded_configs_by_name: dict[str, pyine.probes.base.ProbeConfig],
+    expanded_configs_by_name: dict[str, pyine.guardrails.probes.base.ProbeConfig],
 ) -> None:
     """Save aggregated replica summary as JSON."""
     loss_agg = aggregate_replica_metrics(
@@ -315,16 +316,16 @@ def save_replica_summary(
 
 
 def validate_probes(
-    probe_collection: pyine.probes.collection.ProbeCollection,
+    probe_collection: pyine.guardrails.probes.collection.ProbeCollection,
     model: torch.nn.Module,
-    extractor: pyine.probes.extraction.ActivationExtractor,
+    extractor: pyine.guardrails.probes.extraction.ActivationExtractor,
     valid_loader: torch.utils.data.DataLoader[dict[str, torch.Tensor]],
     loss_fn: torch.nn.Module,
     global_step: int,
     accelerator: accelerate.Accelerator,
     runtime: pyine.configs.schemas.RuntimeConfig | None,
     *,
-    expanded_configs_by_name: dict[str, pyine.probes.base.ProbeConfig] | None = None,
+    expanded_configs_by_name: dict[str, pyine.guardrails.probes.base.ProbeConfig] | None = None,
     log_individual_replicas: bool = False,
     id_to_code_type: dict[int, str] | None = None,
     log_per_code_type_metrics: bool = False,
@@ -336,9 +337,9 @@ def validate_probes(
     """
     probe_collection.eval()
 
-    # Handle both DDP-wrapped and raw pyine.probes.collection.ProbeCollection
+    # Handle both DDP-wrapped and raw pyine.guardrails.probes.collection.ProbeCollection
     raw = typing.cast(
-        "pyine.probes.collection.ProbeCollection",
+        "pyine.guardrails.probes.collection.ProbeCollection",
         getattr(probe_collection, "module", probe_collection),
     )
     probes_dict = raw.probes
@@ -538,39 +539,75 @@ def _log_per_code_type_metrics(
 
 
 def save_probe_checkpoints(
-    probe_collection: pyine.probes.collection.ProbeCollection,
+    probe_collection: pyine.guardrails.probes.collection.ProbeCollection,
     config: probe_trainer_configs.ProbeTrainerAppMainConfig,
     runtime: pyine.configs.schemas.RuntimeConfig | None,
     accelerator: accelerate.Accelerator,
+    *,
+    checkpoint_subdir: str = "final",
 ) -> pathlib.Path | None:
-    """Save probe weights + configs. Only on main process."""
+    """Save probe weights + configs. Only on main process.
+
+    Files are written to ``<probes_base>/<probe_name>/<checkpoint_subdir>/``.
+
+    Returns:
+        The probes base directory (``<output_dir>/probes/``), or None on non-main processes.
+    """
     if not accelerator.is_main_process:
         return None
 
     raw_collection = typing.cast(
-        "pyine.probes.collection.ProbeCollection",
+        "pyine.guardrails.probes.collection.ProbeCollection",
         accelerator.unwrap_model(probe_collection),  # pyright: ignore[reportUnknownMemberType]  # accelerate stubs
     )
     if runtime is not None:
-        output_dir = pathlib.Path(runtime.output_dir) / "probes"
+        probes_base = pathlib.Path(runtime.output_dir) / "probes"
     else:
-        output_dir = pathlib.Path("probes_output")
+        probes_base = pathlib.Path("probes_output")
 
     for name, module in raw_collection.probes.items():
-        probe = typing.cast("pyine.probes.base.BaseProbe", module)
-        probe_dir = output_dir / name
+        probe = typing.cast("pyine.guardrails.probes.base.BaseProbe", module)
+        probe_dir = probes_base / name / checkpoint_subdir
         probe_dir.mkdir(parents=True, exist_ok=True)
         torch.save(probe.state_dict(), probe_dir / "probe_state_dict.pt")
         (probe_dir / "probe_config.json").write_text(probe.config.model_dump_json(indent=2))
 
-    logger.info(f"Saved probe checkpoints to {output_dir}")
-    return output_dir
+    logger.info(f"Saved probe checkpoints ({checkpoint_subdir}) to {probes_base}")
+    return probes_base
+
+
+def enforce_checkpoint_limit(
+    probes_dir: pathlib.Path,
+    save_total_limit: int | None,
+) -> None:
+    """Delete oldest step-numbered checkpoint directories exceeding the retention limit.
+
+    Iterates each probe architecture folder in ``probes_dir`` and removes the
+    oldest ``step-NNNN`` subdirectories when the count exceeds ``save_total_limit``.
+    The ``final/`` subdirectory is never deleted.
+    """
+    if save_total_limit is None:
+        return
+
+    for probe_dir in probes_dir.iterdir():
+        if not probe_dir.is_dir():
+            continue
+
+        step_dirs = sorted(
+            (d for d in probe_dir.iterdir() if d.is_dir() and d.name.startswith("step-")),
+            key=lambda d: int(d.name.split("-", 1)[1]),
+        )
+
+        while len(step_dirs) > save_total_limit:
+            oldest = step_dirs.pop(0)
+            logger.info(f"Checkpoint retention: deleting {oldest} (limit={save_total_limit})")
+            shutil.rmtree(oldest)
 
 
 class ProbeTrainResult(typing.NamedTuple):
     """Return value of probe_train() with extra context for downstream evaluation."""
 
-    probe_collection: pyine.probes.collection.ProbeCollection
+    probe_collection: pyine.guardrails.probes.collection.ProbeCollection
     """The trained probe collection containing all probes across layers and replicas."""
     model: torch.nn.Module
     """The base model that was used for activation extraction during training."""
@@ -611,7 +648,7 @@ def probe_train(
         config.replica_base_seed,
     )
     has_replicas = config.num_replicas > 1
-    expanded_configs_by_name: dict[str, pyine.probes.base.ProbeConfig] = {
+    expanded_configs_by_name: dict[str, pyine.guardrails.probes.base.ProbeConfig] = {
         probe_config.name: probe_config for probe_config in expanded_probe_configs
     }
 
@@ -622,7 +659,7 @@ def probe_train(
         )
 
     logger.info(f"Building ProbeCollection with hidden_dim={hidden_dim}, {len(expanded_probe_configs)} probes")
-    probe_collection = pyine.probes.collection.ProbeCollection(expanded_probe_configs, hidden_dim)
+    probe_collection = pyine.guardrails.probes.collection.ProbeCollection(expanded_probe_configs, hidden_dim)
     probe_collection = probe_collection.to(dtype=config.target_dtype)
     optimizer = torch.optim.AdamW(probe_collection.get_parameter_groups())
 
@@ -681,7 +718,9 @@ def probe_train(
     # --- 5. Register activation hooks ---
     target_layers = sorted({pc.layer for pc in expanded_probe_configs})
     logger.info(f"Registering activation hooks on layers: {target_layers}")
-    extractor = pyine.probes.extraction.ActivationExtractor(model, target_layers, activation_dtype=config.target_dtype)
+    extractor = pyine.guardrails.probes.extraction.ActivationExtractor(
+        model, target_layers, activation_dtype=config.target_dtype
+    )
 
     # --- 6. Training loop ---
     loss_fn = torch.nn.BCEWithLogitsLoss()
@@ -787,6 +826,19 @@ def probe_train(
                     )
                     probe_collection.train()
 
+                # mid-training checkpoint saving
+                if config.save_probes and config.save_steps > 0 and global_step % config.save_steps == 0:
+                    step_subdir = f"step-{global_step:04d}"
+                    probes_base = save_probe_checkpoints(
+                        probe_collection,
+                        config,
+                        runtime,
+                        accelerator,
+                        checkpoint_subdir=step_subdir,
+                    )
+                    if accelerator.is_main_process and probes_base is not None:
+                        enforce_checkpoint_limit(probes_base, config.save_total_limit)
+
         # end-of-epoch validation
         final_metrics = validate_probes(
             probe_collection,
@@ -805,16 +857,22 @@ def probe_train(
 
     # --- 7. Save probes ---
     if config.save_probes:
-        output_dir = save_probe_checkpoints(probe_collection, config, runtime, accelerator)
-        if has_replicas and output_dir is not None and final_metrics:
-            save_replica_summary(output_dir, final_metrics, expanded_configs_by_name)
+        probes_base = save_probe_checkpoints(
+            probe_collection,
+            config,
+            runtime,
+            accelerator,
+            checkpoint_subdir="final",
+        )
+        if has_replicas and probes_base is not None and final_metrics:
+            save_replica_summary(probes_base, final_metrics, expanded_configs_by_name)
 
     # --- 8. Cleanup ---
     extractor.remove_hooks()
 
     logger.info("Probe training complete.")
     unwrapped_collection = typing.cast(
-        "pyine.probes.collection.ProbeCollection",
+        "pyine.guardrails.probes.collection.ProbeCollection",
         accelerator.unwrap_model(probe_collection),  # pyright: ignore[reportUnknownMemberType]  # accelerate stubs
     )
     return ProbeTrainResult(
@@ -852,7 +910,7 @@ async def main(
         model.requires_grad_(False)
         tokenizer = config.get_tokenizer(checkpoint_path=pathlib.Path(checkpoint_path) if checkpoint_path else None)
         hidden_dim: int = model.config.hidden_size
-        probe_collection = pyine.probes.collection.ProbeCollection.load_from_checkpoint(  # pyright: ignore[reportUnknownVariableType,reportUnknownMemberType,reportAttributeAccessIssue]
+        probe_collection = pyine.guardrails.probes.collection.ProbeCollection.load_from_checkpoint(  # pyright: ignore[reportUnknownVariableType,reportUnknownMemberType,reportAttributeAccessIssue]
             checkpoint_dir=config.probe_checkpoint_dir,
             hidden_dim=hidden_dim,
         )
@@ -863,7 +921,7 @@ async def main(
         probe_collection = train_result.probe_collection
         model = train_result.model
         tokenizer = train_result.tokenizer
-    probe_collection = typing.cast("pyine.probes.collection.ProbeCollection", probe_collection)
+    probe_collection = typing.cast("pyine.guardrails.probes.collection.ProbeCollection", probe_collection)
 
     # benchmarking phase (if enabled)
     if config.evals_config is not None:
@@ -875,7 +933,7 @@ async def main(
             target_layers = sorted(
                 {probe_collection._probe_configs[name].layer for name in probe_collection.probes}  # pyright: ignore[reportPrivateUsage]
             )
-            extractor = pyine.probes.extraction.ActivationExtractor(  # pyright: ignore[reportUnknownVariableType,reportUnknownMemberType,reportAttributeAccessIssue]
+            extractor = pyine.guardrails.probes.extraction.ActivationExtractor(  # pyright: ignore[reportUnknownVariableType,reportUnknownMemberType,reportAttributeAccessIssue]
                 model, target_layers
             )
             # group probes by type (base_name), creating one ProbeScorer per probe
@@ -884,7 +942,7 @@ async def main(
                 probe_cfg = probe_collection._probe_configs[probe_name]  # pyright: ignore[reportPrivateUsage]
                 base_name = probe_cfg.base_name or probe_cfg.name
                 scorer = correctness_scorers.ProbeScorer(
-                    probe=typing.cast("pyine.probes.base.BaseProbe", probe_module),
+                    probe=typing.cast("pyine.guardrails.probes.base.BaseProbe", probe_module),
                     probe_config=probe_cfg,
                     model=model,
                     tokenizer=tokenizer,

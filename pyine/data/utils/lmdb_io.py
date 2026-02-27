@@ -746,7 +746,7 @@ class LMDBReader:
 
 
 # --- Sample-key parsing and deduplication utilities ---
-# Used by probe training (pyine.probes.lmdb_dataset) and datamodule pregenerated-output
+# Used by probe training (pyine.guardrails.data.lmdb_dataset) and datamodule pregenerated-output
 # loading (pyine.organisms.datamodules.base) to avoid duplicating LMDB key conventions.
 
 

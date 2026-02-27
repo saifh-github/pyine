@@ -9,8 +9,8 @@ import torch
 import torch.utils.flop_counter
 
 import pyine.evals.correctness.types as correctness_types
-import pyine.probes.base
-import pyine.probes.extraction
+import pyine.guardrails.probes.base
+import pyine.guardrails.probes.extraction
 
 if typing.TYPE_CHECKING:
     import transformers
@@ -28,11 +28,11 @@ class ProbeScorer:
 
     def __init__(
         self,
-        probe: pyine.probes.base.BaseProbe,
-        probe_config: pyine.probes.base.ProbeConfig,
+        probe: pyine.guardrails.probes.base.BaseProbe,
+        probe_config: pyine.guardrails.probes.base.ProbeConfig,
         model: torch.nn.Module,
         tokenizer: transformers.PreTrainedTokenizerBase,
-        extractor: pyine.probes.extraction.ActivationExtractor,
+        extractor: pyine.guardrails.probes.extraction.ActivationExtractor,
         max_seq_length: int,
         text_field: str,
         batch_size: int = 64,

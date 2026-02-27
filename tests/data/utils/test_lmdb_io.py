@@ -361,10 +361,10 @@ class TestLoadAndDeduplicateLmdbRecords:
     """Tests for load_and_deduplicate_lmdb_records() with a real LMDB."""
 
     def test_end_to_end(self, tmp_path: pathlib.Path) -> None:
-        import pyine.probes.data.debug_dataset
+        import pyine.guardrails.data.debug_dataset
 
         lmdb_path = tmp_path / "debug.lmdb"
-        pyine.probes.data.debug_dataset.create_debug_probe_lmdb(lmdb_path, n_train=10, n_eval_families=5, seed=42)
+        pyine.guardrails.data.debug_dataset.create_debug_probe_lmdb(lmdb_path, n_train=10, n_eval_families=5, seed=42)
         with lmdb_io.LMDBReader(lmdb_path) as reader:
             records = lmdb_io.load_and_deduplicate_lmdb_records(reader, "train/", "latest")
         assert len(records) == 10
@@ -373,10 +373,10 @@ class TestLoadAndDeduplicateLmdbRecords:
         assert sample_ids == sorted(sample_ids)
 
     def test_prefix_filters(self, tmp_path: pathlib.Path) -> None:
-        import pyine.probes.data.debug_dataset
+        import pyine.guardrails.data.debug_dataset
 
         lmdb_path = tmp_path / "debug.lmdb"
-        pyine.probes.data.debug_dataset.create_debug_probe_lmdb(lmdb_path, n_train=10, n_eval_families=5, seed=42)
+        pyine.guardrails.data.debug_dataset.create_debug_probe_lmdb(lmdb_path, n_train=10, n_eval_families=5, seed=42)
         with lmdb_io.LMDBReader(lmdb_path) as reader:
             train = lmdb_io.load_and_deduplicate_lmdb_records(reader, "train/", "latest")
             valid = lmdb_io.load_and_deduplicate_lmdb_records(reader, "eval/", "latest")

@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import pathlib  # noqa: TC003
 import typing
+import warnings
 
 import pydantic
 import torch
@@ -17,8 +18,8 @@ import pyine.configs.utils
 import pyine.evals.common
 import pyine.evals.configs
 import pyine.evals.correctness.datamodule_configs  # noqa: TC001
-import pyine.probes.base  # noqa: TC001
-import pyine.probes.data.datamodule_configs  # noqa: TC001
+import pyine.guardrails.data.datamodule_configs  # noqa: TC001
+import pyine.guardrails.probes.base  # noqa: TC001
 import pyine.utils.reprod
 
 logger = logging.getLogger(__name__)
@@ -37,7 +38,7 @@ class ProbeTrainerAppMainConfig(common.AppMainConfig, common.ModelTokenizerConfi
 
     # --- Override: accept ProbeDataModuleConfig or CorrectnessDataModuleConfig ---
     datamodule_config: pydantic.SerializeAsAny[  # pyright: ignore[reportIncompatibleVariableOverride]
-        pyine.probes.data.datamodule_configs.ProbeDataModuleConfig
+        pyine.guardrails.data.datamodule_configs.ProbeDataModuleConfig
         | pyine.evals.correctness.datamodule_configs.CorrectnessDataModuleConfig
     ] = ...  # type: ignore[assignment]
     """Data configuration (LMDB source, splitting, filtering).
@@ -50,7 +51,7 @@ class ProbeTrainerAppMainConfig(common.AppMainConfig, common.ModelTokenizerConfi
     """Path to model checkpoint. If None, uses base_model directly."""
 
     # --- Probe configurations ---
-    probe_configs: list[pyine.probes.base.ProbeConfig] = pydantic.Field(default_factory=lambda: [])
+    probe_configs: list[pyine.guardrails.probes.base.ProbeConfig] = pydantic.Field(default_factory=lambda: [])
     """List of probe configs, each specifying architecture, layer, and hyperparams.
 
     May be empty when ``probe_checkpoint_dir`` is set (eval-only mode).
@@ -84,6 +85,19 @@ class ProbeTrainerAppMainConfig(common.AppMainConfig, common.ModelTokenizerConfi
     # --- Output ---
     save_probes: bool = True
     """Whether to save trained probe weights at the end of training."""
+
+    # --- Checkpoint saving ---
+    save_steps: int = -1
+    """Save probe checkpoints every N optimizer steps during training.
+    -1 = only at the end of training (current behavior).
+    Must be > 0 to enable mid-training saves. Follows the same convention
+    as eval_steps."""
+
+    save_total_limit: int | None = pydantic.Field(default=None, ge=1)
+    """Maximum number of mid-training checkpoint directories to keep for probes.
+    When exceeded, the oldest checkpoint (by step number) is deleted.
+    None = keep all checkpoints (no limit). Does not count the final
+    checkpoint saved at end-of-training."""
 
     # --- Replica settings ---
     num_replicas: int = pydantic.Field(default=1, ge=1)
@@ -121,6 +135,15 @@ class ProbeTrainerAppMainConfig(common.AppMainConfig, common.ModelTokenizerConfi
             )
         return self
 
+    @pydantic.model_validator(mode="after")
+    def _validate_save_steps(self) -> ProbeTrainerAppMainConfig:
+        if self.save_steps > 0 and not self.save_probes:
+            warnings.warn(
+                "save_steps > 0 has no effect when save_probes=False",
+                stacklevel=2,
+            )
+        return self
+
 
 def _get_app_configs(
     group: str,
@@ -128,7 +151,7 @@ def _get_app_configs(
     """Generates and returns probe trainer application configs for hydra zen storage."""
     # --- Probe datamodule config ---
     datamodule_config = pyine.configs.utils.make_config_description(
-        pyine.probes.data.datamodule_configs.ProbeDataModuleConfig,
+        pyine.guardrails.data.datamodule_configs.ProbeDataModuleConfig,
         name="probe_base",
         group=f"{group}/datamodule_config",
         description="Base probe datamodule settings (LMDB source, splitting, filtering).",

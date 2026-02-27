@@ -15,10 +15,10 @@ import pytest
 import torch
 
 import pyine.apps.trainers.probe_trainer
-import pyine.probes
-import pyine.probes.base
-import pyine.probes.collection
-import pyine.probes.extraction
+import pyine.guardrails.probes
+import pyine.guardrails.probes.base
+import pyine.guardrails.probes.collection
+import pyine.guardrails.probes.extraction
 
 
 class MockTransformerBlock(torch.nn.Module):
@@ -67,25 +67,27 @@ def mock_llm() -> SmallMockLLM:
 
 
 @pytest.fixture
-def probe_configs() -> list[pyine.probes.base.ProbeConfig]:
+def probe_configs() -> list[pyine.guardrails.probes.base.ProbeConfig]:
     return [
-        pyine.probes.base.ProbeConfig(name="mean_L0", architecture="mean", layer=0, learning_rate=1e-2),
-        pyine.probes.base.ProbeConfig(name="max_L1", architecture="max", layer=1, learning_rate=1e-2),
+        pyine.guardrails.probes.base.ProbeConfig(name="mean_L0", architecture="mean", layer=0, learning_rate=1e-2),
+        pyine.guardrails.probes.base.ProbeConfig(name="max_L1", architecture="max", layer=1, learning_rate=1e-2),
     ]
 
 
 @pytest.fixture
-def probe_collection(probe_configs: list[pyine.probes.base.ProbeConfig]) -> pyine.probes.collection.ProbeCollection:
-    return pyine.probes.collection.ProbeCollection(probe_configs, hidden_dim=64)
+def probe_collection(
+    probe_configs: list[pyine.guardrails.probes.base.ProbeConfig],
+) -> pyine.guardrails.probes.collection.ProbeCollection:
+    return pyine.guardrails.probes.collection.ProbeCollection(probe_configs, hidden_dim=64)
 
 
 class TestProbeTrainUnit:
     def test_train_step_reduces_loss(
         self,
         mock_llm: SmallMockLLM,
-        probe_collection: pyine.probes.collection.ProbeCollection,
+        probe_collection: pyine.guardrails.probes.collection.ProbeCollection,
     ) -> None:
-        extractor = pyine.probes.extraction.ActivationExtractor(mock_llm, target_layers=[0, 1])
+        extractor = pyine.guardrails.probes.extraction.ActivationExtractor(mock_llm, target_layers=[0, 1])
         optimizer = torch.optim.AdamW(probe_collection.get_parameter_groups())
         loss_fn = torch.nn.BCEWithLogitsLoss()
 
@@ -119,7 +121,7 @@ class TestProbeTrainUnit:
 
     def test_validation_produces_metrics(
         self,
-        probe_configs: list[pyine.probes.base.ProbeConfig],
+        probe_configs: list[pyine.guardrails.probes.base.ProbeConfig],
     ) -> None:
         acc = accelerate.Accelerator()
         device = acc.device
@@ -128,9 +130,9 @@ class TestProbeTrainUnit:
         model = SmallMockLLM(n_layers=2, hidden_dim=64).to(device)
         model.eval()
         model.requires_grad_(False)
-        coll = pyine.probes.collection.ProbeCollection(probe_configs, hidden_dim=64).to(device)
+        coll = pyine.guardrails.probes.collection.ProbeCollection(probe_configs, hidden_dim=64).to(device)
 
-        extractor = pyine.probes.extraction.ActivationExtractor(model, target_layers=[0, 1])
+        extractor = pyine.guardrails.probes.extraction.ActivationExtractor(model, target_layers=[0, 1])
         loss_fn = torch.nn.BCEWithLogitsLoss()
 
         # Build a small dataloader
@@ -169,7 +171,7 @@ class TestProbeTrainUnit:
 
     def test_auroc_guard_single_class(
         self,
-        probe_configs: list[pyine.probes.base.ProbeConfig],
+        probe_configs: list[pyine.guardrails.probes.base.ProbeConfig],
     ) -> None:
         import math
 
@@ -179,9 +181,9 @@ class TestProbeTrainUnit:
         model = SmallMockLLM(n_layers=2, hidden_dim=64).to(device)
         model.eval()
         model.requires_grad_(False)
-        coll = pyine.probes.collection.ProbeCollection(probe_configs, hidden_dim=64).to(device)
+        coll = pyine.guardrails.probes.collection.ProbeCollection(probe_configs, hidden_dim=64).to(device)
 
-        extractor = pyine.probes.extraction.ActivationExtractor(model, target_layers=[0, 1])
+        extractor = pyine.guardrails.probes.extraction.ActivationExtractor(model, target_layers=[0, 1])
         loss_fn = torch.nn.BCEWithLogitsLoss()
 
         # All labels are 0 -> single-class
@@ -215,67 +217,9 @@ class TestProbeTrainUnit:
 
         extractor.remove_hooks()
 
-    def test_save_probe_checkpoints(
-        self,
-        tmp_path: pathlib.Path,
-        probe_collection: pyine.probes.collection.ProbeCollection,
-    ) -> None:
-        acc = accelerate.Accelerator()
-        probe_collection_prepared = acc.prepare(probe_collection)
-
-        runtime = MagicMock()
-        runtime.output_dir = str(tmp_path)
-
-        config = MagicMock()
-
-        output_dir = pyine.apps.trainers.probe_trainer.save_probe_checkpoints(
-            probe_collection_prepared,
-            config,
-            runtime,
-            acc,
-        )
-
-        assert output_dir is not None
-        for name in probe_collection.probes:
-            probe_dir = output_dir / name
-            assert (probe_dir / "probe_state_dict.pt").exists()
-            assert (probe_dir / "probe_config.json").exists()
-
-    def test_probe_checkpoints_loadable(
-        self,
-        tmp_path: pathlib.Path,
-        probe_collection: pyine.probes.collection.ProbeCollection,
-        probe_configs: list[pyine.probes.base.ProbeConfig],
-    ) -> None:
-        import json
-
-        acc = accelerate.Accelerator()
-        probe_collection_prepared = acc.prepare(probe_collection)
-
-        runtime = MagicMock()
-        runtime.output_dir = str(tmp_path)
-        config = MagicMock()
-
-        output_dir = pyine.apps.trainers.probe_trainer.save_probe_checkpoints(
-            probe_collection_prepared,
-            config,
-            runtime,
-            acc,
-        )
-
-        # Reload each probe
-        for name in probe_collection.probes:
-            probe_dir = output_dir / name
-            config_json = json.loads((probe_dir / "probe_config.json").read_text())
-            loaded_config = pyine.probes.base.ProbeConfig(**config_json)
-            loaded_probe = pyine.probes.build_probe(loaded_config)
-            state_dict = torch.load(probe_dir / "probe_state_dict.pt", weights_only=True)
-            loaded_probe.load_state_dict(state_dict)
-
-            # Check shapes match
-            original_params = dict(probe_collection.probes[name].named_parameters())
-            loaded_params = dict(loaded_probe.named_parameters())
-            assert set(original_params.keys()) == set(loaded_params.keys())
+    # NOTE: test_save_probe_checkpoints and test_probe_checkpoints_loadable
+    # have been moved to TestMidTrainingSave below to cover the new
+    # probe-first directory hierarchy with checkpoint_subdir.
 
 
 def _replica_pc(
@@ -285,9 +229,9 @@ def _replica_pc(
     base_name: str = "a",
     replica_idx: int = 0,
     replica_seed: int = 1,
-) -> pyine.probes.base.ProbeConfig:
+) -> pyine.guardrails.probes.base.ProbeConfig:
     """Shorthand for creating ProbeConfig with replica metadata in tests."""
-    return pyine.probes.base.ProbeConfig(
+    return pyine.guardrails.probes.base.ProbeConfig(
         name=name,
         architecture=arch,
         layer=layer,
@@ -303,7 +247,7 @@ class TestLoadFromCheckpointRoundTrip:
     def test_save_then_load_preserves_weights(
         self,
         tmp_path: pathlib.Path,
-        probe_collection: pyine.probes.collection.ProbeCollection,
+        probe_collection: pyine.guardrails.probes.collection.ProbeCollection,
     ) -> None:
         acc = accelerate.Accelerator()
         probe_collection_prepared = acc.prepare(probe_collection)
@@ -317,7 +261,7 @@ class TestLoadFromCheckpointRoundTrip:
             acc,
         )
         assert output_dir is not None
-        loaded = pyine.probes.collection.ProbeCollection.load_from_checkpoint(
+        loaded = pyine.guardrails.probes.collection.ProbeCollection.load_from_checkpoint(
             checkpoint_dir=output_dir,
             hidden_dim=64,
         )
@@ -386,7 +330,7 @@ class TestStableReplicaSeed:
 
 class TestExpandProbeConfigsWithReplicas:
     def test_no_expansion_when_num_replicas_1(self) -> None:
-        configs = [pyine.probes.base.ProbeConfig(name="mean_L0", architecture="mean", layer=0)]
+        configs = [pyine.guardrails.probes.base.ProbeConfig(name="mean_L0", architecture="mean", layer=0)]
         result = pyine.apps.trainers.probe_trainer.expand_probe_configs_with_replicas(
             configs,
             num_replicas=1,
@@ -396,8 +340,8 @@ class TestExpandProbeConfigsWithReplicas:
 
     def test_expansion_creates_correct_count(self) -> None:
         configs = [
-            pyine.probes.base.ProbeConfig(name="mean_L0", architecture="mean", layer=0),
-            pyine.probes.base.ProbeConfig(name="attn_L8", architecture="attention", layer=8),
+            pyine.guardrails.probes.base.ProbeConfig(name="mean_L0", architecture="mean", layer=0),
+            pyine.guardrails.probes.base.ProbeConfig(name="attn_L8", architecture="attention", layer=8),
         ]
         result = pyine.apps.trainers.probe_trainer.expand_probe_configs_with_replicas(
             configs,
@@ -407,7 +351,7 @@ class TestExpandProbeConfigsWithReplicas:
         assert len(result) == 6
 
     def test_expanded_names_follow_pattern(self) -> None:
-        configs = [pyine.probes.base.ProbeConfig(name="mean_L0", architecture="mean", layer=0)]
+        configs = [pyine.guardrails.probes.base.ProbeConfig(name="mean_L0", architecture="mean", layer=0)]
         result = pyine.apps.trainers.probe_trainer.expand_probe_configs_with_replicas(
             configs,
             num_replicas=3,
@@ -417,7 +361,7 @@ class TestExpandProbeConfigsWithReplicas:
         assert names == ["mean_L0_r0", "mean_L0_r1", "mean_L0_r2"]
 
     def test_replica_metadata_populated(self) -> None:
-        configs = [pyine.probes.base.ProbeConfig(name="mean_L0", architecture="mean", layer=0)]
+        configs = [pyine.guardrails.probes.base.ProbeConfig(name="mean_L0", architecture="mean", layer=0)]
         result = pyine.apps.trainers.probe_trainer.expand_probe_configs_with_replicas(
             configs,
             num_replicas=2,
@@ -430,8 +374,8 @@ class TestExpandProbeConfigsWithReplicas:
 
     def test_seeds_are_unique(self) -> None:
         configs = [
-            pyine.probes.base.ProbeConfig(name="mean_L0", architecture="mean", layer=0),
-            pyine.probes.base.ProbeConfig(name="attn_L8", architecture="attention", layer=8),
+            pyine.guardrails.probes.base.ProbeConfig(name="mean_L0", architecture="mean", layer=0),
+            pyine.guardrails.probes.base.ProbeConfig(name="attn_L8", architecture="attention", layer=8),
         ]
         result = pyine.apps.trainers.probe_trainer.expand_probe_configs_with_replicas(
             configs,
@@ -442,7 +386,7 @@ class TestExpandProbeConfigsWithReplicas:
         assert len(set(seeds)) == len(seeds), f"Duplicate seeds found: {seeds}"
 
     def test_seeds_are_deterministic(self) -> None:
-        configs = [pyine.probes.base.ProbeConfig(name="mean_L0", architecture="mean", layer=0)]
+        configs = [pyine.guardrails.probes.base.ProbeConfig(name="mean_L0", architecture="mean", layer=0)]
         r1 = pyine.apps.trainers.probe_trainer.expand_probe_configs_with_replicas(
             configs,
             num_replicas=3,
@@ -457,7 +401,7 @@ class TestExpandProbeConfigsWithReplicas:
             assert a.replica_seed == b.replica_seed
 
     def test_base_name_matches_original(self) -> None:
-        configs = [pyine.probes.base.ProbeConfig(name="mean_L0", architecture="mean", layer=0)]
+        configs = [pyine.guardrails.probes.base.ProbeConfig(name="mean_L0", architecture="mean", layer=0)]
         result = pyine.apps.trainers.probe_trainer.expand_probe_configs_with_replicas(
             configs,
             num_replicas=2,
@@ -468,7 +412,7 @@ class TestExpandProbeConfigsWithReplicas:
 
     def test_non_replica_fields_preserved(self) -> None:
         configs = [
-            pyine.probes.base.ProbeConfig(
+            pyine.guardrails.probes.base.ProbeConfig(
                 name="attn_L8",
                 architecture="attention",
                 layer=8,
@@ -522,7 +466,7 @@ class TestAggregateReplicaMetrics:
 
     def test_non_replicated_probes(self) -> None:
         configs = {
-            "mean_L0": pyine.probes.base.ProbeConfig(name="mean_L0", architecture="mean", layer=0),
+            "mean_L0": pyine.guardrails.probes.base.ProbeConfig(name="mean_L0", architecture="mean", layer=0),
         }
         result = pyine.apps.trainers.probe_trainer.aggregate_replica_metrics({"mean_L0": 0.5}, configs)
         assert "mean_L0" in result
@@ -655,7 +599,7 @@ class TestReplicaTables:
 
     def test_tables_with_non_replicated_probes(self) -> None:
         configs = {
-            "mean_L0": pyine.probes.base.ProbeConfig(name="mean_L0", architecture="mean", layer=0),
+            "mean_L0": pyine.guardrails.probes.base.ProbeConfig(name="mean_L0", architecture="mean", layer=0),
         }
         table = pyine.apps.trainers.probe_trainer.build_train_replica_table(
             {"mean_L0": 0.5},
@@ -673,8 +617,8 @@ class TestValidateProbesWithReplicas:
         device = acc.device
 
         base_configs = [
-            pyine.probes.base.ProbeConfig(name="mean_L0", architecture="mean", layer=0, learning_rate=1e-2),
-            pyine.probes.base.ProbeConfig(name="max_L1", architecture="max", layer=1, learning_rate=1e-2),
+            pyine.guardrails.probes.base.ProbeConfig(name="mean_L0", architecture="mean", layer=0, learning_rate=1e-2),
+            pyine.guardrails.probes.base.ProbeConfig(name="max_L1", architecture="max", layer=1, learning_rate=1e-2),
         ]
         expanded = pyine.apps.trainers.probe_trainer.expand_probe_configs_with_replicas(
             base_configs, num_replicas=2, replica_base_seed=0
@@ -684,9 +628,9 @@ class TestValidateProbesWithReplicas:
         model = SmallMockLLM(n_layers=2, hidden_dim=64).to(device)
         model.eval()
         model.requires_grad_(False)
-        coll = pyine.probes.collection.ProbeCollection(expanded, hidden_dim=64).to(device)
+        coll = pyine.guardrails.probes.collection.ProbeCollection(expanded, hidden_dim=64).to(device)
 
-        extractor = pyine.probes.extraction.ActivationExtractor(model, target_layers=[0, 1])
+        extractor = pyine.guardrails.probes.extraction.ActivationExtractor(model, target_layers=[0, 1])
         loss_fn = torch.nn.BCEWithLogitsLoss()
 
         seq_len = 16
@@ -727,7 +671,7 @@ class TestValidateProbesWithReplicas:
         device = acc.device
 
         base_configs = [
-            pyine.probes.base.ProbeConfig(name="mean_L0", architecture="mean", layer=0, learning_rate=1e-2),
+            pyine.guardrails.probes.base.ProbeConfig(name="mean_L0", architecture="mean", layer=0, learning_rate=1e-2),
         ]
         expanded = pyine.apps.trainers.probe_trainer.expand_probe_configs_with_replicas(
             base_configs, num_replicas=3, replica_base_seed=0
@@ -737,9 +681,9 @@ class TestValidateProbesWithReplicas:
         model = SmallMockLLM(n_layers=2, hidden_dim=64).to(device)
         model.eval()
         model.requires_grad_(False)
-        coll = pyine.probes.collection.ProbeCollection(expanded, hidden_dim=64).to(device)
+        coll = pyine.guardrails.probes.collection.ProbeCollection(expanded, hidden_dim=64).to(device)
 
-        extractor = pyine.probes.extraction.ActivationExtractor(model, target_layers=[0, 1])
+        extractor = pyine.guardrails.probes.extraction.ActivationExtractor(model, target_layers=[0, 1])
         loss_fn = torch.nn.BCEWithLogitsLoss()
 
         seq_len = 16
@@ -787,7 +731,7 @@ class TestValidateProbesWithReplicas:
         device = acc.device
 
         base_configs = [
-            pyine.probes.base.ProbeConfig(name="mean_L0", architecture="mean", layer=0, learning_rate=1e-2),
+            pyine.guardrails.probes.base.ProbeConfig(name="mean_L0", architecture="mean", layer=0, learning_rate=1e-2),
         ]
         expanded = pyine.apps.trainers.probe_trainer.expand_probe_configs_with_replicas(
             base_configs, num_replicas=2, replica_base_seed=0
@@ -797,9 +741,9 @@ class TestValidateProbesWithReplicas:
         model = SmallMockLLM(n_layers=2, hidden_dim=64).to(device)
         model.eval()
         model.requires_grad_(False)
-        coll = pyine.probes.collection.ProbeCollection(expanded, hidden_dim=64).to(device)
+        coll = pyine.guardrails.probes.collection.ProbeCollection(expanded, hidden_dim=64).to(device)
 
-        extractor = pyine.probes.extraction.ActivationExtractor(model, target_layers=[0, 1])
+        extractor = pyine.guardrails.probes.extraction.ActivationExtractor(model, target_layers=[0, 1])
         loss_fn = torch.nn.BCEWithLogitsLoss()
 
         # All labels 0 -> single class -> NaN AUROC
@@ -841,8 +785,8 @@ class TestValidateProbesWithReplicas:
 class TestTrainStepWithReplicas:
     def test_train_step_reduces_loss_with_replicas(self) -> None:
         base_configs = [
-            pyine.probes.base.ProbeConfig(name="mean_L0", architecture="mean", layer=0, learning_rate=1e-2),
-            pyine.probes.base.ProbeConfig(name="max_L1", architecture="max", layer=1, learning_rate=1e-2),
+            pyine.guardrails.probes.base.ProbeConfig(name="mean_L0", architecture="mean", layer=0, learning_rate=1e-2),
+            pyine.guardrails.probes.base.ProbeConfig(name="max_L1", architecture="max", layer=1, learning_rate=1e-2),
         ]
         expanded = pyine.apps.trainers.probe_trainer.expand_probe_configs_with_replicas(
             base_configs, num_replicas=2, replica_base_seed=42
@@ -853,8 +797,8 @@ class TestTrainStepWithReplicas:
         model.eval()
         model.requires_grad_(False)
 
-        coll = pyine.probes.collection.ProbeCollection(expanded, hidden_dim=64)
-        extractor = pyine.probes.extraction.ActivationExtractor(model, target_layers=[0, 1])
+        coll = pyine.guardrails.probes.collection.ProbeCollection(expanded, hidden_dim=64)
+        extractor = pyine.guardrails.probes.extraction.ActivationExtractor(model, target_layers=[0, 1])
         optimizer = torch.optim.AdamW(coll.get_parameter_groups())
         loss_fn = torch.nn.BCEWithLogitsLoss()
 
@@ -884,3 +828,269 @@ class TestTrainStepWithReplicas:
         final_loss = total_loss.item()
         assert final_loss < initial_loss, f"Loss did not decrease: {initial_loss} -> {final_loss}"
         extractor.remove_hooks()
+
+
+# ---------------------------------------------------------------------------
+# Section 6.1: TestMidTrainingSave (tests 1-5)
+# ---------------------------------------------------------------------------
+
+
+class TestMidTrainingSave:
+    """Tests for save_probe_checkpoints() with the new checkpoint_subdir parameter."""
+
+    def test_save_probe_checkpoints_with_step_subdir(
+        self,
+        tmp_path: pathlib.Path,
+        probe_collection: pyine.guardrails.probes.collection.ProbeCollection,
+    ) -> None:
+        """Test 1: checkpoint_subdir='step-0010' creates files at <probes_base>/<probe>/step-0010/."""
+        acc = accelerate.Accelerator()
+        probe_collection_prepared = acc.prepare(probe_collection)
+
+        runtime = MagicMock()
+        runtime.output_dir = str(tmp_path)
+        config = MagicMock()
+
+        probes_base = pyine.apps.trainers.probe_trainer.save_probe_checkpoints(
+            probe_collection_prepared,
+            config,
+            runtime,
+            acc,
+            checkpoint_subdir="step-0010",
+        )
+
+        assert probes_base is not None
+        for name in probe_collection.probes:
+            probe_dir = probes_base / name / "step-0010"
+            assert (probe_dir / "probe_state_dict.pt").exists()
+            assert (probe_dir / "probe_config.json").exists()
+
+    def test_save_probe_checkpoints_final_subdir(
+        self,
+        tmp_path: pathlib.Path,
+        probe_collection: pyine.guardrails.probes.collection.ProbeCollection,
+    ) -> None:
+        """Test 2: Default checkpoint_subdir='final' creates files at <probes_base>/<probe>/final/."""
+        acc = accelerate.Accelerator()
+        probe_collection_prepared = acc.prepare(probe_collection)
+
+        runtime = MagicMock()
+        runtime.output_dir = str(tmp_path)
+        config = MagicMock()
+
+        probes_base = pyine.apps.trainers.probe_trainer.save_probe_checkpoints(
+            probe_collection_prepared,
+            config,
+            runtime,
+            acc,
+        )
+
+        assert probes_base is not None
+        for name in probe_collection.probes:
+            probe_dir = probes_base / name / "final"
+            assert (probe_dir / "probe_state_dict.pt").exists()
+            assert (probe_dir / "probe_config.json").exists()
+
+    def test_multiple_checkpoints_same_probe(
+        self,
+        tmp_path: pathlib.Path,
+        probe_collection: pyine.guardrails.probes.collection.ProbeCollection,
+    ) -> None:
+        """Test 3: Multiple saves create separate subdirs under each probe folder."""
+        acc = accelerate.Accelerator()
+        probe_collection_prepared = acc.prepare(probe_collection)
+
+        runtime = MagicMock()
+        runtime.output_dir = str(tmp_path)
+        config = MagicMock()
+
+        for subdir in ("step-0010", "step-0020", "final"):
+            pyine.apps.trainers.probe_trainer.save_probe_checkpoints(
+                probe_collection_prepared,
+                config,
+                runtime,
+                acc,
+                checkpoint_subdir=subdir,
+            )
+
+        probes_base = tmp_path / "probes"
+        for name in probe_collection.probes:
+            for subdir in ("step-0010", "step-0020", "final"):
+                probe_dir = probes_base / name / subdir
+                assert (probe_dir / "probe_state_dict.pt").exists()
+                assert (probe_dir / "probe_config.json").exists()
+
+    def test_checkpoints_loadable_from_step_subdir(
+        self,
+        tmp_path: pathlib.Path,
+        probe_collection: pyine.guardrails.probes.collection.ProbeCollection,
+    ) -> None:
+        """Test 4: Save to step subdir, load via ProbeCollection.load_from_checkpoint with checkpoint_name."""
+        acc = accelerate.Accelerator()
+        probe_collection_prepared = acc.prepare(probe_collection)
+
+        runtime = MagicMock()
+        runtime.output_dir = str(tmp_path)
+        config = MagicMock()
+
+        probes_base = pyine.apps.trainers.probe_trainer.save_probe_checkpoints(
+            probe_collection_prepared,
+            config,
+            runtime,
+            acc,
+            checkpoint_subdir="step-0010",
+        )
+        assert probes_base is not None
+
+        loaded = pyine.guardrails.probes.collection.ProbeCollection.load_from_checkpoint(
+            probes_base, hidden_dim=64, checkpoint_name="step-0010"
+        )
+        assert set(loaded.probes.keys()) == set(probe_collection.probes.keys())
+
+    def test_checkpoints_loadable_from_final(
+        self,
+        tmp_path: pathlib.Path,
+        probe_collection: pyine.guardrails.probes.collection.ProbeCollection,
+    ) -> None:
+        """Test 5: Save to 'final' subdir, load via load_from_checkpoint (default checkpoint_name)."""
+        acc = accelerate.Accelerator()
+        probe_collection_prepared = acc.prepare(probe_collection)
+
+        runtime = MagicMock()
+        runtime.output_dir = str(tmp_path)
+        config = MagicMock()
+
+        probes_base = pyine.apps.trainers.probe_trainer.save_probe_checkpoints(
+            probe_collection_prepared,
+            config,
+            runtime,
+            acc,
+            checkpoint_subdir="final",
+        )
+        assert probes_base is not None
+
+        loaded = pyine.guardrails.probes.collection.ProbeCollection.load_from_checkpoint(probes_base, hidden_dim=64)
+        assert set(loaded.probes.keys()) == set(probe_collection.probes.keys())
+
+        # Verify loaded weights match originals
+        for name in probe_collection.probes:
+            original_params = dict(probe_collection.probes[name].named_parameters())
+            loaded_params = dict(loaded.probes[name].named_parameters())
+            assert set(original_params.keys()) == set(loaded_params.keys())
+            for pname in original_params:
+                torch.testing.assert_close(original_params[pname].cpu(), loaded_params[pname])
+
+
+# ---------------------------------------------------------------------------
+# Section 6.1: TestEnforceCheckpointLimit (tests 6-13)
+# ---------------------------------------------------------------------------
+
+
+class TestEnforceCheckpointLimit:
+    """Tests for enforce_checkpoint_limit() utility."""
+
+    @staticmethod
+    def _make_step_dirs(probe_dir: pathlib.Path, steps: list[int]) -> None:
+        """Create step-NNNN subdirectories with a dummy file inside each."""
+        for step in steps:
+            d = probe_dir / f"step-{step:04d}"
+            d.mkdir(parents=True, exist_ok=True)
+            (d / "probe_state_dict.pt").write_text("dummy")
+
+    def test_no_deletion_when_under_limit(self, tmp_path: pathlib.Path) -> None:
+        """Test 6: All dirs remain when count is under the limit."""
+        probe_dir = tmp_path / "mean_L16"
+        self._make_step_dirs(probe_dir, [10, 20])
+
+        pyine.apps.trainers.probe_trainer.enforce_checkpoint_limit(tmp_path, save_total_limit=5)
+
+        assert (probe_dir / "step-0010").exists()
+        assert (probe_dir / "step-0020").exists()
+
+    def test_deletes_oldest_when_over_limit(self, tmp_path: pathlib.Path) -> None:
+        """Test 7: Oldest step dir is deleted when count exceeds limit."""
+        probe_dir = tmp_path / "mean_L16"
+        self._make_step_dirs(probe_dir, [10, 20, 30])
+
+        pyine.apps.trainers.probe_trainer.enforce_checkpoint_limit(tmp_path, save_total_limit=2)
+
+        assert not (probe_dir / "step-0010").exists()
+        assert (probe_dir / "step-0020").exists()
+        assert (probe_dir / "step-0030").exists()
+
+    def test_enforces_per_probe_independently(self, tmp_path: pathlib.Path) -> None:
+        """Test 8: Each probe folder independently retains only limit dirs."""
+        for probe_name in ("mean_L16", "max_L16"):
+            probe_dir = tmp_path / probe_name
+            self._make_step_dirs(probe_dir, [10, 20, 30])
+
+        pyine.apps.trainers.probe_trainer.enforce_checkpoint_limit(tmp_path, save_total_limit=2)
+
+        for probe_name in ("mean_L16", "max_L16"):
+            probe_dir = tmp_path / probe_name
+            assert not (probe_dir / "step-0010").exists()
+            assert (probe_dir / "step-0020").exists()
+            assert (probe_dir / "step-0030").exists()
+
+    def test_non_contiguous_step_numbers(self, tmp_path: pathlib.Path) -> None:
+        """Test 9: Integer-based sorting removes the numerically smallest step."""
+        probe_dir = tmp_path / "mean_L16"
+        self._make_step_dirs(probe_dir, [10, 50, 100])
+
+        pyine.apps.trainers.probe_trainer.enforce_checkpoint_limit(tmp_path, save_total_limit=2)
+
+        assert not (probe_dir / "step-0010").exists()
+        assert (probe_dir / "step-0050").exists()
+        assert (probe_dir / "step-0100").exists()
+
+    def test_final_dir_never_deleted(self, tmp_path: pathlib.Path) -> None:
+        """Test 10: The 'final/' subdir is never removed by the retention policy."""
+        probe_dir = tmp_path / "mean_L16"
+        self._make_step_dirs(probe_dir, [10, 20, 30])
+        final_dir = probe_dir / "final"
+        final_dir.mkdir(parents=True, exist_ok=True)
+        (final_dir / "probe_state_dict.pt").write_text("dummy")
+
+        pyine.apps.trainers.probe_trainer.enforce_checkpoint_limit(tmp_path, save_total_limit=1)
+
+        assert final_dir.exists()
+        # Only step-0030 should remain (newest); step-0010 and step-0020 deleted
+        assert not (probe_dir / "step-0010").exists()
+        assert not (probe_dir / "step-0020").exists()
+        assert (probe_dir / "step-0030").exists()
+
+    def test_extraneous_entries_ignored(self, tmp_path: pathlib.Path) -> None:
+        """Test 11: Non-step dirs/files inside probe folders and at root are preserved."""
+        probe_dir = tmp_path / "mean_L16"
+        self._make_step_dirs(probe_dir, [10, 20, 30])
+        # Add non-step entries
+        (probe_dir / "notes.txt").write_text("keep me")
+        (tmp_path / "replica_summary.json").write_text("{}")
+
+        pyine.apps.trainers.probe_trainer.enforce_checkpoint_limit(tmp_path, save_total_limit=2)
+
+        # Extraneous entries are preserved
+        assert (probe_dir / "notes.txt").exists()
+        assert (tmp_path / "replica_summary.json").exists()
+        # Only oldest step dir deleted
+        assert not (probe_dir / "step-0010").exists()
+        assert (probe_dir / "step-0020").exists()
+        assert (probe_dir / "step-0030").exists()
+
+    def test_no_op_when_limit_is_none(self, tmp_path: pathlib.Path) -> None:
+        """Test 12: All dirs remain when save_total_limit is None."""
+        probe_dir = tmp_path / "mean_L16"
+        self._make_step_dirs(probe_dir, [10, 20, 30, 40, 50])
+
+        pyine.apps.trainers.probe_trainer.enforce_checkpoint_limit(tmp_path, save_total_limit=None)
+
+        for step in (10, 20, 30, 40, 50):
+            assert (probe_dir / f"step-{step:04d}").exists()
+
+    def test_handles_empty_probes_dir(self, tmp_path: pathlib.Path) -> None:
+        """Test 13: No error when called on an empty directory."""
+        empty_dir = tmp_path / "empty_probes"
+        empty_dir.mkdir()
+
+        # Should not raise
+        pyine.apps.trainers.probe_trainer.enforce_checkpoint_limit(empty_dir, save_total_limit=1)

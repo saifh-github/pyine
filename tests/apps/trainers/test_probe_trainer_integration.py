@@ -30,11 +30,10 @@ class TestProbeTrainerIntegration:
         """
         from unittest.mock import MagicMock
 
-        from pyine.probes.debug_dataset import create_debug_probe_lmdb
-
         from pyine.apps.trainers.probe_trainer import probe_train
         from pyine.apps.trainers.probe_trainer_configs import ProbeTrainerAppMainConfig
-        from pyine.probes.base import ProbeConfig
+        from pyine.guardrails.data.debug_dataset import create_debug_probe_lmdb
+        from pyine.guardrails.probes.base import ProbeConfig
 
         # Create debug LMDB
         lmdb_path = tmp_path / "debug.lmdb"
@@ -71,9 +70,9 @@ class TestProbeTrainerIntegration:
 
         probe_train(config=config, runtime=runtime)
 
-        # Verify probes were saved
+        # Verify probes were saved under the new two-level hierarchy
         probes_dir = pathlib.Path(runtime.output_dir) / "probes"
         assert probes_dir.exists()
         for name in ("mean_L0", "max_L1"):
-            assert (probes_dir / name / "probe_state_dict.pt").exists()
-            assert (probes_dir / name / "probe_config.json").exists()
+            assert (probes_dir / name / "final" / "probe_state_dict.pt").exists()
+            assert (probes_dir / name / "final" / "probe_config.json").exists()

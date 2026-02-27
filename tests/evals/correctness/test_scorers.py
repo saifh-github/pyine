@@ -10,7 +10,7 @@ import transformers
 
 import pyine.evals.correctness.scorers as correctness_scorers
 import pyine.evals.correctness.types as correctness_types
-import pyine.probes.base
+import pyine.guardrails.probes.base
 
 
 def _make_record(
@@ -32,10 +32,10 @@ def _make_record(
     )
 
 
-class _MockProbe(pyine.probes.base.BaseProbe):
+class _MockProbe(pyine.guardrails.probes.base.BaseProbe):
     """Minimal probe that returns random logits."""
 
-    def __init__(self, config: pyine.probes.base.ProbeConfig) -> None:
+    def __init__(self, config: pyine.guardrails.probes.base.ProbeConfig) -> None:
         super().__init__(config)
         self._dummy = torch.nn.Parameter(torch.zeros(1))  # pyright: ignore[reportUnknownMemberType]
 
@@ -76,11 +76,11 @@ class _MockModel(torch.nn.Module):
 @pytest.mark.slow
 class TestProbeScorer:
     def test_produces_correct_number_of_scores(self) -> None:
-        import pyine.probes.extraction
+        import pyine.guardrails.probes.extraction
 
         hidden_dim = 32
         model = _MockModel(hidden_dim=hidden_dim, num_layers=4)
-        probe_config = pyine.probes.base.ProbeConfig(
+        probe_config = pyine.guardrails.probes.base.ProbeConfig(
             name="test_probe",
             architecture="mean_pool",
             layer=1,
@@ -88,7 +88,7 @@ class TestProbeScorer:
         )
         probe = _MockProbe(probe_config)
         tokenizer = transformers.AutoTokenizer.from_pretrained("bert-base-uncased")
-        extractor = pyine.probes.extraction.ActivationExtractor(model, [1])
+        extractor = pyine.guardrails.probes.extraction.ActivationExtractor(model, [1])
         scorer = correctness_scorers.ProbeScorer(
             probe=probe,
             probe_config=probe_config,
@@ -109,11 +109,11 @@ class TestProbeScorer:
         extractor.remove_hooks()
 
     def test_get_metadata_returns_dict(self) -> None:
-        import pyine.probes.extraction
+        import pyine.guardrails.probes.extraction
 
         hidden_dim = 32
         model = _MockModel(hidden_dim=hidden_dim)
-        probe_config = pyine.probes.base.ProbeConfig(
+        probe_config = pyine.guardrails.probes.base.ProbeConfig(
             name="test_probe",
             architecture="mean_pool",
             layer=0,
@@ -123,7 +123,7 @@ class TestProbeScorer:
         )
         probe = _MockProbe(probe_config)
         tokenizer = transformers.AutoTokenizer.from_pretrained("bert-base-uncased")
-        extractor = pyine.probes.extraction.ActivationExtractor(model, [0])
+        extractor = pyine.guardrails.probes.extraction.ActivationExtractor(model, [0])
         scorer = correctness_scorers.ProbeScorer(
             probe=probe,
             probe_config=probe_config,
@@ -140,16 +140,16 @@ class TestProbeScorer:
         extractor.remove_hooks()
 
     def test_verification_cost_unit_is_flops(self) -> None:
-        import pyine.probes.extraction
+        import pyine.guardrails.probes.extraction
 
         hidden_dim = 32
         model = _MockModel(hidden_dim=hidden_dim)
-        probe_config = pyine.probes.base.ProbeConfig(
+        probe_config = pyine.guardrails.probes.base.ProbeConfig(
             name="test_probe", architecture="mean_pool", layer=0, hidden_dim=hidden_dim
         )
         probe = _MockProbe(probe_config)
         tokenizer = transformers.AutoTokenizer.from_pretrained("bert-base-uncased")
-        extractor = pyine.probes.extraction.ActivationExtractor(model, [0])
+        extractor = pyine.guardrails.probes.extraction.ActivationExtractor(model, [0])
         scorer = correctness_scorers.ProbeScorer(
             probe=probe,
             probe_config=probe_config,

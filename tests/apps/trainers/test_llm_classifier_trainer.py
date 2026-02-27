@@ -367,41 +367,33 @@ class TestWeightedLossTrainer:
 class TestLogClassDistribution:
     """Tests for the class distribution logging function."""
 
-    @pytest.fixture
-    def log(self) -> logging.Logger:
-        """Dedicated test logger unaffected by hydra's logging config."""
-        return logging.getLogger("test.log_class_distribution")
-
-    def test_logs_both_splits(
-        self,
-        caplog: pytest.LogCaptureFixture,
-        log: logging.Logger,
-    ) -> None:
+    def test_logs_both_splits(self) -> None:
+        mock_logger = MagicMock()
         ds_dict = datasets.DatasetDict(
             {
                 "train": datasets.Dataset.from_dict({"label": [0, 0, 1, 1, 1]}),
                 "valid": datasets.Dataset.from_dict({"label": [0, 1]}),
             }
         )
-        with caplog.at_level(logging.INFO, logger=log.name):
-            llm_trainer._log_class_distribution(ds_dict, log)
-        assert "train split" in caplog.text
-        assert "valid split" in caplog.text
+        llm_trainer._log_class_distribution(ds_dict, mock_logger)
+        logged_messages = " ".join(str(call) for call in mock_logger.info.call_args_list)
+        assert "train" in logged_messages
+        assert "valid" in logged_messages
 
-    def test_logs_correct_counts(
-        self,
-        caplog: pytest.LogCaptureFixture,
-        log: logging.Logger,
-    ) -> None:
+    def test_logs_correct_counts(self) -> None:
+        mock_logger = MagicMock()
         ds_dict = datasets.DatasetDict(
             {
                 "train": datasets.Dataset.from_dict({"label": [0, 0, 0, 1]}),
             }
         )
-        with caplog.at_level(logging.INFO, logger=log.name):
-            llm_trainer._log_class_distribution(ds_dict, log)
-        assert "pos=1" in caplog.text
-        assert "neg=3" in caplog.text
+        llm_trainer._log_class_distribution(ds_dict, mock_logger)
+        assert mock_logger.info.call_count == 1
+        call_args = mock_logger.info.call_args
+        # _log_class_distribution uses:
+        # log.info("%s split: %d samples (pos=%d, neg=%d, ...)", split, n, pos, neg, ratio)
+        assert call_args[0][3] == 1  # n_pos
+        assert call_args[0][4] == 3  # n_neg
 
 
 # ---------------------------------------------------------------------------
@@ -445,7 +437,7 @@ class TestSkipTrainingClassifierTrainer:
         from pyine.apps.trainers.llm_classifier_trainer_configs import (
             LLMClassifierTrainerAppMainConfig,
         )
-        from pyine.probes.data.debug_dataset import create_debug_probe_lmdb
+        from pyine.guardrails.data.debug_dataset import create_debug_probe_lmdb
 
         lmdb_path = create_debug_probe_lmdb(tmp_path / "lmdb", n_train=40, n_eval_families=10)
         output_dir = tmp_path / "output"
@@ -497,7 +489,7 @@ class TestClassifierTrainUnit:
     @pytest.fixture
     def debug_lmdb(self, tmp_path: pathlib.Path) -> pathlib.Path:
         """Create a debug LMDB for testing."""
-        from pyine.probes.data.debug_dataset import create_debug_probe_lmdb
+        from pyine.guardrails.data.debug_dataset import create_debug_probe_lmdb
 
         return create_debug_probe_lmdb(tmp_path / "test_lmdb", n_train=40, n_eval_families=10)
 
@@ -578,8 +570,6 @@ class TestClassifierTrainUnit:
 
     @pytest.mark.slow
     def test_class_distribution_logged(self, minimal_config: dict, caplog: pytest.LogCaptureFixture) -> None:
-        import logging
-
         from pyine.apps.trainers.llm_classifier_trainer_configs import (
             LLMClassifierTrainerAppMainConfig,
         )
@@ -617,7 +607,7 @@ class TestClassifierTrainIntegration:
         from pyine.apps.trainers.llm_classifier_trainer_configs import (
             LLMClassifierTrainerAppMainConfig,
         )
-        from pyine.probes.data.debug_dataset import create_debug_probe_lmdb
+        from pyine.guardrails.data.debug_dataset import create_debug_probe_lmdb
 
         lmdb_path = create_debug_probe_lmdb(tmp_path / "lmdb", n_train=40, n_eval_families=10)
         cfg = LLMClassifierTrainerAppMainConfig(
@@ -649,7 +639,7 @@ class TestClassifierTrainIntegration:
         from pyine.apps.trainers.llm_classifier_trainer_configs import (
             LLMClassifierTrainerAppMainConfig,
         )
-        from pyine.probes.data.debug_dataset import create_debug_probe_lmdb
+        from pyine.guardrails.data.debug_dataset import create_debug_probe_lmdb
 
         lmdb_path = create_debug_probe_lmdb(tmp_path / "lmdb", n_train=40, n_eval_families=10)
         cfg = LLMClassifierTrainerAppMainConfig(

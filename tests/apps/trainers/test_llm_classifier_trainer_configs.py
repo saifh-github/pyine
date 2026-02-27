@@ -118,7 +118,7 @@ class TestLLMClassifierTrainerAppMainConfig:
         assert cfg.evals_config is None
 
     def test_class_weight_with_label_balance_warns(self) -> None:
-        from pyine.probes.data.datamodule_configs import LabelBalanceConfig
+        from pyine.guardrails.data.datamodule_configs import LabelBalanceConfig
 
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
