@@ -570,9 +570,9 @@ class TestClassifierTrainUnit:
         )
 
         cfg = LLMClassifierTrainerAppMainConfig(**minimal_config)
-        trainer = llm_trainer.classifier_train(config=cfg, runtime=None)
+        result = llm_trainer.classifier_train(config=cfg, runtime=None)
         # Trainer should have logged eval metrics
-        log_history = trainer.state.log_history
+        log_history = result.trainer.state.log_history
         eval_logs = [entry for entry in log_history if "eval_accuracy" in entry]
         assert len(eval_logs) >= 1
 
@@ -585,8 +585,14 @@ class TestClassifierTrainUnit:
         )
 
         cfg = LLMClassifierTrainerAppMainConfig(**minimal_config)
-        with caplog.at_level(logging.INFO):
-            llm_trainer.classifier_train(config=cfg, runtime=None)
+        logger_name = "pyine.apps.trainers.llm_classifier_trainer"
+        target_logger = logging.getLogger(logger_name)
+        target_logger.addHandler(caplog.handler)  # bypass propagate=False on ancestor
+        try:
+            with caplog.at_level(logging.INFO, logger=logger_name):
+                llm_trainer.classifier_train(config=cfg, runtime=None)
+        finally:
+            target_logger.removeHandler(caplog.handler)
         assert "train split" in caplog.text
 
     @pytest.mark.slow
@@ -597,8 +603,8 @@ class TestClassifierTrainUnit:
 
         minimal_config["class_weight_mode"] = "balanced"
         cfg = LLMClassifierTrainerAppMainConfig(**minimal_config)
-        trainer = llm_trainer.classifier_train(config=cfg, runtime=None)
-        assert isinstance(trainer, llm_trainer.WeightedLossTrainer)
+        result = llm_trainer.classifier_train(config=cfg, runtime=None)
+        assert isinstance(result.trainer, llm_trainer.WeightedLossTrainer)
 
 
 class TestClassifierTrainIntegration:
@@ -669,5 +675,5 @@ class TestClassifierTrainIntegration:
                 target_modules=["query", "value"],
             ),
         )
-        trainer = llm_trainer.classifier_train(config=cfg, runtime=None)
-        assert isinstance(trainer.model, peft.PeftModel)
+        result = llm_trainer.classifier_train(config=cfg, runtime=None)
+        assert isinstance(result.trainer.model, peft.PeftModel)
