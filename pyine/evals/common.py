@@ -330,6 +330,44 @@ class EvalExportConfig(pydantic.BaseModel):
     """Whether to store aggregated evaluation metrics as LMDB metadata."""
 
 
+class PassAtKDefaults(pydantic.BaseModel):
+    """Canonical Pass@K evaluation defaults (LiveCodeBench conventions).
+
+    Single source of truth for the standard settings used across all Pass@K evaluation protocols.
+    Both ``GenerationEvalsConfig.for_pass_at_k()`` and the hydra config builders derive their
+    values from the module-level ``PASS_AT_K_DEFAULTS`` instance.
+    """
+
+    model_config = pydantic.ConfigDict(frozen=True)
+    """Pydantic model configuration (immutable)."""
+
+    num_attempts_per_sample: pydantic.PositiveInt = 10
+    """Number of generation attempts per sample (K)."""
+    temperature: float = 0.2
+    """Sampling temperature for nucleus sampling."""
+    top_p: float = 0.95
+    """Nucleus sampling probability threshold."""
+    max_new_tokens: pydantic.PositiveInt = 10_000
+    """Maximum number of new tokens to generate per attempt."""
+
+    def to_generation_config_overrides(self) -> dict[str, typing.Any]:
+        """Returns field-name-mapped overrides for ``GenerationEvalsConfig`` / hydra builders.
+
+        Maps the user-facing field names on this class to the internal field names expected
+        by ``GenerationEvalsConfig`` (e.g. ``temperature`` -> ``sampling_temperature_override``).
+        """
+        return {
+            "num_attempts_per_sample": self.num_attempts_per_sample,
+            "eval_generation_max_new_tokens_override": self.max_new_tokens,
+            "sampling_temperature_override": self.temperature,
+            "sampling_top_p_override": self.top_p,
+        }
+
+
+PASS_AT_K_DEFAULTS = PassAtKDefaults()
+"""Module-level singleton with the canonical Pass@K settings."""
+
+
 class GenerationEvalsConfig(BaseEvalsConfig):
     """Configuration for generation-based evaluation tasks.
 
@@ -403,17 +441,17 @@ class GenerationEvalsConfig(BaseEvalsConfig):
     @classmethod
     def for_pass_at_k(
         cls,
-        num_attempts_per_sample: int = 10,
-        temperature: float = 0.2,
-        top_p: float = 0.95,
-        max_new_tokens: int = 10_000,
+        num_attempts_per_sample: int = PASS_AT_K_DEFAULTS.num_attempts_per_sample,
+        temperature: float = PASS_AT_K_DEFAULTS.temperature,
+        top_p: float = PASS_AT_K_DEFAULTS.top_p,
+        max_new_tokens: int = PASS_AT_K_DEFAULTS.max_new_tokens,
         **kwargs: typing.Any,
     ) -> "GenerationEvalsConfig":
         """Creates a config with literature-standard Pass@K defaults (nucleus sampling).
 
-        IMPORTANT: The default parameter values defined here are the canonical settings for
-        all standard evaluations and cross-run comparisons. Override them only when intentionally
-        deviating from the standard protocol.
+        Default values are derived from ``PASS_AT_K_DEFAULTS``, the canonical single source of
+        truth for all standard evaluations and cross-run comparisons. Override them only when
+        intentionally deviating from the standard protocol.
 
         Default values follow LiveCodeBench conventions for code generation evaluation. Explicit
         arguments override the built-in defaults; any additional keyword arguments are forwarded

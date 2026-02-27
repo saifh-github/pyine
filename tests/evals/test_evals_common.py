@@ -1,8 +1,34 @@
+import pydantic
 import pytest
 import pytest_mock
 
 import pyine.configs.schemas
 import pyine.evals.common
+
+
+class TestPassAtKDefaults:
+    def test_to_generation_config_overrides_keys(self) -> None:
+        defaults = pyine.evals.common.PASS_AT_K_DEFAULTS
+        overrides = defaults.to_generation_config_overrides()
+        assert overrides == {
+            "num_attempts_per_sample": 10,
+            "eval_generation_max_new_tokens_override": 10_000,
+            "sampling_temperature_override": 0.2,
+            "sampling_top_p_override": 0.95,
+        }
+
+    def test_frozen(self) -> None:
+        defaults = pyine.evals.common.PASS_AT_K_DEFAULTS
+        with pytest.raises(pydantic.ValidationError):
+            defaults.temperature = 0.5  # type: ignore[misc]
+
+    def test_for_pass_at_k_uses_defaults(self) -> None:
+        defaults = pyine.evals.common.PASS_AT_K_DEFAULTS
+        config = pyine.evals.common.GenerationEvalsConfig.for_pass_at_k()
+        assert config.num_attempts_per_sample == defaults.num_attempts_per_sample
+        assert config.sampling_temperature_override == defaults.temperature
+        assert config.sampling_top_p_override == defaults.top_p
+        assert config.eval_generation_max_new_tokens_override == defaults.max_new_tokens
 
 
 class TestEvalType:
