@@ -433,6 +433,21 @@ class GenerationEvalsConfig(BaseEvalsConfig):
                 )
         return self
 
+    def get_llm_provider_model_kwargs(self) -> dict[str, typing.Any]:
+        """Returns non-None generation settings as an OpenAI-compatible constructor kwargs dict.
+
+        The returned dict can be unpacked directly into ``get_model_from_provider(**kwargs)``
+        or any LangChain ``ChatOpenAI``-style constructor.
+        """
+        kwargs: dict[str, typing.Any] = {}
+        if self.sampling_temperature_override is not None:
+            kwargs["temperature"] = self.sampling_temperature_override
+        if self.sampling_top_p_override is not None:
+            kwargs["top_p"] = self.sampling_top_p_override
+        if self.eval_generation_max_new_tokens_override is not None:
+            kwargs["max_tokens"] = self.eval_generation_max_new_tokens_override
+        return kwargs
+
     @property
     def use_vllm_server(self) -> bool:
         """Whether to use a vLLM server for inference."""

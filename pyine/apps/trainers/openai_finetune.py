@@ -170,10 +170,14 @@ async def main(
         runtime.resume_wandb_run_if_needed()
         runtime.wandb_run.summary.update({"model_name": model_name})  # type: ignore[reportUnknownMemberType]
 
+    generation_model_kwargs: dict[str, typing.Any] = {}
+    if isinstance(config.evals_config, pyine.evals.common.GenerationEvalsConfig):
+        generation_model_kwargs = config.evals_config.get_llm_provider_model_kwargs()
     model_for_evals = pyine.utils.llm_providers.get_model_from_provider(
         provider="openai",
         model=model_name,
         client=client.chat.completions,
+        **generation_model_kwargs,
     )
     text_generation_pipeline_for_evals = datamodule.config.get_prompt_chain(model_for_evals)
     await pyine.apps.trainers.common.evaluate_model(
