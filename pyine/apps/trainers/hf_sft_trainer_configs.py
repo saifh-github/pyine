@@ -251,7 +251,7 @@ def _get_app_configs(
                 {"datamodule_config": "shortcuts_base"},
                 {"training_args_config": "base"},
                 # {"lora_config": "null"},  # left out here = deactivated (null)
-                {"evals_config": "code_exec_base"},
+                {"evals_config": "code_exec_pass_at_k"},
             ],
         },
     )
