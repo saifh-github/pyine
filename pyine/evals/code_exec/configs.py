@@ -374,6 +374,7 @@ def get_evals_configs(group: str) -> list[pyine.configs.schemas.ConfigDescriptio
             "evaluator_kwargs": {
                 "add_idempotency_header": True,  # to mark all requests as unique and avoid retry issues
             },
+            "difficulty_config": {},  # DifficultyConfig defaults (trace_step_count + halstead_effort)
             # -------------
             "populate_full_signature": True,
             "hydra_convert": "object",
