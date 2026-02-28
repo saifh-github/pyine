@@ -171,8 +171,9 @@ async def main(
         runtime.wandb_run.summary.update({"model_name": model_name})  # type: ignore[reportUnknownMemberType]
 
     generation_model_kwargs: dict[str, typing.Any] = {}
-    if isinstance(config.evals_config, pyine.evals.common.GenerationEvalsConfig):
-        generation_model_kwargs = config.evals_config.get_llm_provider_model_kwargs()
+    evals_config = getattr(config, "evals_config", None)
+    if isinstance(evals_config, pyine.evals.common.GenerationEvalsConfig):
+        generation_model_kwargs = evals_config.get_llm_provider_model_kwargs()
     model_for_evals = pyine.utils.llm_providers.get_model_from_provider(
         provider="openai",
         model=model_name,
