@@ -384,8 +384,11 @@ def register_hydra_configs(
 
 
 if __name__ == "__main__":
+    import sys
+
     pyine.configs.base.register_searchpath_plugin()
     pyine.configs.utils.print_experiment_configs(
         config_descriptions=register_hydra_configs(eval_type=pyine.evals.common.EvalType.CODE_EXEC),
         app_name="hf_sft_trainer",
+        cli_args=sys.argv[1:],
     )

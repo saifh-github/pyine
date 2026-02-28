@@ -329,9 +329,11 @@ def register_hydra_configs(
 
 
 if __name__ == "__main__":
+    import sys
+
     pyine.configs.base.register_searchpath_plugin()
-    # TODO: if we ever have more than one eval type, add a selector based on launch args here
     pyine.configs.utils.print_experiment_configs(
         config_descriptions=register_hydra_configs(eval_type=pyine.evals.common.EvalType.CODE_EXEC),
         app_name="openai_finetune",
+        cli_args=sys.argv[1:],
     )

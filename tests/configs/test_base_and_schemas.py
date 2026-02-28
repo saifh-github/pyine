@@ -31,47 +31,112 @@ def test_register_searchpath_plugin_registers_once(
     assert registered == [pyine.configs.searchpath.SearchPathPlugin]
 
 
-def test_print_experiment_configs_lists_expected_sections(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    calls = {"initialize": 0, "render": []}
+class TestPrintExperimentConfigs:
+    @staticmethod
+    def _make_configs() -> list[types.SimpleNamespace]:
+        entrypoint = types.SimpleNamespace(
+            name="entrypoint",
+            group=None,
+            description="Entrypoint desc",
+            config=types.SimpleNamespace(),
+        )
+        experiment = types.SimpleNamespace(
+            name="exp_a",
+            group="experiment",
+            description="Experiment A",
+            config=types.SimpleNamespace(),
+        )
+        other = types.SimpleNamespace(
+            name="other",
+            group="misc",
+            description="Other config",
+            config=types.SimpleNamespace(),
+        )
+        return [entrypoint, experiment, other]
 
-    class _HydraContext:
-        def __enter__(self) -> None:
-            calls["initialize"] += 1
-            return
+    def test_list_mode_shows_configs_without_hydra(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        calls: dict[str, list[object]] = {"initialize": [], "render": []}
+        monkeypatch.setattr(
+            pyine.configs.utils.hydra,
+            "initialize",
+            lambda **_kwargs: (_ for _ in ()).throw(AssertionError("should not be called")),
+        )
+        monkeypatch.setattr(
+            pyine.configs.utils.pyine.utils.portability,
+            "render_config",
+            lambda *_a, **_kw: calls["render"].append(True),
+        )
+        monkeypatch.setattr(
+            pyine.configs.utils,
+            "discover_yaml_experiment_configs",
+            lambda: [],
+        )
+        configs = self._make_configs()
+        pyine.configs.utils.print_experiment_configs(configs, "app")
+        captured = capsys.readouterr().out
+        assert "+experiment=exp_a" in captured
+        assert "AVAILABLE CONFIGS" in captured
+        assert not calls["render"]
 
-        def __exit__(
-            self,
-            exc_type: type[BaseException] | None,
-            exc: BaseException | None,
-            tb: types.TracebackType | None,
-        ) -> bool:
-            return False
+    def test_show_mode_composes_and_renders(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        calls: dict[str, list[object]] = {"initialize": [], "render": []}
 
-    monkeypatch.setattr(
-        pyine.configs.base.hydra,
-        "initialize",
-        lambda **_kwargs: _HydraContext(),
-    )
-    monkeypatch.setattr(
-        pyine.configs.base.hydra,
-        "compose",
-        lambda **_kwargs: {"config": "value"},
-    )
-    monkeypatch.setattr(
-        pyine.configs.base.pyine.utils.portability,
-        "render_config",
-        lambda cfg, composed: calls["render"].append((cfg, composed)),
-    )
-    experiment = types.SimpleNamespace(name="exp_a", group="experiment", config=types.SimpleNamespace())
-    ignored = types.SimpleNamespace(name="other", group="misc", config=types.SimpleNamespace())
-    pyine.configs.utils.print_experiment_configs([experiment, ignored], "app")
-    captured = capsys.readouterr().out
-    assert "+experiment=exp_a" in captured
-    assert calls["initialize"] == 1
-    assert calls["render"] == [(experiment.config, {"config": "value"})]
+        class _HydraContext:
+            def __enter__(self) -> None:
+                calls["initialize"].append(True)
+                return
+
+            def __exit__(
+                self,
+                exc_type: type[BaseException] | None,
+                exc: BaseException | None,
+                tb: types.TracebackType | None,
+            ) -> bool:
+                return False
+
+        monkeypatch.setattr(
+            pyine.configs.utils.hydra,
+            "initialize",
+            lambda **_kwargs: _HydraContext(),
+        )
+        monkeypatch.setattr(
+            pyine.configs.utils.hydra,
+            "compose",
+            lambda **_kwargs: {"config": "value"},
+        )
+        monkeypatch.setattr(
+            pyine.configs.utils.pyine.utils.portability,
+            "render_config",
+            lambda cfg, composed, **_kw: calls["render"].append((cfg, composed)),
+        )
+        configs = self._make_configs()
+        pyine.configs.utils.print_experiment_configs(configs, "app", cli_args=["+experiment=exp_a"])
+        assert len(calls["initialize"]) == 1
+        assert calls["render"] == [(configs[0].config, {"config": "value"})]
+
+    def test_error_on_invalid_args(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        monkeypatch.setattr(
+            pyine.configs.utils,
+            "discover_yaml_experiment_configs",
+            lambda: [],
+        )
+        configs = self._make_configs()
+        pyine.configs.utils.print_experiment_configs(configs, "app", cli_args=["foobar"])
+        captured = capsys.readouterr().out
+        assert "Error" in captured
+        assert "Usage" in captured
 
 
 def test_runtime_config_wandb_flow(
