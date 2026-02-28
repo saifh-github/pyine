@@ -221,6 +221,8 @@ def rl_train(
         merge_system_with_user=True,  # to adjust depending on whether we want system messages too
         keep_original_data=True,  # needed to compute rewards
     )
+    shuffle_seed = runtime.seed if runtime is not None else config.grpo_config.seed
+    train_ds = train_ds.shuffle(seed=shuffle_seed)  # reshuffle, as a precaution, if not done elsewhere
     eval_ds = None
     if config.grpo_config.do_eval:
         logger.info("preparing validation dataset...")
