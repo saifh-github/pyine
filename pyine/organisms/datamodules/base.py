@@ -1088,8 +1088,7 @@ def make_bias_datamodule_config[ConfigT: BiasDataModuleBaseConfig](
     seed: typing.Any,
     *,
     sample_builder_config: pyine.data.datamodule.BaseDataParserConfig | None = None,
-    training_selection_config: dict[str, typing.Any] | None = None,
-    use_hybrid_sample_transforms: bool = False,
+    dataparser_config_overrides: dict[str, dict[str, typing.Any]],
     extra_config: dict[str, typing.Any] | None = None,
     as_pydantic: bool = False,
 ) -> dict[str, typing.Any] | ConfigT:
@@ -1098,14 +1097,18 @@ def make_bias_datamodule_config[ConfigT: BiasDataModuleBaseConfig](
     This function provides a shared implementation for creating datamodule configs
     for both KeywordBiasDataModule and ShortcutBiasDataModule (and future bias modules).
 
+    Callers are responsible for providing canonical ``dataparser_config_overrides``, typically
+    extracted from their pydantic field defaults. This is done so that the hydra config store
+    always matches the class-level defaults.
+
     Args:
         config_class: The config class to instantiate (e.g., KeywordBiasDataModuleConfig).
         lmdb_paths: Paths to LMDB datasets containing execution traces.
         split_file_path: Path to the problem split file.
         seed: Random seed for reproducibility.
         sample_builder_config: Config to use for the default sample builder.
-        training_selection_config: Optional selection config for training subset overrides.
-        use_hybrid_sample_transforms: If True, use hybrid transforms (for full+partial samples).
+        dataparser_config_overrides: Per-subset dataparser overrides, sourced from the caller's
+            pydantic field defaults (e.g. via ``get_field_default``).
         extra_config: Additional config fields to merge into the final config dict.
         as_pydantic: If True, return a validated config instance.
 
@@ -1138,14 +1141,7 @@ def make_bias_datamodule_config[ConfigT: BiasDataModuleBaseConfig](
         "split_file_path": split_file_path,
         "split_seed": seed,
         "default_dataparser_config": default_dataparser_config,
-        "dataparser_config_overrides": {
-            subset: get_default_sample_builder_overrides_for_subset(
-                subset_name=subset,
-                use_hybrid_transform=use_hybrid_sample_transforms,
-                training_selection_config=training_selection_config,
-            )
-            for subset in get_default_subset_names()
-        },
+        "dataparser_config_overrides": dataparser_config_overrides,
         "dataloader_config_overrides": {
             "train": {"shuffle": True},
         },

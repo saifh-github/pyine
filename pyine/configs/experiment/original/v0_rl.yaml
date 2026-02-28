@@ -118,7 +118,7 @@ config:
             obfuscated: 0.0
           samples_per_family: 1
           draw_attempts: 5
-          fallback_to_orig: true
+          fallback_to_orig: false
         transform_config:
           transform_strategy: never
     # Dataloader config

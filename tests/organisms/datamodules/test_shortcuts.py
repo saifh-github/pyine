@@ -948,6 +948,7 @@ def test_shortcuts_counterfactual_subsets_seeded_prompt_db(
         split_file_path=pyine.data.utils.splits.get_dataset_split_file_path("TACO"),
         evaluation_strategy=EvaluationStrategy.counterfactual,
         eval_hint_types=(HintType.helpful, HintType.misleading),
+        require_validated_misleading=False,  # seeded DB has no validation records
         dataparser_config_overrides={
             "valid": {
                 "filtering_config": {
@@ -1042,6 +1043,7 @@ def test_shortcuts_counterfactual_subsets_missing_misleading_prompt_db(
         split_file_path=pyine.data.utils.splits.get_dataset_split_file_path("TACO"),
         evaluation_strategy=EvaluationStrategy.counterfactual,
         eval_hint_types=(HintType.helpful, HintType.misleading),
+        require_validated_misleading=False,  # seeded DB has no validation records
         dataparser_config_overrides={
             "valid": {
                 "filtering_config": {
@@ -2339,7 +2341,7 @@ class TestValidatedMisleadingConfig:
         else:
             assert getattr(selection_config, "require_validated_misleading", False) is False
 
-    def test_default_false_preserves_existing_behavior(
+    def test_default_true_enables_validated_misleading(
         self, fake_lmdb_and_split: tuple[pathlib.Path, pathlib.Path]
     ) -> None:
         lmdb_path, split_path = fake_lmdb_and_split
@@ -2349,7 +2351,7 @@ class TestValidatedMisleadingConfig:
             eval_hint_types=(HintType.misleading,),
             instantiate_parsers_at_setup=False,
         )
-        assert config.require_validated_misleading is False
+        assert config.require_validated_misleading is True
 
 
 class TestValidatedMisleadingFiltering:

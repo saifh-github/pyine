@@ -37,7 +37,7 @@ def _get_datamodule_fully_qualified_name() -> str:
 
 
 def _get_default_training_selection_config() -> dict[str, typing.Any]:
-    """Returns the default selection config to be used for the training data subset.
+    """Returns the canonical (v1) selection config to be used for the training data subset.
 
     The distribution encoded in this config essentially controls how likely (and how strongly) the
     shortcut bias learned by models trained on this data will be. This will likely need to be tuned
@@ -52,6 +52,22 @@ def _get_default_training_selection_config() -> dict[str, typing.Any]:
             "obfuscated": 0.05,
         },
         "fallback_to_orig": True,
+    }
+
+
+def _get_default_filtering_overrides() -> dict[str, typing.Any]:
+    """Returns the canonical (v1) filtering overrides that cap trace complexity.
+
+    These caps keep samples within a reasonable context window and exclude outlier traces that are
+    too long or complex. Also caps max number of traces per solution to minimize overall dataset
+    size while maximizing diversity.
+    """
+    return {
+        "max_traces_per_solution": 1,
+        "max_code_line_count": 250,
+        "max_code_line_length": 250,
+        "max_code_length": 2500,
+        "max_args_length": 500,
     }
 
 
@@ -99,19 +115,29 @@ class ShortcutBiasDataModuleConfig(pyine.organisms.datamodules.base.BiasDataModu
     """Default trace parser configuration."""
     dataparser_config_overrides: dict[pyine.data.datamodule.SubsetNameType, dict[str, typing.Any]] = pydantic.Field(
         default_factory=lambda: {
-            subset: pyine.organisms.datamodules.base.get_default_sample_builder_overrides_for_subset(
-                subset, training_selection_config=_get_default_training_selection_config()
-            )
-            for subset in pyine.organisms.datamodules.base.get_default_subset_names()
+            "train": {
+                **pyine.organisms.datamodules.base.get_default_sample_builder_overrides_for_subset(
+                    subset_name="train",
+                    use_hybrid_transform=False,
+                    training_selection_config=_get_default_training_selection_config(),
+                ),
+                "filtering_config": _get_default_filtering_overrides(),
+            },
+            "valid": {
+                "filtering_config": _get_default_filtering_overrides(),
+            },
+            "test": {
+                "filtering_config": _get_default_filtering_overrides(),
+            },
         },
     )
     """Overrides for the default trace parser configuration; adds subset-specific transforms."""
 
     # --------------- EVALUATION CONFIGURATION ---------------
 
-    evaluation_strategy: EvaluationStrategy = EvaluationStrategy.hint_presence_split
+    evaluation_strategy: EvaluationStrategy = EvaluationStrategy.counterfactual
     """Strategy for structuring evaluation subsets for shortcut bias experiments."""
-    eval_hint_types: tuple[HintType, ...] = (HintType.helpful,)
+    eval_hint_types: tuple[HintType, ...] = (HintType.helpful, HintType.misleading)
     """Hint types to create evaluation subsets for.
 
     For each configured hint type, a derived evaluation subset is created:
@@ -126,7 +152,7 @@ class ShortcutBiasDataModuleConfig(pyine.organisms.datamodules.base.BiasDataModu
     """Minimum samples required in _misleading subset. Set to 0 to disable check."""
     min_samples_hintless: pydantic.NonNegativeInt = 0
     """Minimum samples required in _hintless subset. Set to 0 to disable check."""
-    require_validated_misleading: bool = False
+    require_validated_misleading: bool = True
     """When True, only misleading samples validated as truly misleading (verdict:misleading) are
     accepted in derived _misleading subsets. Records without validation or with other verdicts
     (not_misleading, uninformative) are excluded. Requires the trace_annot_validator to have
@@ -135,6 +161,29 @@ class ShortcutBiasDataModuleConfig(pyine.organisms.datamodules.base.BiasDataModu
     Enforced constraints (validated at config time):
     - HintType.misleading must be in eval_hint_types (otherwise the flag has nothing to filter);
     - prompt-DB lookups must be enabled (validated misleading hints come from the prompt DB).
+    """
+
+    valid_subset_names: tuple[pyine.data.datamodule.SubsetNameType, ...] = (
+        "valid_hinted",
+        "valid_hintless",
+        "valid_misleading",
+    )
+    """Subset names used for model validation.
+
+    Overrides base class defaults; these are meant to be used with the 'counterfactual' strategy.
+    """
+
+    eval_subset_names: tuple[pyine.data.datamodule.SubsetNameType, ...] = (
+        "valid_hinted",
+        "valid_hintless",
+        "valid_misleading",
+    )
+    """Subset names used for model evaluations (i.e. benchmarking).
+
+    Overrides base class defaults; these are meant to be used with the 'counterfactual' strategy.
+
+    Defaults to validation instead of test set until experiments are done and all hyperparameters
+    are permanently fixed. See: https://en.wikipedia.org/wiki/Training,_validation,_and_test_data_sets
     """
 
     # --------------- PRIVATE UTILITY FUNCTIONS & ATTRIBUTES ---------------
@@ -412,6 +461,10 @@ def get_datamodule_config(
 ) -> dict[str, typing.Any] | ShortcutBiasDataModuleConfig:
     """Returns the default kwargs used to instantiate shortcuts datamodule configs.
 
+    The canonical per-subset overrides (filtering caps, training selection, evaluation
+    selection) are sourced from the pydantic field default on ``ShortcutBiasDataModuleConfig``,
+    ensuring the hydra config store always matches the class-level defaults.
+
     Args:
         lmdb_paths: Paths to LMDB datasets containing execution traces.
         split_file_path: Path to the problem split file.
@@ -421,24 +474,28 @@ def get_datamodule_config(
 
     Returns:
         Config dict or validated pydantic model.
-
-    Note:
-        The shortcuts datamodule uses code type selection (allow_db_lookups=True) with the
-        default code type probability map, and includes a custom training selection config.
     """
     default_sampler_builder_config = pyine.utils.pydantic.get_field_default(
         model_cls=ShortcutBiasDataModuleConfig,
         field_name="default_dataparser_config",
         call_default_factory=True,
     )
+    dataparser_config_overrides = pyine.utils.pydantic.get_field_default(
+        model_cls=ShortcutBiasDataModuleConfig,
+        field_name="dataparser_config_overrides",
+        call_default_factory=True,
+    )
+    if use_hybrid_sample_transforms:
+        dataparser_config_overrides["train"]["transform_config"] = (
+            pyine.organisms.datamodules.base.get_default_training_transform_config(True)
+        )
     return pyine.organisms.datamodules.base.make_bias_datamodule_config(
         config_class=ShortcutBiasDataModuleConfig,
         lmdb_paths=lmdb_paths,
         split_file_path=split_file_path,
         seed=seed,
         sample_builder_config=default_sampler_builder_config,
-        training_selection_config=_get_default_training_selection_config(),
-        use_hybrid_sample_transforms=use_hybrid_sample_transforms,
+        dataparser_config_overrides=dataparser_config_overrides,
         extra_config=kwargs,
         as_pydantic=as_pydantic,
     )

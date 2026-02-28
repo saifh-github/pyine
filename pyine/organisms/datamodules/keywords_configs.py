@@ -287,14 +287,22 @@ def get_datamodule_config(
         field_name="default_dataparser_config",
         call_default_factory=True,
     )
+    dataparser_config_overrides = pyine.utils.pydantic.get_field_default(
+        model_cls=KeywordBiasDataModuleConfig,
+        field_name="dataparser_config_overrides",
+        call_default_factory=True,
+    )
+    if use_hybrid_sample_transforms:
+        dataparser_config_overrides["train"]["transform_config"] = (
+            pyine.organisms.datamodules.base.get_default_training_transform_config(True)
+        )
     return pyine.organisms.datamodules.base.make_bias_datamodule_config(
         config_class=KeywordBiasDataModuleConfig,
         lmdb_paths=lmdb_paths,
         split_file_path=split_file_path,
         seed=seed,
         sample_builder_config=default_sampler_builder_config,
-        training_selection_config=None,  # inherits from default config
-        use_hybrid_sample_transforms=use_hybrid_sample_transforms,
+        dataparser_config_overrides=dataparser_config_overrides,
         extra_config=kwargs,
         as_pydantic=as_pydantic,
     )
