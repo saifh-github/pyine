@@ -138,7 +138,11 @@ async def main(
     except pyine.utils.reprod.DryRunExit:
         return
 
-    datamodule = pyine.apps.trainers.common.prepare_datamodule(config, runtime)
+    datamodule = pyine.apps.trainers.common.prepare_datamodule(
+        config,
+        runtime,
+        stage="predict" if skip_fine_tuning else None,
+    )
     if not isinstance(datamodule, pyine.data.datamodule.ConversationDataModule):
         raise TypeError(
             f"OpenAI fine-tuning requires a ConversationDataModule; received {type(datamodule).__name__}",

@@ -442,6 +442,17 @@ class BaseDataModule[ConfigType](pl.LightningDataModule):
             raise TypeError(f"expected a config derived from {BaseDataModuleConfig}, got {type(self.config)}")
         return self.config.loader_names
 
+    @property
+    def active_subset_names(self) -> tuple[SubsetNameType, ...]:
+        """Returns the subset names that are currently active after ``setup()``.
+
+        By default, this returns all configured subset names. Subclasses may override this to
+        restrict the active subsets based on the Lightning stage passed to ``setup()``.
+        """
+        if not isinstance(self.config, BaseDataModuleConfig):
+            raise TypeError(f"expected a config derived from {BaseDataModuleConfig}, got {type(self.config)}")
+        return self.config.subset_names
+
     def get_stats(self, target_subsets: list[SubsetNameType] | None = None) -> dict[str, int | float | str]:
         """Returns a dictionary of useful-to-log statistics."""
         return {}

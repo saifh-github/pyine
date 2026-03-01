@@ -663,8 +663,8 @@ class ShortcutBiasDataModule(
         """Log a summary of shortcuts datamodule configuration after setup."""
         assert self._metadata is not None, "metadata should be loaded before logging summary"
         subset_info_parts: list[str] = []
-        for subset_name in self.config.subset_names:
-            traces = self._metadata.get_subset_traces(subset_name)
+        for subset_name in self._active_subset_names:
+            traces = self._get_traces_meta_for_subset(subset_name)
             subset_info_parts.append(f"{subset_name}={len(traces)}")
         subset_info = ", ".join(subset_info_parts)
         hint_types_str = ", ".join(hint_type.value for hint_type in self.config.eval_hint_types)

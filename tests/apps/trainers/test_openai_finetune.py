@@ -158,10 +158,14 @@ async def test_main_skip_fine_tuning_updates_wandb(
     ) -> None:
         evaluate_calls.append(kwargs)
 
+    prepare_dm_calls: list[dict[str, object]] = []
+
     def fake_prepare_datamodule(
         config: object,
         runtime: object,
+        stage: str | None = None,
     ) -> types.SimpleNamespace:
+        prepare_dm_calls.append({"config": config, "runtime": runtime, "stage": stage})
         dm_cfg = types.SimpleNamespace(get_prompt_chain=lambda model: model)
         dm_mock = mocker.Mock(spec=pyine.data.datamodule.ConversationDataModule)
         dm_mock.config = dm_cfg
@@ -256,6 +260,7 @@ async def test_main_skip_fine_tuning_updates_wandb(
     assert evaluate_calls and evaluate_calls[0]["model"] == "provider-model"
     assert resume_sentry == [True]
     assert wandb_updates[-1] == {"model_name": "base-model"}
+    assert prepare_dm_calls[0]["stage"] == "predict"  # skip_fine_tuning=True -> predict only
 
 
 @pytest.mark.slow

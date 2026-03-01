@@ -25,6 +25,7 @@ class DummyDatamodule(pyine.data.datamodule.BaseDataModule):
     def __init__(self, stats: dict[str, int] | None = None) -> None:
         self.prepared = False
         self.setup_called = 0
+        self.setup_stages: list[str | None] = []
         self.instantiate_verbose: list[bool] = []
         self._stats = stats or {"rows": 3}
         self.config: DummyDatamoduleConfig | None = None  # set by DummyDatamoduleConfig.instantiate_datamodule
@@ -32,8 +33,9 @@ class DummyDatamodule(pyine.data.datamodule.BaseDataModule):
     def prepare_data(self) -> None:
         self.prepared = True
 
-    def setup(self) -> None:
+    def setup(self, stage: str | None = None) -> None:
         self.setup_called += 1
+        self.setup_stages.append(stage)
 
     def get_stats(
         self,
@@ -132,7 +134,15 @@ def test_prepare_datamodule_basic() -> None:
     assert result is datamodule
     assert datamodule.prepared
     assert datamodule.setup_called == 1
+    assert datamodule.setup_stages == [None]
     assert datamodule.instantiate_verbose == [True]
+
+
+def test_prepare_datamodule_forwards_stage() -> None:
+    datamodule = DummyDatamodule()
+    config = _build_app_config(DummyDatamoduleConfig(datamodule=datamodule))
+    trainer_common.prepare_datamodule(config, runtime=None, stage="predict")
+    assert datamodule.setup_stages == ["predict"]
 
 
 def test_prepare_datamodule_with_wandb_logging() -> None:

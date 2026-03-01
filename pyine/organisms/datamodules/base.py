@@ -366,6 +366,7 @@ class BiasDataModuleBase[ConfigType: BiasDataModuleBaseConfig](
         self._metadata = None
         self._readers = []
         self._subset_parsers = {}
+        self._active_subset_names: tuple[pyine.data.datamodule.SubsetNameType, ...] = ()
         self._pregenerated_outputs: (
             dict[str, pyine.organisms.datamodules.samples.common.PregeneratedOutputRecord] | None
         ) = None
@@ -764,9 +765,59 @@ class BiasDataModuleBase[ConfigType: BiasDataModuleBaseConfig](
                 return self._metadata.subset_traces[prefix]
         raise ValueError(f"subset {subset_name} is not defined in the metadata's split table")
 
+    def _resolve_active_subset_names(
+        self,
+        stage: str | None,
+    ) -> tuple[pyine.data.datamodule.SubsetNameType, ...]:
+        """Resolves which subset names should be active for the given Lightning stage.
+
+        Args:
+            stage: Lightning stage string (``"fit"``, ``"validate"``, ``"test"``, ``"predict"``)
+                or ``None`` for all subsets.
+
+        Returns:
+            Filtered and ordered tuple of subset names to set up for this stage.
+        """
+        all_names = self.config.subset_names
+        if stage is None:
+            return all_names
+        # determine which primary subset names are relevant for this stage
+        if stage == "fit":
+            primary_names = set(self.config.train_subset_names) | set(self.config.valid_subset_names)
+            expanded_names = set(self.config.resolved_valid_subset_names)
+        elif stage == "validate":
+            primary_names = set(self.config.valid_subset_names)
+            expanded_names = set(self.config.resolved_valid_subset_names)
+        elif stage in ("test", "predict"):
+            primary_names = set(self.config.eval_subset_names)
+            expanded_names = set(self.config.resolved_eval_subset_names)
+        else:
+            logger.warning(f"unknown stage '{stage}', activating all subset names")
+            return all_names
+        # include code-type suffix variants (e.g. "train_obfuscated") for each primary name
+        suffixes = self._get_subset_suffixes()
+        suffixed_names: set[str] = set()
+        for primary in primary_names:
+            for suffix in suffixes:
+                suffixed_names.add(f"{primary}_{suffix}")
+        target_names = primary_names | expanded_names | suffixed_names
+        # warn about resolved names that are not in config.subset_names
+        for name in expanded_names:
+            if name not in set(all_names):
+                logger.warning(
+                    f"resolved subset name '{name}' (from stage='{stage}') is not in config.subset_names={all_names!r}"
+                )
+        # filter preserving original ordering
+        return tuple(name for name in all_names if name in target_names)
+
     def _is_setup_complete(self) -> bool:
         """Returns True if the setup is complete and the data parsers/loaders are ready to be used."""
         return self._metadata is not None
+
+    @property
+    def active_subset_names(self) -> tuple[pyine.data.datamodule.SubsetNameType, ...]:  # type: ignore[override]
+        """Returns the subset names that are currently active after ``setup()``."""
+        return self._active_subset_names
 
     # --------------- LIGHTNING DATAMODULE LIFECYCLE ---------------
 
@@ -806,7 +857,8 @@ class BiasDataModuleBase[ConfigType: BiasDataModuleBaseConfig](
         """Loads the prepared metadata and creates train/valid/test data readers.
 
         Args:
-            stage: Optional stage indicator provided by Lightning; not used here.
+            stage: Lightning stage string (``"fit"``, ``"validate"``, ``"test"``, ``"predict"``)
+                or ``None`` to set up all subsets.
         """
         if not self._is_metadata_prepared():
             raise RuntimeError("metadata is not prepared yet, call `prepare_data()` on main process first")
@@ -818,8 +870,9 @@ class BiasDataModuleBase[ConfigType: BiasDataModuleBaseConfig](
         self._pregenerated_outputs = None
         if self.config.pregenerated_outputs_lmdb_paths is not None:
             self._pregenerated_outputs = self._load_pregenerated_outputs()
+        self._active_subset_names = self._resolve_active_subset_names(stage)
         self._subset_parsers.clear()
-        for subset_name in self.config.subset_names:
+        for subset_name in self._active_subset_names:
             if self.config.instantiate_parsers_at_setup:
                 self._subset_parsers[subset_name] = self._instantiate_parser_if_needed(subset_name)
             else:
@@ -831,6 +884,7 @@ class BiasDataModuleBase[ConfigType: BiasDataModuleBaseConfig](
         """Close readers when the datamodule is torn down, and unassigns all parser attributes."""
         self._metadata = None
         self._subset_parsers.clear()
+        self._active_subset_names = ()
         self._readers = []
         self._pregenerated_outputs = None
 
@@ -845,7 +899,16 @@ class BiasDataModuleBase[ConfigType: BiasDataModuleBaseConfig](
         if not self._is_setup_complete():
             raise RuntimeError("data parsers are not ready yet, call `setup()` first")
         stats: dict[str, int | float | str] = {}
-        for subset_name in target_subsets or list(self._subset_parsers.keys()):
+        subset_names = target_subsets or list(self._subset_parsers.keys())
+        if target_subsets is not None:
+            available = set(self._subset_parsers.keys())
+            unknown = [name for name in target_subsets if name not in available]
+            if unknown:
+                raise ValueError(
+                    f"get_stats: requested subset names not in active parsers: {unknown}; "
+                    f"active subsets are: {list(available)}"
+                )
+        for subset_name in subset_names:
             parser = self._instantiate_parser_if_needed(subset_name)
             for stat_key, stat_val in parser.get_stats().items():
                 stats[f"{subset_name}/{stat_key}"] = stat_val

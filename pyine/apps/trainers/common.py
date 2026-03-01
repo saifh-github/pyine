@@ -839,6 +839,7 @@ def _infer_resume_run_dir_from_runtime(
 def prepare_datamodule(
     config: AppMainConfig,
     runtime: pyine.configs.schemas.RuntimeConfig | None,
+    stage: str | None = None,
 ) -> pyine.data.datamodule.BaseDataModule[typing.Any]:
     """Prepares the configured datamodule with per-node or global-rank-0 preparation.
 
@@ -854,6 +855,9 @@ def prepare_datamodule(
     Args:
         config: The application configuration, which should contain the datamodule config.
         runtime: The runtime configuration, which may contain W&B run information.
+        stage: Optional Lightning stage string (``"fit"``, ``"validate"``, ``"test"``,
+            ``"predict"``) forwarded to ``dm.setup(stage=...)``. When ``None``, all subsets
+            are set up.
 
     Returns:
         The instantiated, prepared, and set-up datamodule that is ready to provide data loaders.
@@ -889,7 +893,7 @@ def prepare_datamodule(
         if pyine.utils.distrib.is_main_process():
             dm.prepare_data()
     pyine.utils.distrib.barrier()
-    dm.setup()
+    dm.setup(stage=stage)
     if (
         config.use_wandb_logging
         and runtime is not None
@@ -897,13 +901,16 @@ def prepare_datamodule(
         and pyine.utils.distrib.is_main_process()
     ):
         assert runtime is not None and runtime.wandb_run is not None
-        target_subsets: list[str] = list(
-            {
+        active = set(dm.active_subset_names)
+        target_subsets: list[str] = [
+            name
+            for name in {
                 *config.datamodule_config.train_subset_names,
                 *config.datamodule_config.resolved_valid_subset_names,
                 *config.datamodule_config.resolved_eval_subset_names,
             }
-        )
+            if name in active
+        ]
         dm_stats = dm.get_stats(target_subsets)
         summary_stats = {f"dataset_stats/{k}": v for k, v in dm_stats.items()}
         runtime.wandb_run.summary.update(summary_stats)  # type: ignore[reportUnknownMemberType]

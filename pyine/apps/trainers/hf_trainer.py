@@ -351,7 +351,14 @@ async def main(
     except pyine.utils.reprod.DryRunExit:
         return
 
-    datamodule = pyine.apps.trainers.common.prepare_datamodule(config, runtime)
+    do_train, _, do_predict = pyine.apps.trainers.common.get_training_flags(config)
+    if do_train:
+        dm_stage = None  # training may be followed by prediction, need all subsets
+    elif do_predict:
+        dm_stage = "predict"  # eval/predict only
+    else:
+        dm_stage = None  # safe default
+    datamodule = pyine.apps.trainers.common.prepare_datamodule(config, runtime, stage=dm_stage)
     if not isinstance(datamodule, pyine.data.datamodule.ConversationDataModule):
         raise TypeError(
             f"HuggingFace trainer requires a ConversationDataModule; received {type(datamodule).__name__}",
@@ -359,7 +366,6 @@ async def main(
 
     with pyine.utils.interrupts.GracefulShutdownManager(log=logger) as shutdown_manager:
         is_rl = pyine.apps.trainers.common.is_rl_config(config)
-        do_train, _, do_predict = pyine.apps.trainers.common.get_training_flags(config)
         if do_train:
             if is_rl:
                 trainer = rl_train(

@@ -815,10 +815,14 @@ async def test_main_runs_train_and_evaluate(
             processing_class="tokenizer",
         )
 
+    prepare_dm_calls: list[dict[str, object]] = []
+
     def fake_prepare_datamodule(
         config: object,
         runtime: object,
+        stage: str | None = None,
     ) -> str:
+        prepare_dm_calls.append({"config": config, "runtime": runtime, "stage": stage})
         return mocker.Mock(spec=pyine.data.datamodule.ConversationDataModule)
 
     def fake_entrypoint_setup(
@@ -870,6 +874,7 @@ async def test_main_runs_train_and_evaluate(
     assert train_calls and eval_calls
     assert train_calls[0]["runtime"] is runtime
     assert eval_calls[0]["model"] == "model"
+    assert prepare_dm_calls[0]["stage"] is None  # do_train=True -> all subsets
 
 
 @pytest.mark.asyncio

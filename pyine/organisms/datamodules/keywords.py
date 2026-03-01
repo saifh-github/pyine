@@ -173,8 +173,8 @@ class KeywordBiasDataModule(
         assert self._metadata is not None, "metadata should be loaded before logging summary"
         metadata = typing.cast("KeywordTraceDatasetMetadata", self._metadata)
         subset_info_parts: list[str] = []
-        for subset_name in self.config.subset_names:
-            traces = metadata.get_subset_traces(subset_name)
+        for subset_name in self._active_subset_names:
+            traces = self._get_traces_meta_for_subset(subset_name)
             subset_info_parts.append(f"{subset_name}={len(traces)}")
         subset_info = ", ".join(subset_info_parts)
         logger.info(
