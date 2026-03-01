@@ -771,7 +771,15 @@ class TestResolvePregenForSubsetShortcut:
             "trace::cf_with": _make_pregen_record("cf"),
         }
         dm = self._make_dm(outputs)
-        with pytest.raises(ValueError, match="keyword counterfactual"):
+        with pytest.raises(ValueError, match="obsolete keyword"):
+            dm._resolve_pregenerated_outputs_for_subset("train_hinted")
+
+    def test_keyword_eval_suffix_raises(self) -> None:
+        outputs = {
+            "trace::with_keyword": _make_pregen_record("kw"),
+        }
+        dm = self._make_dm(outputs)
+        with pytest.raises(ValueError, match="keyword evaluation suffix"):
             dm._resolve_pregenerated_outputs_for_subset("train_hinted")
 
     def test_unknown_suffix_raises(self) -> None:
@@ -852,6 +860,7 @@ class TestResolvePregenForSubsetKeyword:
         config = object.__new__(keywords_mod.KeywordBiasDataModuleConfig)
         object.__setattr__(config, "evaluation_strategy", EvaluationStrategy(evaluation_strategy))
         object.__setattr__(config, "eval_subset_names", eval_subset_names)
+        object.__setattr__(config, "_expanded_base_names", frozenset(eval_subset_names))
         object.__setattr__(dm, "config", config)
         return dm
 
@@ -859,7 +868,7 @@ class TestResolvePregenForSubsetKeyword:
         dm = self._make_dm(None, evaluation_strategy="counterfactual")
         assert dm._resolve_pregenerated_outputs_for_subset("valid") == {}
 
-    # --- case 3: train / non-cf subsets (unsuffixed only) ---
+    # --- case 3: train / base eval subsets (unsuffixed only) ---
 
     def test_non_counterfactual_unsuffixed_ok(self) -> None:
         outputs = {"trace_a": _make_pregen_record("a"), "trace_b": _make_pregen_record("b")}
@@ -880,21 +889,22 @@ class TestResolvePregenForSubsetKeyword:
         result = dm._resolve_pregenerated_outputs_for_subset("train")
         assert result == outputs
 
-    def test_train_skips_cf_suffixed_entries(self) -> None:
-        """Train subset silently skips ::cf_* entries (they belong to eval subsets)."""
+    def test_train_skips_kw_suffixed_entries(self) -> None:
+        """Train subset silently skips ::with_keyword/::without_keyword entries."""
         outputs = {
             "trace_a": _make_pregen_record("a"),
-            "trace_a::cf_with": _make_pregen_record("cf_w"),
-            "trace_a::cf_without": _make_pregen_record("cf_wo"),
+            "trace_a::with_keyword": _make_pregen_record("kw_w"),
+            "trace_a::without_keyword": _make_pregen_record("kw_wo"),
         }
         dm = self._make_dm(outputs, evaluation_strategy="counterfactual")
         result = dm._resolve_pregenerated_outputs_for_subset("train")
         assert result == {"trace_a": _make_pregen_record("a")}
 
-    def test_non_cf_base_eval_skips_cf_entries(self) -> None:
+    def test_base_eval_skips_kw_suffixed_entries(self) -> None:
+        """Base eval subset accepts unsuffixed, skips keyword-suffixed."""
         outputs = {
             "trace_a": _make_pregen_record("a"),
-            "trace_a::cf_with": _make_pregen_record("cf_w"),
+            "trace_a::with_keyword": _make_pregen_record("kw_w"),
         }
         dm = self._make_dm(outputs, evaluation_strategy="keyword_presence_split")
         result = dm._resolve_pregenerated_outputs_for_subset("valid")
@@ -906,207 +916,96 @@ class TestResolvePregenForSubsetKeyword:
         with pytest.raises(ValueError, match="unrecognized"):
             dm._resolve_pregenerated_outputs_for_subset("train")
 
-    def test_non_cf_derived_subset_skips_cf_entries(self) -> None:
-        """In keyword_presence_split mode, derived subsets should NOT accept ::cf_* entries."""
+    # --- case 2: derived subsets in keyword_presence_split mode (disjoint) ---
+
+    def test_kps_derived_with_keyword_maps_suffix(self) -> None:
         outputs = {
-            "trace_a::cf_with": _make_pregen_record("w"),
+            "trace_a::with_keyword": _make_pregen_record("w"),
+            "trace_a::without_keyword": _make_pregen_record("wo"),
+        }
+        dm = self._make_dm(outputs, evaluation_strategy="keyword_presence_split")
+        result = dm._resolve_pregenerated_outputs_for_subset("valid_with_keyword")
+        assert result == {"trace_a": _make_pregen_record("w")}
+
+    def test_kps_derived_without_keyword_maps_suffix(self) -> None:
+        outputs = {
+            "trace_a::with_keyword": _make_pregen_record("w"),
+            "trace_a::without_keyword": _make_pregen_record("wo"),
+        }
+        dm = self._make_dm(outputs, evaluation_strategy="keyword_presence_split")
+        result = dm._resolve_pregenerated_outputs_for_subset("valid_without_keyword")
+        assert result == {"trace_a": _make_pregen_record("wo")}
+
+    def test_kps_derived_accepts_unsuffixed_entries(self) -> None:
+        """keyword_presence_split derived subsets are disjoint, so unsuffixed is unambiguous."""
+        outputs = {"trace_b": _make_pregen_record("b")}
+        dm = self._make_dm(outputs, evaluation_strategy="keyword_presence_split")
+        result = dm._resolve_pregenerated_outputs_for_subset("valid_with_keyword")
+        assert result == {"trace_b": _make_pregen_record("b")}
+
+    def test_kps_derived_mixed_suffixed_and_unsuffixed(self) -> None:
+        outputs = {
+            "trace_a::with_keyword": _make_pregen_record("w"),
+            "trace_a::without_keyword": _make_pregen_record("wo"),
             "trace_b": _make_pregen_record("b"),
         }
         dm = self._make_dm(outputs, evaluation_strategy="keyword_presence_split")
         result = dm._resolve_pregenerated_outputs_for_subset("valid_with_keyword")
-        assert result == {"trace_b": _make_pregen_record("b")}  # only unsuffixed
+        assert result == {"trace_a": _make_pregen_record("w"), "trace_b": _make_pregen_record("b")}
 
-    # --- case 2: derived subsets (_with_keyword / _without_keyword) in counterfactual mode ---
-
-    def test_derived_with_keyword_maps_cf_with(self) -> None:
+    def test_kps_derived_skips_sibling_suffix(self) -> None:
+        """::without_keyword entries are skipped when resolving for _with_keyword subset."""
         outputs = {
-            "trace_a::cf_with": _make_pregen_record("w"),
-            "trace_a::cf_without": _make_pregen_record("wo"),
+            "trace_a::without_keyword": _make_pregen_record("wo"),
+        }
+        dm = self._make_dm(outputs, evaluation_strategy="keyword_presence_split")
+        result = dm._resolve_pregenerated_outputs_for_subset("valid_with_keyword")
+        assert result == {}
+
+    def test_kps_derived_unknown_suffix_rejected(self) -> None:
+        outputs = {"trace_a::hinted": _make_pregen_record("a")}
+        dm = self._make_dm(outputs, evaluation_strategy="keyword_presence_split")
+        with pytest.raises(ValueError, match="unrecognized"):
+            dm._resolve_pregenerated_outputs_for_subset("valid_with_keyword")
+
+    # --- case 1: derived subsets in counterfactual mode (shared traces) ---
+
+    def test_cf_derived_with_keyword_maps_suffix(self) -> None:
+        outputs = {
+            "trace_a::with_keyword": _make_pregen_record("w"),
+            "trace_a::without_keyword": _make_pregen_record("wo"),
         }
         dm = self._make_dm(outputs, evaluation_strategy="counterfactual")
         result = dm._resolve_pregenerated_outputs_for_subset("valid_with_keyword")
         assert result == {"trace_a": _make_pregen_record("w")}
 
-    def test_derived_without_keyword_maps_cf_without(self) -> None:
+    def test_cf_derived_without_keyword_maps_suffix(self) -> None:
         outputs = {
-            "trace_a::cf_with": _make_pregen_record("w"),
-            "trace_a::cf_without": _make_pregen_record("wo"),
+            "trace_a::with_keyword": _make_pregen_record("w"),
+            "trace_a::without_keyword": _make_pregen_record("wo"),
         }
         dm = self._make_dm(outputs, evaluation_strategy="counterfactual")
         result = dm._resolve_pregenerated_outputs_for_subset("valid_without_keyword")
         assert result == {"trace_a": _make_pregen_record("wo")}
 
-    def test_derived_includes_unsuffixed_entries(self) -> None:
+    def test_cf_derived_rejects_unsuffixed_entries(self) -> None:
+        """Counterfactual derived subsets share traces, so unsuffixed is ambiguous."""
         outputs = {"trace_b": _make_pregen_record("b")}
         dm = self._make_dm(outputs, evaluation_strategy="counterfactual")
-        result = dm._resolve_pregenerated_outputs_for_subset("valid_with_keyword")
-        assert result == {"trace_b": _make_pregen_record("b")}
+        with pytest.raises(ValueError, match="unsuffixed"):
+            dm._resolve_pregenerated_outputs_for_subset("valid_with_keyword")
 
-    def test_derived_mixed_suffixed_and_unsuffixed(self) -> None:
+    def test_cf_derived_skips_sibling_suffix(self) -> None:
+        """::without_keyword entries are skipped when resolving for _with_keyword subset."""
         outputs = {
-            "trace_a::cf_with": _make_pregen_record("w"),
-            "trace_a::cf_without": _make_pregen_record("wo"),
-            "trace_b": _make_pregen_record("b"),
+            "trace_a::without_keyword": _make_pregen_record("wo"),
         }
         dm = self._make_dm(outputs, evaluation_strategy="counterfactual")
         result = dm._resolve_pregenerated_outputs_for_subset("valid_with_keyword")
-        assert result == {"trace_a": _make_pregen_record("w"), "trace_b": _make_pregen_record("b")}
+        assert result == {}
 
-    def test_derived_unknown_suffix_rejected(self) -> None:
+    def test_cf_derived_unknown_suffix_rejected(self) -> None:
         outputs = {"trace_a::hinted": _make_pregen_record("a")}
         dm = self._make_dm(outputs, evaluation_strategy="counterfactual")
         with pytest.raises(ValueError, match="unrecognized"):
             dm._resolve_pregenerated_outputs_for_subset("valid_with_keyword")
-
-    # --- case 1: cf base eval subsets ---
-
-    def test_cf_base_eval_routes_both_variants(self) -> None:
-        rec_w = _make_pregen_record("w")
-        rec_wo = _make_pregen_record("wo")
-        outputs = {"trace_a::cf_with": rec_w, "trace_a::cf_without": rec_wo}
-        dm = self._make_dm(outputs, evaluation_strategy="counterfactual")
-        result = dm._resolve_pregenerated_outputs_for_subset("valid")
-        # base-ID entry (placeholder for builder) + both cf-suffixed entries (for wrapper)
-        assert result["trace_a"] == rec_w  # placeholder = cf_with
-        assert result["trace_a::cf_with"] == rec_w
-        assert result["trace_a::cf_without"] == rec_wo
-        assert len(result) == 3
-
-    def test_cf_base_eval_rejects_unsuffixed(self) -> None:
-        outputs = {"trace_a": _make_pregen_record("a")}
-        dm = self._make_dm(outputs, evaluation_strategy="counterfactual")
-        with pytest.raises(ValueError, match="unsuffixed"):
-            dm._resolve_pregenerated_outputs_for_subset("valid")
-
-    def test_cf_base_eval_requires_both_variants(self) -> None:
-        outputs = {"trace_a::cf_with": _make_pregen_record("w")}
-        dm = self._make_dm(outputs, evaluation_strategy="counterfactual")
-        with pytest.raises(ValueError, match="missing counterfactual"):
-            dm._resolve_pregenerated_outputs_for_subset("valid")
-
-    def test_cf_base_eval_unknown_suffix_rejected(self) -> None:
-        outputs = {"trace_a::hinted": _make_pregen_record("a")}
-        dm = self._make_dm(outputs, evaluation_strategy="counterfactual")
-        with pytest.raises(ValueError, match="unrecognized"):
-            dm._resolve_pregenerated_outputs_for_subset("valid")
-
-    def test_cf_base_eval_multiple_traces(self) -> None:
-        outputs = {
-            "trace_a::cf_with": _make_pregen_record("aw"),
-            "trace_a::cf_without": _make_pregen_record("awo"),
-            "trace_b::cf_with": _make_pregen_record("bw"),
-            "trace_b::cf_without": _make_pregen_record("bwo"),
-        }
-        dm = self._make_dm(outputs, evaluation_strategy="counterfactual")
-        result = dm._resolve_pregenerated_outputs_for_subset("valid")
-        assert len(result) == 6  # 2 traces * (1 base + 2 cf)
-        assert result["trace_a::cf_with"].model_output == "aw"
-        assert result["trace_b::cf_without"].model_output == "bwo"
-
-
-class TestKeywordWrapperCfPregeneratedOutput:
-    """Tests for SampleKeywordManipulatorWrapper counterfactual pregenerated output injection."""
-
-    def _make_sample(
-        self,
-        identifier: str = "trace_a",
-    ) -> samples_common.SampleData:
-        return samples_common.SampleData(
-            identifier=identifier,
-            code="x = 1\nprint(x)",
-            description="test",
-            entrypoint="",
-            first_line=0,
-            last_line=1,
-            inputs="",
-            expected_output="1",
-            predict_type=samples_common.SamplePredictType.program_output,
-            code_type="original",
-            trace_step_count=1,
-            comma_separated_tags="",
-            has_code_override=False,
-            complexity_metrics={},
-        )
-
-    def test_cf_with_gets_correct_pregenerated_output(self) -> None:
-        import pyine.organisms.datamodules.samples.keyword_ops as keyword_ops
-
-        sample = self._make_sample()
-        # simulate a builder-like wrapped object that has _pregenerated_outputs
-        pregen = {
-            "trace_a": _make_pregen_record("placeholder"),
-            "trace_a::cf_with": _make_pregen_record("cf_with_output", source_key="key_w"),
-            "trace_a::cf_without": _make_pregen_record("cf_without_output", source_key="key_wo"),
-        }
-
-        class _FakeDataset:
-            _pregenerated_outputs = pregen
-
-            def __len__(self) -> int:
-                return 1
-
-            def __getitem__(self, idx: int) -> samples_common.SampleData:
-                return sample
-
-        wrapper = keyword_ops.SampleKeywordManipulatorWrapper(
-            wrapped_dataset=_FakeDataset(),  # type: ignore[arg-type]
-            keyword="result",
-            trace_ids_with_keyword=frozenset({"trace_a"}),
-            counterfactual_mode=True,
-        )
-        cf_with = wrapper[0]  # even index = cf_with
-        assert cf_with.identifier == "trace_a::cf_with"
-        assert cf_with.pregenerated_output == "cf_with_output"
-        assert cf_with.pregenerated_output_lmdb_key == "key_w"
-
-    def test_cf_without_gets_correct_pregenerated_output(self) -> None:
-        import pyine.organisms.datamodules.samples.keyword_ops as keyword_ops
-
-        sample = self._make_sample()
-        pregen = {
-            "trace_a": _make_pregen_record("placeholder"),
-            "trace_a::cf_with": _make_pregen_record("cf_with_output"),
-            "trace_a::cf_without": _make_pregen_record("cf_without_output", source_key="key_wo"),
-        }
-
-        class _FakeDataset:
-            _pregenerated_outputs = pregen
-
-            def __len__(self) -> int:
-                return 1
-
-            def __getitem__(self, idx: int) -> samples_common.SampleData:
-                return sample
-
-        wrapper = keyword_ops.SampleKeywordManipulatorWrapper(
-            wrapped_dataset=_FakeDataset(),  # type: ignore[arg-type]
-            keyword="result",
-            trace_ids_with_keyword=frozenset({"trace_a"}),
-            counterfactual_mode=True,
-        )
-        cf_without = wrapper[1]  # odd index = cf_without
-        assert cf_without.identifier == "trace_a::cf_without"
-        assert cf_without.pregenerated_output == "cf_without_output"
-        assert cf_without.pregenerated_output_lmdb_key == "key_wo"
-
-    def test_no_pregen_dict_leaves_sample_unchanged(self) -> None:
-        import pyine.organisms.datamodules.samples.keyword_ops as keyword_ops
-
-        sample = self._make_sample()
-
-        class _FakeDataset:
-            def __len__(self) -> int:
-                return 1
-
-            def __getitem__(self, idx: int) -> samples_common.SampleData:
-                return sample
-
-        wrapper = keyword_ops.SampleKeywordManipulatorWrapper(
-            wrapped_dataset=_FakeDataset(),  # type: ignore[arg-type]
-            keyword="result",
-            trace_ids_with_keyword=frozenset({"trace_a"}),
-            counterfactual_mode=True,
-        )
-        cf_with = wrapper[0]
-        assert cf_with.pregenerated_output == ""
-        assert cf_with.pregenerated_output_lmdb_path == ""

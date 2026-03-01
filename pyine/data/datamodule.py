@@ -164,6 +164,26 @@ class BaseDataModuleConfig(pydantic.BaseModel):
         """
         return self.subset_names
 
+    @property
+    def resolved_valid_subset_names(self) -> tuple[SubsetNameType, ...]:
+        """Returns the fully-resolved validation subset names.
+
+        For configs with derived-subset expansion (e.g. bias datamodules), this returns the
+        expanded names (e.g. ``("valid_hinted", "valid_hintless", "valid_misleading")``).
+        The default implementation returns the raw ``valid_subset_names`` (identity, no expansion).
+        """
+        return self.valid_subset_names
+
+    @property
+    def resolved_eval_subset_names(self) -> tuple[SubsetNameType, ...]:
+        """Returns the fully-resolved evaluation subset names.
+
+        For configs with derived-subset expansion (e.g. bias datamodules), this returns the
+        expanded names (e.g. ``("valid_hinted", "valid_hintless", "valid_misleading")``).
+        The default implementation returns the raw ``eval_subset_names`` (identity, no expansion).
+        """
+        return self.eval_subset_names
+
     # --------------- PUBLIC UTILITY FUNCTIONS ---------------
 
     def instantiate_parser(
@@ -257,9 +277,17 @@ class BaseDataModuleConfig(pydantic.BaseModel):
         if any(name not in self.subset_names for name in self.train_subset_names):
             raise ValueError(f"some subset name(s) are invalid; got {self.train_subset_names!r}")
         if any(name not in self.subset_names for name in self.valid_subset_names):
-            raise ValueError(f"some subset name(s) are invalid; got {self.valid_subset_names!r}")
+            raise ValueError(f"some valid_subset_names base name(s) are invalid; got {self.valid_subset_names!r}")
         if any(name not in self.subset_names for name in self.eval_subset_names):
-            raise ValueError(f"some subset name(s) are invalid; got {self.eval_subset_names!r}")
+            raise ValueError(f"some eval_subset_names base name(s) are invalid; got {self.eval_subset_names!r}")
+        if any(name not in self.subset_names for name in self.resolved_valid_subset_names):
+            raise ValueError(
+                f"some resolved valid subset name(s) are not in subset_names; got {self.resolved_valid_subset_names!r}"
+            )
+        if any(name not in self.subset_names for name in self.resolved_eval_subset_names):
+            raise ValueError(
+                f"some resolved eval subset name(s) are not in subset_names; got {self.resolved_eval_subset_names!r}"
+            )
         return self
 
 
@@ -850,8 +878,8 @@ class ConversationDataModule[ConfigType](BaseDataModule[ConfigType]):
         config = typing.cast("ConversationDataModuleConfig", self.config)
         hf_subset_names_map = {
             "train": config.train_subset_names,
-            "valid": config.valid_subset_names,
-            "eval": config.eval_subset_names,
+            "valid": config.resolved_valid_subset_names,
+            "eval": config.resolved_eval_subset_names,
         }
         assert subset_name in hf_subset_names_map, f"invalid hf subset name: {subset_name}"
         actual_subset_names = hf_subset_names_map[subset_name]

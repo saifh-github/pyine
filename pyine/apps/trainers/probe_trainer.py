@@ -951,7 +951,7 @@ async def main(
                     text_field=evals_config.text_field,
                 )
                 scorers_by_type.setdefault(base_name, []).append(scorer)
-            for eval_subset_name in eval_dm_typed.config.eval_subset_names:
+            for eval_subset_name in eval_dm_typed.config.resolved_eval_subset_names:
                 await correctness_impl.evaluate_guardrail_types(
                     config=evals_config,
                     guardrails_by_type=scorers_by_type,  # type: ignore[arg-type]

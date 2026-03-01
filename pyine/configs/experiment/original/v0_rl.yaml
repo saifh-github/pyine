@@ -130,7 +130,7 @@ config:
     evaluation_strategy: counterfactual
     eval_hint_types: [helpful, misleading]
     train_subset_names: [train]
-    valid_subset_names: [valid_hinted, valid_hintless, valid_misleading]
+    valid_subset_names: [valid]
     eval_subset_names: [valid]
     instantiate_parsers_at_setup: false
     use_local_dataset_cache: true

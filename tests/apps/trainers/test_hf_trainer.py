@@ -309,6 +309,7 @@ def test_train_configures_trainer_and_saves_artifacts(
         def __init__(self, cache_dir: pathlib.Path) -> None:
             self.train_subset_names = ["train"]
             self.valid_subset_names = ["valid"]
+            self.resolved_valid_subset_names = ("valid",)
             self.datamodule_name = "fake_dm"
             self.use_tokenized_dataset_cache = False
             self.dataset_cache_lock_timeout_seconds = 0.0
@@ -450,7 +451,9 @@ def test_train_adds_epoch_callback_for_epoch_aware_datasets(
         datamodule_config=types.SimpleNamespace(
             train_subset_names=["train"],
             valid_subset_names=["valid"],
+            resolved_valid_subset_names=("valid",),
             eval_subset_names=[],
+            resolved_eval_subset_names=(),
         ),
         evals_config=types.SimpleNamespace(category_extraction_config=None),
         use_wandb_logging=False,
@@ -1362,6 +1365,7 @@ def test_rl_train_uses_resume_artifacts_correctly(
     mock_config = types.SimpleNamespace(
         grpo_config=types.SimpleNamespace(
             do_eval=False,
+            seed=42,
             to_dict=lambda: {"output_dir": str(output_dir), "do_eval": False, "report_to": []},
         ),
         reward_manager_config=reward_manager_config,
@@ -1488,6 +1492,7 @@ def test_sft_train_attaches_gpu_stats_callback_when_configured(
         datamodule_config=types.SimpleNamespace(
             train_subset_names=["train"],
             valid_subset_names=["valid"],
+            resolved_valid_subset_names=("valid",),
         ),
         evals_config=types.SimpleNamespace(category_extraction_config=None),
         gradient_checkpointing=False,

@@ -405,8 +405,8 @@ def strip_id_suffix(identifier: str) -> str:
     IMPORTANT: This should ONLY be applied to `SampleData.identifier` (string), NEVER to
     `TraceIdentifier` objects. Suffixes are added by ``SampleHintIdentifierWrapper``
     (``::hinted``, ``::misleading``, ``::hintless``) and ``SampleKeywordManipulatorWrapper``
-    (``::cf_with``, ``::cf_without``) for cache/eval uniqueness; this helper removes them
-    before trace ID parsing and LMDB/prompt-DB lookups.
+    (``::with_keyword``, ``::without_keyword``) for cache/eval uniqueness; this helper removes
+    them before trace ID parsing and LMDB/prompt-DB lookups.
 
     Args:
         identifier: string identifier, possibly with a ``::`` suffix from a dataset wrapper.
@@ -414,7 +414,7 @@ def strip_id_suffix(identifier: str) -> str:
     Returns:
         Identifier with suffix stripped (or unchanged if no suffix present).
     """
-    for suffix in ("::hinted", "::misleading", "::hintless", "::cf_with", "::cf_without"):
+    for suffix in ("::hinted", "::misleading", "::hintless", "::with_keyword", "::without_keyword"):
         if identifier.endswith(suffix):
             return identifier[: -len(suffix)]
     return identifier

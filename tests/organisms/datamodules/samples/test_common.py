@@ -802,11 +802,11 @@ class TestStripIdSuffix:
         identifier = "TACO/train/p000001/s0000/t0000"
         assert strip_id_suffix(identifier) == identifier
 
-    def test_strips_cf_with_suffix(self) -> None:
-        assert strip_id_suffix("TACO/train/p000001/s0000/t0000::cf_with") == "TACO/train/p000001/s0000/t0000"
+    def test_strips_with_keyword_suffix(self) -> None:
+        assert strip_id_suffix("TACO/train/p000001/s0000/t0000::with_keyword") == "TACO/train/p000001/s0000/t0000"
 
-    def test_strips_cf_without_suffix(self) -> None:
-        assert strip_id_suffix("TACO/train/p000001/s0000/t0000::cf_without") == "TACO/train/p000001/s0000/t0000"
+    def test_strips_without_keyword_suffix(self) -> None:
+        assert strip_id_suffix("TACO/train/p000001/s0000/t0000::without_keyword") == "TACO/train/p000001/s0000/t0000"
 
     def test_works_with_augmented_trace_ids(self) -> None:
         augmented_id = "TACO/train/p000001/s0000/t0000/a:obfuscated+hints_docs:001::hinted"
@@ -928,9 +928,9 @@ class TestGetTraceIdWithSuffix:
         trace_id = sample.get_trace_id()
         assert str(trace_id) == "FAKE/test/p000001/s0001/t0000"
 
-    def test_cf_with_suffix_returns_valid_trace_id(self) -> None:
+    def test_with_keyword_suffix_returns_valid_trace_id(self) -> None:
         sample = SampleData(
-            identifier="FAKE/test/p000001/s0001/t0000::cf_with",
+            identifier="FAKE/test/p000001/s0001/t0000::with_keyword",
             code="",
             description="",
             entrypoint="",
@@ -948,9 +948,9 @@ class TestGetTraceIdWithSuffix:
         trace_id = sample.get_trace_id()
         assert str(trace_id) == "FAKE/test/p000001/s0001/t0000"
 
-    def test_cf_without_suffix_returns_valid_trace_id(self) -> None:
+    def test_without_keyword_suffix_returns_valid_trace_id(self) -> None:
         sample = SampleData(
-            identifier="FAKE/test/p000001/s0001/t0000::cf_without",
+            identifier="FAKE/test/p000001/s0001/t0000::without_keyword",
             code="",
             description="",
             entrypoint="",

@@ -37,10 +37,16 @@ class _DummyTrace:
 def _make_stub_datamodule(
     base_filter_rule: str = "",
     selection_config: KeywordAutoSelectionConfig | None = None,
+    eval_subset_names: tuple[str, ...] = ("valid",),
+    valid_subset_names: tuple[str, ...] = ("valid",),
 ) -> keywords_mod.KeywordBiasDataModule:
+    expanded_base_names = frozenset(eval_subset_names) | frozenset(valid_subset_names)
     stub = keywords_mod.KeywordBiasDataModule.__new__(keywords_mod.KeywordBiasDataModule)
     config = types.SimpleNamespace(
         base_filter_rule=base_filter_rule,
+        eval_subset_names=eval_subset_names,
+        valid_subset_names=valid_subset_names,
+        _expanded_base_names=expanded_base_names,
         keyword_auto_selection_config=selection_config
         or KeywordAutoSelectionConfig(
             min_keyword_frequency=1,
@@ -499,8 +505,10 @@ class TestAdjustKeywordSplitSubsets:
         target_ratio: float = 0.5,
     ) -> keywords_mod.KeywordBiasDataModule:
         stub = keywords_mod.KeywordBiasDataModule.__new__(keywords_mod.KeywordBiasDataModule)
+        expanded_base_names = frozenset(eval_subset_names)
         stub.config = types.SimpleNamespace(
             eval_subset_names=eval_subset_names,
+            _expanded_base_names=expanded_base_names,
             evaluation_strategy=evaluation_strategy,
             train_subset_with_keyword_ratio=target_ratio,
             train_subset_resampling_seed=0,
@@ -574,18 +582,32 @@ class TestGetParser:
         mock_parser.__len__ = mock.MagicMock(return_value=len(trace_ids))
         return mock_parser
 
-    def test_base_eval_subset_with_counterfactual_enables_counterfactual_mode(self) -> None:
-        # test that base eval subset in counterfactual strategy enables counterfactual_mode
+    def test_base_eval_subset_returns_concat_dataset(self) -> None:
+        # base eval subset now returns ConcatDataset of derived parsers
+        import torch.utils.data
+
+        expanded = frozenset({"valid"})
+
+        def _get_parent(name: str) -> str:
+            for base in expanded:
+                if name == f"{base}_with_keyword" or name == f"{base}_without_keyword":
+                    return base
+            return name
+
         stub = keywords_mod.KeywordBiasDataModule.__new__(keywords_mod.KeywordBiasDataModule)
         stub._metadata = mock.MagicMock(spec=keywords_mod.KeywordTraceDatasetMetadata)
         stub._metadata.keyword = "magic"
-        # t1, t2 have keyword; t3, t4 don't
         stub._metadata.trace_ids_with_keyword = frozenset(["t1", "t2"])
-        stub._subset_parsers = {"valid": mock.MagicMock()}
+        stub._subset_parsers = {
+            "valid_with_keyword": mock.MagicMock(),
+            "valid_without_keyword": mock.MagicMock(),
+        }
         stub.config = types.SimpleNamespace(
             evaluation_strategy=EvaluationStrategy.counterfactual,
             eval_subset_names=("valid",),
-            subset_names=("valid",),
+            _expanded_base_names=expanded,
+            _get_parent_subset_name=_get_parent,
+            subset_names=("valid", "valid_with_keyword", "valid_without_keyword"),
         )
         stub.verbose = False
         mock_parser = self._make_mock_parser(["t1", "t2", "t3", "t4"], stub._metadata.trace_ids_with_keyword)
@@ -595,10 +617,8 @@ class TestGetParser:
             return_value=mock_parser,
         ):
             result = stub.get_parser("valid")
-            assert isinstance(result, keyword_ops.SampleKeywordManipulatorWrapper)
-            # base eval + counterfactual: counterfactual_mode should be enabled (doubles samples)
-            assert result._counterfactual_mode is True
-            assert len(result) == 8  # 4 samples * 2 versions each
+            assert isinstance(result, torch.utils.data.ConcatDataset)
+            assert len(result.datasets) == 2  # _with_keyword + _without_keyword
 
     def test_injection_enabled_for_with_keyword_subset(self) -> None:
         # verify that injection trace IDs are set for _with_keyword subsets in counterfactual mode
@@ -611,6 +631,7 @@ class TestGetParser:
         stub.config = types.SimpleNamespace(
             evaluation_strategy=EvaluationStrategy.counterfactual,
             eval_subset_names=("valid",),
+            _expanded_base_names=frozenset({"valid"}),
             subset_names=("valid_with_keyword",),
         )
         stub.verbose = False
@@ -636,6 +657,7 @@ class TestGetParser:
         stub.config = types.SimpleNamespace(
             evaluation_strategy=EvaluationStrategy.counterfactual,
             eval_subset_names=("valid",),
+            _expanded_base_names=frozenset({"valid"}),
             subset_names=("valid_without_keyword",),
         )
         stub.verbose = False
@@ -660,6 +682,7 @@ class TestGetParser:
         stub.config = types.SimpleNamespace(
             evaluation_strategy=EvaluationStrategy.counterfactual,
             eval_subset_names=("valid",),
+            _expanded_base_names=frozenset({"valid"}),
             subset_names=("train",),
         )
         stub.verbose = False
@@ -684,6 +707,7 @@ class TestGetParser:
         stub.config = types.SimpleNamespace(
             evaluation_strategy=EvaluationStrategy.keyword_presence_split,
             eval_subset_names=("valid",),
+            _expanded_base_names=frozenset({"valid"}),
             subset_names=("valid_with_keyword",),
         )
         stub.verbose = False
@@ -781,6 +805,91 @@ class TestKeywordBiasDataModuleConfigParentSubsetResolution:
         assert config._get_parent_subset_name("test_with_keyword") == "test"
         assert config._get_parent_subset_name("train") == "train"  # not a derived subset
         assert config._get_parent_subset_name("valid") == "valid"  # base eval subset
+
+    def test_get_parent_covers_valid_subset_names(self, fake_lmdb_and_split: tuple[pathlib.Path, pathlib.Path]) -> None:
+        lmdb_path, split_path = fake_lmdb_and_split
+        config = KeywordBiasDataModuleConfig(
+            lmdb_paths=[str(lmdb_path)],
+            split_file_path=str(split_path),
+            valid_subset_names=("valid", "test"),
+            eval_subset_names=("valid",),
+            instantiate_parsers_at_setup=False,
+        )
+        assert config._get_parent_subset_name("test_with_keyword") == "test"
+        assert config._get_parent_subset_name("test_without_keyword") == "test"
+
+
+class TestKeywordBiasDataModuleConfigResolvedNames:
+    """Tests for resolved_* properties and fail-loud validation."""
+
+    def _make_minimal_config(
+        self,
+        lmdb_path: pathlib.Path,
+        split_path: pathlib.Path,
+        eval_subset_names: tuple[str, ...] = ("valid",),
+        valid_subset_names: tuple[str, ...] = ("valid",),
+    ) -> KeywordBiasDataModuleConfig:
+        return KeywordBiasDataModuleConfig(
+            lmdb_paths=[str(lmdb_path)],
+            split_file_path=str(split_path),
+            eval_subset_names=eval_subset_names,
+            valid_subset_names=valid_subset_names,
+            instantiate_parsers_at_setup=False,
+        )
+
+    def test_resolved_eval_subset_names(self, fake_lmdb_and_split: tuple[pathlib.Path, pathlib.Path]) -> None:
+        lmdb_path, split_path = fake_lmdb_and_split
+        config = self._make_minimal_config(lmdb_path, split_path)
+        assert "valid_with_keyword" in config.resolved_eval_subset_names
+        assert "valid_without_keyword" in config.resolved_eval_subset_names
+
+    def test_resolved_valid_subset_names(self, fake_lmdb_and_split: tuple[pathlib.Path, pathlib.Path]) -> None:
+        lmdb_path, split_path = fake_lmdb_and_split
+        config = self._make_minimal_config(lmdb_path, split_path)
+        assert "valid_with_keyword" in config.resolved_valid_subset_names
+        assert "valid_without_keyword" in config.resolved_valid_subset_names
+
+    def test_resolved_names_in_subset_names(self, fake_lmdb_and_split: tuple[pathlib.Path, pathlib.Path]) -> None:
+        lmdb_path, split_path = fake_lmdb_and_split
+        config = self._make_minimal_config(lmdb_path, split_path)
+        for name in config.resolved_eval_subset_names:
+            assert name in config.subset_names
+        for name in config.resolved_valid_subset_names:
+            assert name in config.subset_names
+
+    def test_rejects_suffixed_eval_subset_names(self, fake_lmdb_and_split: tuple[pathlib.Path, pathlib.Path]) -> None:
+        lmdb_path, split_path = fake_lmdb_and_split
+        with pytest.raises(ValueError, match="derived name"):
+            self._make_minimal_config(lmdb_path, split_path, eval_subset_names=("valid_with_keyword",))
+
+    def test_rejects_suffixed_valid_subset_names(self, fake_lmdb_and_split: tuple[pathlib.Path, pathlib.Path]) -> None:
+        lmdb_path, split_path = fake_lmdb_and_split
+        with pytest.raises(ValueError, match="derived name"):
+            self._make_minimal_config(lmdb_path, split_path, valid_subset_names=("valid_with_keyword",))
+
+    def test_rejects_derived_suffix_in_dataparser_overrides(
+        self, fake_lmdb_and_split: tuple[pathlib.Path, pathlib.Path]
+    ) -> None:
+        lmdb_path, split_path = fake_lmdb_and_split
+        with pytest.raises(ValueError, match="derived-suffix key"):
+            KeywordBiasDataModuleConfig(
+                lmdb_paths=[str(lmdb_path)],
+                split_file_path=str(split_path),
+                dataparser_config_overrides={"valid_with_keyword": {"some_key": "val"}},
+                instantiate_parsers_at_setup=False,
+            )
+
+    def test_rejects_derived_suffix_in_dataloader_overrides(
+        self, fake_lmdb_and_split: tuple[pathlib.Path, pathlib.Path]
+    ) -> None:
+        lmdb_path, split_path = fake_lmdb_and_split
+        with pytest.raises(ValueError, match="derived-suffix key"):
+            KeywordBiasDataModuleConfig(
+                lmdb_paths=[str(lmdb_path)],
+                split_file_path=str(split_path),
+                dataloader_config_overrides={"valid_without_keyword": {"some_key": "val"}},
+                instantiate_parsers_at_setup=False,
+            )
 
 
 class TestExcludeAugmentedTracesConfig:
@@ -967,13 +1076,13 @@ class TestGetHfMessagesDatasetWrapper:
         assert stub._is_keyword_split_subset("train") is False
         assert stub._is_keyword_split_subset("valid") is False
 
-    def test_is_base_eval_subset(self) -> None:
+    def test_is_base_expansion_subset(self) -> None:
         stub = keywords_mod.KeywordBiasDataModule.__new__(keywords_mod.KeywordBiasDataModule)
-        stub.config = types.SimpleNamespace(eval_subset_names=("valid", "test"))
-        assert stub._is_base_eval_subset("valid") is True
-        assert stub._is_base_eval_subset("test") is True
-        assert stub._is_base_eval_subset("train") is False
-        assert stub._is_base_eval_subset("valid_with_keyword") is False
+        stub.config = types.SimpleNamespace(_expanded_base_names=frozenset({"valid", "test"}))
+        assert stub._is_base_expansion_subset("valid") is True
+        assert stub._is_base_expansion_subset("test") is True
+        assert stub._is_base_expansion_subset("train") is False
+        assert stub._is_base_expansion_subset("valid_with_keyword") is False
 
 
 class TestKeywordClusterCache:
@@ -1356,7 +1465,9 @@ def test_keyword_datamodule_full_lifecycle(
     reason="TACO traces dataset split is missing",
 )
 def test_keyword_datamodule_counterfactual_mode() -> None:
-    """Test datamodule with counterfactual evaluation strategy."""
+    """Test datamodule with counterfactual evaluation strategy uses derived subsets."""
+    import torch.utils.data
+
     pyine.utils.reprod.load_dotenv()
     counterfactual_config = _create_keywords_dm_config(evaluation_strategy=EvaluationStrategy.counterfactual)
     dm = counterfactual_config.instantiate_datamodule(verbose=True)
@@ -1364,20 +1475,24 @@ def test_keyword_datamodule_counterfactual_mode() -> None:
         dm._clear_prepared_metadata()
     dm.prepare_data()
     dm.setup()
-    # in counterfactual mode, base eval subset should apply BOTH inject and refactor
+    # base eval subset should return a ConcatDataset of derived parsers
     valid_parser = dm.get_parser("valid")
-    assert isinstance(valid_parser, keyword_ops.SampleKeywordManipulatorWrapper)
-    # base eval subset should have both inject and refactor trace IDs populated
-    # (the exact IDs depend on dataset, but we verify the sets are properly computed)
-    assert valid_parser._trace_ids_with_keyword is not None
-    # _with_keyword should have injection enabled (inject IDs = traces without keyword)
+    assert isinstance(valid_parser, torch.utils.data.ConcatDataset)
+    # derived parsers within the ConcatDataset should use identifier_suffix
     valid_with_kw_parser = dm.get_parser("valid_with_keyword")
+    assert isinstance(valid_with_kw_parser, keyword_ops.SampleKeywordManipulatorWrapper)
     assert len(valid_with_kw_parser._inject_trace_ids) >= 0  # may inject into traces lacking keyword
     assert valid_with_kw_parser._refactor_trace_ids == frozenset()  # no refactoring
-    # _without_keyword should have refactoring enabled (refactor IDs = traces with keyword)
+    if len(valid_with_kw_parser) > 0:
+        sample = valid_with_kw_parser[0]
+        assert sample.identifier.endswith("::with_keyword")
     valid_without_kw_parser = dm.get_parser("valid_without_keyword")
+    assert isinstance(valid_without_kw_parser, keyword_ops.SampleKeywordManipulatorWrapper)
     assert valid_without_kw_parser._inject_trace_ids == frozenset()  # no injection
     assert len(valid_without_kw_parser._refactor_trace_ids) >= 0  # may refactor traces with keyword
+    if len(valid_without_kw_parser) > 0:
+        sample = valid_without_kw_parser[0]
+        assert sample.identifier.endswith("::without_keyword")
     dm.teardown()
 
 

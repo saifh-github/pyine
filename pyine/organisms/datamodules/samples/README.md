@@ -316,13 +316,12 @@ keys carry those suffixes. During re-import, each datamodule resolves suffixed e
   the LMDB must contain per-suffix entries (`trace_id::hinted`, `trace_id::hintless`, and/or
   `trace_id::misleading`). Non-overlapping traces may use unsuffixed keys. Unknown `::` suffixes
   are rejected.
-- **KeywordBiasDataModule**: In counterfactual mode, base eval subsets (e.g. `valid`) require
-  both `trace_id::cf_with` and `trace_id::cf_without` entries per trace. The resolver passes
-  cf-suffixed entries to `SampleKeywordManipulatorWrapper`, which applies the correct variant's
-  output after doubling each sample. Unsuffixed entries are rejected for cf base eval subsets
-  (ambiguous). For `_with_keyword`/`_without_keyword` derived subsets, `::cf_with` maps to
-  `_with_keyword` and `::cf_without` maps to `_without_keyword`. Non-counterfactual subsets
-  use only unsuffixed entries.
+- **KeywordBiasDataModule**: Derived subsets (`_with_keyword` / `_without_keyword`) produce
+  `::with_keyword` / `::without_keyword` suffixed identifiers. The pregen resolver maps matching
+  suffixed entries to base trace IDs for LMDB lookup, skips sibling suffix entries, and rejects
+  unknown `::` suffixes. In counterfactual mode (where derived subsets share the same traces),
+  unsuffixed entries are rejected as ambiguous. In keyword_presence_split mode (disjoint subsets),
+  unsuffixed entries are accepted. Train and base eval subsets accept only unsuffixed entries.
 
 ### Strong Coupling Warning
 

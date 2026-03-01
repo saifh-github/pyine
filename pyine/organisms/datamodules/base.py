@@ -44,7 +44,7 @@ if typing.TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _KNOWN_ID_SUFFIX_SEPARATOR = "::"
-"""Separator used in sample identifiers to denote variant suffixes (e.g. ``::hinted``, ``::cf_with``)."""
+"""Separator used in sample identifiers to denote variant suffixes (e.g. ``::hinted``, ``::with_keyword``)."""
 
 
 def get_default_subset_names() -> tuple[str, ...]:

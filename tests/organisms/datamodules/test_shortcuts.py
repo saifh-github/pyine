@@ -106,13 +106,17 @@ def _make_stub_shortcuts_datamodule(
     evaluation_strategy: EvaluationStrategy = EvaluationStrategy.hint_presence_split,
     eval_hint_types: tuple[HintType, ...] = (HintType.helpful,),
     eval_subset_names: tuple[str, ...] = ("valid",),
+    valid_subset_names: tuple[str, ...] = ("valid",),
 ) -> shortcuts_mod.ShortcutBiasDataModule:
     """Create a stub shortcuts datamodule for unit testing."""
+    expanded_base_names = frozenset(eval_subset_names) | frozenset(valid_subset_names)
     stub = shortcuts_mod.ShortcutBiasDataModule.__new__(shortcuts_mod.ShortcutBiasDataModule)
     stub.config = types.SimpleNamespace(
         evaluation_strategy=evaluation_strategy,
         eval_hint_types=eval_hint_types,
         eval_subset_names=eval_subset_names,
+        valid_subset_names=valid_subset_names,
+        _expanded_base_names=expanded_base_names,
         min_samples_hinted=0,
         min_samples_misleading=0,
         min_samples_hintless=0,
@@ -466,6 +470,121 @@ class TestShortcutBiasDataModuleConfigParentSubsetResolution:
         assert config._get_parent_subset_name("train") == "train"  # not a derived subset
         assert config._get_parent_subset_name("valid") == "valid"  # base eval subset
 
+    def test_get_parent_covers_valid_subset_names(self, fake_lmdb_and_split: tuple[pathlib.Path, pathlib.Path]) -> None:
+        lmdb_path, split_path = fake_lmdb_and_split
+        config = pyine.organisms.datamodules.shortcuts_configs.ShortcutBiasDataModuleConfig(
+            lmdb_paths=[str(lmdb_path)],
+            split_file_path=str(split_path),
+            valid_subset_names=("valid", "test"),
+            eval_subset_names=("valid",),
+            instantiate_parsers_at_setup=False,
+        )
+        assert config._get_parent_subset_name("test_hinted") == "test"
+        assert config._get_parent_subset_name("test_hintless") == "test"
+
+
+class TestShortcutBiasDataModuleConfigResolvedNames:
+    """Tests for resolved_* properties and fail-loud validation."""
+
+    def _make_minimal_config(
+        self,
+        lmdb_path: pathlib.Path,
+        split_path: pathlib.Path,
+        eval_subset_names: tuple[str, ...] = ("valid",),
+        valid_subset_names: tuple[str, ...] = ("valid",),
+    ) -> pyine.organisms.datamodules.shortcuts_configs.ShortcutBiasDataModuleConfig:
+        return pyine.organisms.datamodules.shortcuts_configs.ShortcutBiasDataModuleConfig(
+            lmdb_paths=[str(lmdb_path)],
+            split_file_path=str(split_path),
+            eval_subset_names=eval_subset_names,
+            valid_subset_names=valid_subset_names,
+            instantiate_parsers_at_setup=False,
+        )
+
+    def test_resolved_eval_subset_names(self, fake_lmdb_and_split: tuple[pathlib.Path, pathlib.Path]) -> None:
+        lmdb_path, split_path = fake_lmdb_and_split
+        config = self._make_minimal_config(lmdb_path, split_path)
+        assert "valid_hinted" in config.resolved_eval_subset_names
+        assert "valid_hintless" in config.resolved_eval_subset_names
+        assert "valid_misleading" in config.resolved_eval_subset_names
+
+    def test_resolved_valid_subset_names(self, fake_lmdb_and_split: tuple[pathlib.Path, pathlib.Path]) -> None:
+        lmdb_path, split_path = fake_lmdb_and_split
+        config = self._make_minimal_config(lmdb_path, split_path)
+        assert "valid_hinted" in config.resolved_valid_subset_names
+        assert "valid_hintless" in config.resolved_valid_subset_names
+        assert "valid_misleading" in config.resolved_valid_subset_names
+
+    def test_resolved_names_in_subset_names(self, fake_lmdb_and_split: tuple[pathlib.Path, pathlib.Path]) -> None:
+        lmdb_path, split_path = fake_lmdb_and_split
+        config = self._make_minimal_config(lmdb_path, split_path)
+        for name in config.resolved_eval_subset_names:
+            assert name in config.subset_names
+        for name in config.resolved_valid_subset_names:
+            assert name in config.subset_names
+
+    def test_base_names_kept_in_subset_names(self, fake_lmdb_and_split: tuple[pathlib.Path, pathlib.Path]) -> None:
+        lmdb_path, split_path = fake_lmdb_and_split
+        config = self._make_minimal_config(lmdb_path, split_path)
+        assert "valid" in config.subset_names
+
+    def test_rejects_suffixed_eval_subset_names(self, fake_lmdb_and_split: tuple[pathlib.Path, pathlib.Path]) -> None:
+        lmdb_path, split_path = fake_lmdb_and_split
+        with pytest.raises(ValueError, match="derived name"):
+            self._make_minimal_config(lmdb_path, split_path, eval_subset_names=("valid_hinted",))
+
+    def test_rejects_suffixed_valid_subset_names(self, fake_lmdb_and_split: tuple[pathlib.Path, pathlib.Path]) -> None:
+        lmdb_path, split_path = fake_lmdb_and_split
+        with pytest.raises(ValueError, match="derived name"):
+            self._make_minimal_config(lmdb_path, split_path, valid_subset_names=("valid_hinted",))
+
+    def test_rejects_derived_suffix_in_dataparser_overrides(
+        self, fake_lmdb_and_split: tuple[pathlib.Path, pathlib.Path]
+    ) -> None:
+        lmdb_path, split_path = fake_lmdb_and_split
+        with pytest.raises(ValueError, match="derived-suffix key"):
+            pyine.organisms.datamodules.shortcuts_configs.ShortcutBiasDataModuleConfig(
+                lmdb_paths=[str(lmdb_path)],
+                split_file_path=str(split_path),
+                dataparser_config_overrides={"valid_hinted": {"some_key": "val"}},
+                instantiate_parsers_at_setup=False,
+            )
+
+    def test_rejects_derived_suffix_in_dataloader_overrides(
+        self, fake_lmdb_and_split: tuple[pathlib.Path, pathlib.Path]
+    ) -> None:
+        lmdb_path, split_path = fake_lmdb_and_split
+        with pytest.raises(ValueError, match="derived-suffix key"):
+            pyine.organisms.datamodules.shortcuts_configs.ShortcutBiasDataModuleConfig(
+                lmdb_paths=[str(lmdb_path)],
+                split_file_path=str(split_path),
+                dataloader_config_overrides={"valid_hintless": {"some_key": "val"}},
+                instantiate_parsers_at_setup=False,
+            )
+
+    def test_default_values_are_base_names(self, fake_lmdb_and_split: tuple[pathlib.Path, pathlib.Path]) -> None:
+        lmdb_path, split_path = fake_lmdb_and_split
+        config = self._make_minimal_config(lmdb_path, split_path)
+        assert config.eval_subset_names == ("valid",)
+        assert config.valid_subset_names == ("valid",)
+
+    def test_base_overrides_propagate_to_derived_subsets(
+        self, fake_lmdb_and_split: tuple[pathlib.Path, pathlib.Path]
+    ) -> None:
+        lmdb_path, split_path = fake_lmdb_and_split
+        base_transform = {"predict_type": "program_output"}
+        config = pyine.organisms.datamodules.shortcuts_configs.ShortcutBiasDataModuleConfig(
+            lmdb_paths=[str(lmdb_path)],
+            split_file_path=str(split_path),
+            dataparser_config_overrides={"valid": {"transform_config": base_transform}},
+            instantiate_parsers_at_setup=False,
+        )
+        for derived_name in ("valid_hinted", "valid_hintless", "valid_misleading"):
+            derived_overrides = config.dataparser_config_overrides[derived_name]
+            assert derived_overrides["transform_config"] == base_transform
+            assert "selection_config" in derived_overrides  # forced by derived logic
+            assert "filtering_config" in derived_overrides  # forced disabled
+
 
 class TestValidateSampleCounts:
     """Tests for _validate_sample_counts method."""
@@ -474,6 +593,7 @@ class TestValidateSampleCounts:
         dm = shortcuts_mod.ShortcutBiasDataModule.__new__(shortcuts_mod.ShortcutBiasDataModule)
         dm.config = types.SimpleNamespace(
             eval_subset_names=("valid",),
+            valid_subset_names=("valid",),
             min_samples_hinted=10,
             min_samples_misleading=0,
             min_samples_hintless=0,
@@ -499,6 +619,7 @@ class TestValidateSampleCounts:
         dm = shortcuts_mod.ShortcutBiasDataModule.__new__(shortcuts_mod.ShortcutBiasDataModule)
         dm.config = types.SimpleNamespace(
             eval_subset_names=("valid",),
+            valid_subset_names=("valid",),
             min_samples_hinted=0,
             min_samples_misleading=0,
             min_samples_hintless=50,
@@ -524,6 +645,7 @@ class TestValidateSampleCounts:
         dm = shortcuts_mod.ShortcutBiasDataModule.__new__(shortcuts_mod.ShortcutBiasDataModule)
         dm.config = types.SimpleNamespace(
             eval_subset_names=("valid",),
+            valid_subset_names=("valid",),
             min_samples_hinted=5,
             min_samples_misleading=0,
             min_samples_hintless=10,
@@ -554,6 +676,7 @@ class TestCreateHintSplitDerivedSubsetsPresenceSplit:
             evaluation_strategy=EvaluationStrategy.hint_presence_split,
             eval_hint_types=(HintType.helpful,),
             eval_subset_names=("valid", "test"),
+            _expanded_base_names=frozenset({"valid", "test"}),
             require_validated_misleading=False,
         )
         stub.verbose = False
@@ -603,6 +726,7 @@ class TestCreateHintSplitDerivedSubsetsCounterfactual:
             evaluation_strategy=EvaluationStrategy.counterfactual,
             eval_hint_types=(HintType.helpful,),
             eval_subset_names=("valid",),
+            _expanded_base_names=frozenset({"valid"}),
             split_seed=0,  # needed for counterfactual RNG initialization
             require_validated_misleading=False,
         )
@@ -648,6 +772,7 @@ class TestCreateHintSplitDerivedSubsetsCounterfactual:
             evaluation_strategy=EvaluationStrategy.counterfactual,
             eval_hint_types=(HintType.helpful,),
             eval_subset_names=("valid",),
+            _expanded_base_names=frozenset({"valid"}),
             split_seed=0,  # needed for counterfactual RNG initialization
             require_validated_misleading=False,
         )
@@ -675,6 +800,7 @@ class TestCreateHintSplitDerivedSubsetsCounterfactual:
             evaluation_strategy=EvaluationStrategy.counterfactual,
             eval_hint_types=(HintType.helpful,),
             eval_subset_names=("valid",),
+            _expanded_base_names=frozenset({"valid"}),
             split_seed=0,  # needed for counterfactual RNG initialization
             require_validated_misleading=False,
         )

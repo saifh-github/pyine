@@ -8,8 +8,10 @@ import dataclasses
 import logging
 import typing
 
+import datasets as hf_datasets
 import numpy as np
 import pydantic
+import torch.utils.data
 
 import pyine.data.datamodule
 import pyine.data.traces.dataset_utils
@@ -29,7 +31,7 @@ from pyine.organisms.datamodules.shortcuts_configs import (
 )
 
 if typing.TYPE_CHECKING:
-    import torch.utils.data
+    import pathlib
 
 logger = logging.getLogger(__name__)
 
@@ -997,7 +999,7 @@ class ShortcutBiasDataModule(
         ] = {}
         filtered_parent_counts: dict[str, int] = {}
         derivation_type = self.config.evaluation_strategy.value
-        for eval_subset_name in self.config.eval_subset_names:
+        for eval_subset_name in self.config._expanded_base_names:  # pyright: ignore[reportPrivateUsage]
             if eval_subset_name not in subset_traces_meta:
                 continue
             traces = subset_traces_meta[eval_subset_name]
@@ -1283,7 +1285,8 @@ class ShortcutBiasDataModule(
         Raises:
             ValueError: If any derived subset has fewer samples than the configured minimum.
         """
-        for eval_subset_name in self.config.eval_subset_names:
+        all_base_names = {*self.config.eval_subset_names, *self.config.valid_subset_names}
+        for eval_subset_name in sorted(all_base_names):
             if eval_subset_name not in subset_traces_meta:
                 continue
             parent_trace_count = (
@@ -1393,10 +1396,14 @@ class ShortcutBiasDataModule(
             has_any_cf_suffix = sample_id.endswith("::cf_with") or sample_id.endswith("::cf_without")
             if has_any_cf_suffix:
                 raise ValueError(
-                    f"pregenerated output key '{sample_id}' has a keyword counterfactual suffix "
-                    "(::cf_with/::cf_without); these suffixes are not handled by "
-                    "ShortcutBiasDataModule, they belong to KeywordBiasDataModule's "
-                    "counterfactual evaluation mode"
+                    f"pregenerated output key '{sample_id}' has an obsolete keyword "
+                    "counterfactual suffix (::cf_with/::cf_without); not supported"
+                )
+            has_any_kw_suffix = sample_id.endswith("::with_keyword") or sample_id.endswith("::without_keyword")
+            if has_any_kw_suffix:
+                raise ValueError(
+                    f"pregenerated output key '{sample_id}' has a keyword evaluation suffix "
+                    "(::with_keyword/::without_keyword); belongs to KeywordBiasDataModule"
                 )
             if target_suffix is not None and sample_id.endswith(target_suffix):
                 base_id = sample_id[: -len(target_suffix)]
@@ -1480,6 +1487,9 @@ class ShortcutBiasDataModule(
     ) -> pyine.organisms.datamodules.samples.SampleDataParser:
         """Returns a data parser, wrapped with identifier modification if needed.
 
+        When called with a base name that has derived expansions (e.g. ``"valid"``), returns a
+        ``ConcatDataset`` of all derived parsers for that base.
+
         For derived hint subsets (`_hinted`, `_misleading`, `_hintless`), traces that appear in
         multiple subsets (prompt DB hint traces) have their sample identifiers modified with
         suffixes to ensure uniqueness:
@@ -1498,9 +1508,14 @@ class ShortcutBiasDataModule(
         Returns:
             Data parser with subset tagging, optionally wrapped with identifier modification.
         """
-        base_parser = super().get_parser(subset_name)
         if not self._is_setup_complete():
             raise RuntimeError("data parsers are not ready yet, call `setup()` first")
+        # if this is an expanded base name, return a ConcatDataset of all derived parsers
+        if subset_name in self.config._expanded_base_names:  # pyright: ignore[reportPrivateUsage]
+            derived_names = self._get_derived_names_for_base(subset_name)
+            parsers = [self.get_parser(name) for name in derived_names]
+            return torch.utils.data.ConcatDataset(parsers)  # type: ignore[return-value]
+        base_parser = super().get_parser(subset_name)
         # check if this is a derived hints subset that needs identifier modification
         suffix_map = {
             "_hinted": "hinted",
@@ -1519,6 +1534,81 @@ class ShortcutBiasDataModule(
                     )  # type: ignore[return-value]
                 break
         return base_parser
+
+    def _get_derived_names_for_base(
+        self,
+        subset_name: pyine.data.datamodule.SubsetNameType,
+    ) -> list[pyine.data.datamodule.SubsetNameType]:
+        """Returns the derived subset names for a given expanded base name."""
+        return [
+            name
+            for name in self.config.subset_names
+            if name != subset_name and self.config._get_parent_subset_name(name) == subset_name  # pyright: ignore[reportPrivateUsage]
+        ]
+
+    @typing.override
+    def get_hf_messages_dataset(
+        self,
+        subset_name: pyine.data.datamodule.SubsetNameType,
+        append_answer: bool = True,
+        merge_system_with_user: bool = False,
+        keep_original_data: bool = False,
+        force_regenerate: bool = False,
+    ) -> hf_datasets.Dataset:
+        """Returns a HuggingFace dataset, concatenating derived subsets for base names."""
+        if subset_name in self.config._expanded_base_names:  # pyright: ignore[reportPrivateUsage]
+            derived_names = self._get_derived_names_for_base(subset_name)
+            derived_datasets = [
+                super().get_hf_messages_dataset(
+                    subset_name=name,
+                    append_answer=append_answer,
+                    merge_system_with_user=merge_system_with_user,
+                    keep_original_data=keep_original_data,
+                    force_regenerate=force_regenerate,
+                )
+                for name in derived_names
+            ]
+            return hf_datasets.concatenate_datasets(derived_datasets)
+        return super().get_hf_messages_dataset(
+            subset_name=subset_name,
+            append_answer=append_answer,
+            merge_system_with_user=merge_system_with_user,
+            keep_original_data=keep_original_data,
+            force_regenerate=force_regenerate,
+        )
+
+    @typing.override
+    def get_openai_messages_dataset(
+        self,
+        subset_name: pyine.data.datamodule.SubsetNameType,
+        append_answer: bool = True,
+        merge_system_with_user: bool = False,
+    ) -> pathlib.Path:
+        """Returns the path to an OpenAI JSONL dataset, merging derived subsets for base names."""
+        if subset_name in self.config._expanded_base_names:  # pyright: ignore[reportPrivateUsage]
+            derived_names = self._get_derived_names_for_base(subset_name)
+            derived_paths = [
+                super().get_openai_messages_dataset(
+                    subset_name=name,
+                    append_answer=append_answer,
+                    merge_system_with_user=merge_system_with_user,
+                )
+                for name in derived_names
+            ]
+            paths_hash = pyine.utils.reprod.get_params_hash(*(p.name for p in derived_paths))
+            merged_path = derived_paths[0].parent / f"{subset_name}_merged.{paths_hash}.jsonl"
+            with open(merged_path, "w") as out:
+                for path_idx, derived_path in enumerate(derived_paths):
+                    content = derived_path.read_text()
+                    if path_idx > 0 and content and not content.startswith("\n"):
+                        out.write("\n")  # write_dataset_to_jsonl omits trailing newline
+                    out.write(content)
+            return merged_path
+        return super().get_openai_messages_dataset(
+            subset_name=subset_name,
+            append_answer=append_answer,
+            merge_system_with_user=merge_system_with_user,
+        )
 
 
 class SampleHintIdentifierWrapper:

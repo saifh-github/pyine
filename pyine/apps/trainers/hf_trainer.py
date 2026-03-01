@@ -226,7 +226,7 @@ def rl_train(
     eval_ds = None
     if config.grpo_config.do_eval:
         logger.info("preparing validation dataset...")
-        valid_subset_names = list(config.datamodule_config.valid_subset_names)
+        valid_subset_names = list(config.datamodule_config.resolved_valid_subset_names)
         valid_datasets = [
             datamodule.get_hf_messages_dataset(
                 subset_name=subset_name,

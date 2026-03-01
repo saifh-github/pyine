@@ -53,20 +53,18 @@ class EvaluationStrategy(enum.StrEnum):
     """Strategy for evaluating keyword bias effects.
 
     These strategies determine how to structure evaluation subsets for keyword bias experiments. In
-    both cases, the evaluation data subsets (e.g. `valid` or `test`) will possess two children groups
-    (`..._with_keyword` and `..._without_keyword`) that will allow us to clearly distinguish cases
-    where models should behave differently. In the `keyword_presence_split` strategy, the two
-    groups will simply contain different examples (from different traces). In the `counterfactual`
-    strategy, the two groups will possess the same examples, i.e. naturally occurring ones where we
-    remove the keyword (by refactoring) for the `_without_keyword` group, and synthetically occurring
-    ones where we add the keyword (as a comment) for the `_with_keyword`.
+    both cases, the evaluation data subsets (e.g. ``valid`` or ``test``) will possess two derived
+    subsets (``..._with_keyword`` and ``..._without_keyword``) that allow us to clearly distinguish
+    cases where models should behave differently. In the ``keyword_presence_split`` strategy, the
+    two groups contain different examples (from different traces). In the ``counterfactual``
+    strategy, the two groups possess the same examples, i.e. naturally occurring ones where we
+    remove the keyword (by refactoring) for the ``_without_keyword`` group, and synthetically
+    occurring ones where we add the keyword (as a comment) for the ``_with_keyword``.
 
-    Note on base vs derived eval subset access (counterfactual):
-        - Accessing **DERIVED** eval subsets (e.g., `valid_with_keyword`, `valid_without_keyword`)
-          applies keyword injection/refactoring and preserves dataset length;
-        - Accessing **BASE** eval subsets (e.g., `valid`) enables counterfactual pairing mode, which
-          doubles dataset length by producing both "with keyword" and "without keyword" variants per
-          sample and disambiguates them via `::cf_with` / `::cf_without` identifier suffixes.
+    Both strategies produce derived subsets. Derived subsets get ``::with_keyword`` /
+    ``::without_keyword`` identifier suffixes for uniqueness when concatenated into a
+    ConcatDataset. Base eval subsets (e.g. ``valid``) return a ConcatDataset of their derived
+    parsers.
     """
 
     keyword_presence_split = enum.auto()
@@ -178,7 +176,29 @@ class KeywordBiasDataModuleConfig(pyine.organisms.datamodules.base.BiasDataModul
     min_samples_without_keyword: pydantic.NonNegativeInt = 0
     """Minimum number of samples required without keyword for evaluation experiments."""
 
-    # --------------- PRIVATE UTILITY FUNCTIONS ---------------
+    # --------------- PRIVATE UTILITY FUNCTIONS & ATTRIBUTES ---------------
+
+    _DERIVED_SUFFIXES: typing.ClassVar[tuple[str, ...]] = ("_with_keyword", "_without_keyword")
+    """Known derived-subset suffixes; input fields must not contain these."""
+
+    _resolved_valid_subset_names: tuple[pyine.data.datamodule.SubsetNameType, ...] = pydantic.PrivateAttr(default=())
+    """Expanded valid subset names computed by ``_validate_and_resolve``."""
+    _resolved_eval_subset_names: tuple[pyine.data.datamodule.SubsetNameType, ...] = pydantic.PrivateAttr(default=())
+    """Expanded eval subset names computed by ``_validate_and_resolve``."""
+    _expanded_base_names: frozenset[str] = pydantic.PrivateAttr(default=frozenset())
+    """Union of valid_subset_names and eval_subset_names base names that were expanded."""
+
+    @property
+    @typing.override
+    def resolved_valid_subset_names(self) -> tuple[pyine.data.datamodule.SubsetNameType, ...]:
+        """Returns the fully-resolved validation subset names after keyword-split expansion."""
+        return self._resolved_valid_subset_names
+
+    @property
+    @typing.override
+    def resolved_eval_subset_names(self) -> tuple[pyine.data.datamodule.SubsetNameType, ...]:
+        """Returns the fully-resolved evaluation subset names after keyword-split expansion."""
+        return self._resolved_eval_subset_names
 
     @pydantic.model_validator(mode="after")
     @typing.override
@@ -187,16 +207,65 @@ class KeywordBiasDataModuleConfig(pyine.organisms.datamodules.base.BiasDataModul
 
         This override ensures subset_names are extended BEFORE the base class resolves
         parser/loader configs, avoiding missing config errors for derived eval subsets.
+
+        Both ``valid_subset_names`` and ``eval_subset_names`` must contain **base** names only
+        (e.g. ``"valid"``). Derived names (e.g. ``"valid_with_keyword"``) are computed
+        automatically and stored in ``_resolved_valid_subset_names`` / ``_resolved_eval_subset_names``.
         """
-        # first, extend subset_names with keyword-split eval subsets
+        # --- fail-loud: reject suffixed names in input fields ---
+        for field_name, field_values in (
+            ("valid_subset_names", self.valid_subset_names),
+            ("eval_subset_names", self.eval_subset_names),
+        ):
+            for name in field_values:
+                for suffix in self._DERIVED_SUFFIXES:
+                    if name.endswith(suffix):
+                        base_name = name[: -len(suffix)]
+                        raise ValueError(
+                            f"{field_name} contains derived name '{name}'; specify the base name "
+                            f"'{base_name}' instead; derived subsets are computed automatically."
+                        )
+        # --- fail-loud: reject derived-suffix keys in user-provided overrides ---
+        for overrides_name, overrides_dict in (
+            ("dataparser_config_overrides", self.dataparser_config_overrides),
+            ("dataloader_config_overrides", self.dataloader_config_overrides),
+        ):
+            for key in overrides_dict:
+                for suffix in self._DERIVED_SUFFIXES:
+                    if key.endswith(suffix):
+                        raise ValueError(
+                            f"{overrides_name} contains derived-suffix key '{key}'; "
+                            f"override the base name instead; derived subsets inherit "
+                            f"overrides from their parent automatically."
+                        )
+        # --- compute expanded base names (union of both fields) ---
+        expanded_base_names = frozenset(self.eval_subset_names) | frozenset(self.valid_subset_names)
+        self._expanded_base_names = expanded_base_names
+        # --- extend subset_names with keyword-split derived subsets ---
         extended_names = list(self.subset_names)
-        for eval_name in self.eval_subset_names:
-            with_kw = f"{eval_name}_with_keyword"
-            without_kw = f"{eval_name}_without_keyword"
+        resolved_valid: list[str] = []
+        resolved_eval: list[str] = []
+        # iterate over the deduped union to create derived subsets
+        seen_bases: set[str] = set()
+        for base_name in (*self.valid_subset_names, *self.eval_subset_names):
+            if base_name in seen_bases:
+                continue
+            seen_bases.add(base_name)
+            with_kw = f"{base_name}_with_keyword"
+            without_kw = f"{base_name}_without_keyword"
             if with_kw not in extended_names:
                 extended_names.append(with_kw)
             if without_kw not in extended_names:
                 extended_names.append(without_kw)
+        # --- compute resolved names for each field ---
+        for base_name in self.valid_subset_names:
+            resolved_valid.append(f"{base_name}_with_keyword")
+            resolved_valid.append(f"{base_name}_without_keyword")
+        for base_name in self.eval_subset_names:
+            resolved_eval.append(f"{base_name}_with_keyword")
+            resolved_eval.append(f"{base_name}_without_keyword")
+        self._resolved_valid_subset_names = tuple(resolved_valid)
+        self._resolved_eval_subset_names = tuple(resolved_eval)
         object.__setattr__(self, "subset_names", tuple(extended_names))
         # if exclude_augmented_traces is set, combine it with base_filter_rule
         if self.exclude_augmented_traces:
@@ -215,14 +284,15 @@ class KeywordBiasDataModuleConfig(pyine.organisms.datamodules.base.BiasDataModul
         self,
         subset_name: pyine.data.datamodule.SubsetNameType,
     ) -> pyine.data.datamodule.SubsetNameType:
-        """Map a derived subset name back to its parent eval subset, if applicable.
+        """Map a derived subset name back to its parent subset, if applicable.
 
         For example, 'valid_with_keyword' -> 'valid', 'valid_without_keyword' -> 'valid'.
         Returns the original name if it's not a derived keyword-split subset.
+        Checks against the union of both valid_subset_names and eval_subset_names.
         """
-        for eval_name in self.eval_subset_names:
-            if subset_name == f"{eval_name}_with_keyword" or subset_name == f"{eval_name}_without_keyword":
-                return eval_name
+        for base_name in self._expanded_base_names:
+            if subset_name == f"{base_name}_with_keyword" or subset_name == f"{base_name}_without_keyword":
+                return base_name
         return subset_name
 
     @typing.override

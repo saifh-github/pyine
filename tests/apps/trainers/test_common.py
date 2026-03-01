@@ -55,6 +55,14 @@ class DummyDatamoduleConfig(pyine.data.datamodule.BaseDataModuleConfig):
     valid_subset_names: list[str] = pydantic.Field(default_factory=lambda: ["valid"])
     eval_subset_names: list[str] = pydantic.Field(default_factory=lambda: ["valid"])
 
+    @property
+    def resolved_valid_subset_names(self) -> tuple[str, ...]:
+        return tuple(self.valid_subset_names)
+
+    @property
+    def resolved_eval_subset_names(self) -> tuple[str, ...]:
+        return tuple(self.eval_subset_names)
+
     def instantiate_datamodule(self, verbose: bool = False) -> DummyDatamodule:
         self.calls.append(verbose)
         self.datamodule.instantiate_verbose.append(verbose)

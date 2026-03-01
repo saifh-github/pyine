@@ -280,31 +280,12 @@ class SampleKeywordManipulatorWrapper:
 
     The wrapper preserves the underlying dataset's interface (len, getitem, epoch handling).
 
-    Note on sample identifiers and counterfactual mode:
-        In standard mode, sample identifiers are preserved from the underlying dataset.
-        In counterfactual mode (`counterfactual_mode=True`), sample identifiers are modified
-        with suffixes to ensure uniqueness across paired versions:
-
-        - "::cf_with" suffix for "with keyword" versions (even indices)
-        - "::cf_without" suffix for "without keyword" versions (odd indices)
-
-        This is necessary because counterfactual mode doubles the dataset length by producing
-        two versions of each sample, and downstream consumers (e.g., data stores, evaluators)
-        require unique identifiers.
-
-    Note on derived vs base subset behavior:
-        When accessing **BASE** eval subsets (e.g., "valid") in counterfactual mode:
-        - Sample count is DOUBLED (each trace yields 2 samples: with/without keyword);
-        - Identifiers get "::cf_with" or "::cf_without" suffixes;
-        - Even indices: with keyword; odd indices: without keyword.
-
-        When accessing **DERIVED** subsets (e.g., "valid_with_keyword", "valid_without_keyword"):
-        - Sample count is NOT doubled;
-        - Identifiers are NOT modified (no ::cf_* suffix);
-        - Manipulation (inject/refactor) is applied based on which derived subset is accessed.
-
-        This distinction exists because derived subsets are pre-partitioned by keyword presence,
-        while base subsets in counterfactual mode create virtual pairs on-the-fly.
+    Note on derived subset behavior:
+        Derived subsets (e.g., ``valid_with_keyword``, ``valid_without_keyword``) each get an
+        ``identifier_suffix`` (``::with_keyword`` or ``::without_keyword``) to ensure unique
+        identifiers when the derived subsets are concatenated into a ConcatDataset for evaluation.
+        Manipulation (inject/refactor) is applied based on which derived subset is accessed.
+        Base eval subsets (e.g. ``valid``) return a ConcatDataset of their derived parsers.
     """
 
     def __init__(
@@ -317,7 +298,7 @@ class SampleKeywordManipulatorWrapper:
         injector: KeywordInjector | None = None,
         refactorer: KeywordRefactorer | None = None,
         root_injector_seed: int | None = 0,
-        counterfactual_mode: bool = False,
+        identifier_suffix: str | None = None,
     ) -> None:
         """Initialize the wrapper.
 
@@ -327,40 +308,36 @@ class SampleKeywordManipulatorWrapper:
             trace_ids_with_keyword: Set of trace identifiers that naturally contain the keyword
                 (used for runtime validation).
             inject_trace_ids: Trace IDs that should have keyword injected (if they lack it).
-                If None or empty, no injection occurs. Ignored when counterfactual_mode=True.
+                If None or empty, no injection occurs.
             refactor_trace_ids: Trace IDs that should have keyword refactored out (if they have it).
-                If None or empty, no refactoring occurs. Ignored when counterfactual_mode=True.
+                If None or empty, no refactoring occurs.
             injector: Optional KeywordInjector for injection mode; created automatically if needed.
             refactorer: Optional KeywordRefactorer for refactoring mode; created automatically if needed.
             root_injector_seed: Optional seed for the root RNG used to generate random injection seeds.
                 If None, all keyword injections will always be non-deterministic.
-            counterfactual_mode: When True, doubles the dataset length and produces paired samples:
-                even indices are "with keyword" versions (injected if needed), odd indices are
-                "without keyword" versions (refactored if needed). This enables true counterfactual
-                evaluation where each sample appears in both conditions.
+            identifier_suffix: Optional suffix to append to all sample identifiers (e.g.
+                ``"with_keyword"`` -> ``"::with_keyword"``). Used by derived subsets to ensure
+                unique identifiers when concatenated into a ConcatDataset.
         """
         self._wrapped = wrapped_dataset
         self._keyword = keyword
         self._trace_ids_with_keyword = trace_ids_with_keyword
-        self._counterfactual_mode = counterfactual_mode
+        self._identifier_suffix = identifier_suffix
+        if self._identifier_suffix is not None and not self._identifier_suffix.startswith("::"):
+            self._identifier_suffix = f"::{self._identifier_suffix}"
         self._inject_trace_ids = inject_trace_ids or frozenset()
         self._refactor_trace_ids = refactor_trace_ids or frozenset()
-        # validation only applies when not in counterfactual mode (where we decide at access time)
-        if not counterfactual_mode:
-            # validate: inject targets should NOT have keyword
-            invalid_inject = self._inject_trace_ids & self._trace_ids_with_keyword
-            if invalid_inject:
-                raise ValueError(f"inject_trace_ids contains traces that already have keyword: {invalid_inject}")
-            # validate: refactor targets SHOULD have keyword
-            invalid_refactor = self._refactor_trace_ids - self._trace_ids_with_keyword
-            if invalid_refactor:
-                raise ValueError(f"refactor_trace_ids contains traces that don't have keyword: {invalid_refactor}")
-        # create injector/refactorer; in counterfactual mode, always need both
-        if counterfactual_mode or self._inject_trace_ids:
+        invalid_inject = self._inject_trace_ids & self._trace_ids_with_keyword
+        if invalid_inject:
+            raise ValueError(f"inject_trace_ids contains traces that already have keyword: {invalid_inject}")
+        invalid_refactor = self._refactor_trace_ids - self._trace_ids_with_keyword
+        if invalid_refactor:
+            raise ValueError(f"refactor_trace_ids contains traces that don't have keyword: {invalid_refactor}")
+        if self._inject_trace_ids:
             if injector is None:
                 injector = KeywordInjector(keyword=keyword)
         self._injector = injector
-        if counterfactual_mode or self._refactor_trace_ids:
+        if self._refactor_trace_ids:
             if refactorer is None:
                 refactorer = KeywordRefactorer(keyword=keyword)
         self._refactorer = refactorer
@@ -375,11 +352,8 @@ class SampleKeywordManipulatorWrapper:
         return getattr(self._wrapped, name)
 
     def __len__(self) -> int:
-        """Return the number of samples (doubled in counterfactual mode)."""
-        base_len = len(self._wrapped)  # type: ignore[arg-type]
-        if self._counterfactual_mode:
-            return 2 * base_len
-        return base_len
+        """Return the number of samples."""
+        return len(self._wrapped)  # type: ignore[arg-type]
 
     def __getitem__(
         self,
@@ -388,21 +362,11 @@ class SampleKeywordManipulatorWrapper:
         """Get a sample with keyword bias handling applied.
 
         Args:
-            index: Index of the sample to retrieve. In counterfactual mode, even indices return
-                "with keyword" versions and odd indices return "without keyword" versions.
+            index: Index of the sample to retrieve.
 
         Returns:
             SampleData with updated fields (if needed).
         """
-        if self._counterfactual_mode:
-            return self._getitem_counterfactual(index)
-        return self._getitem_standard(index)
-
-    def _getitem_standard(
-        self,
-        index: int,
-    ) -> pyine.organisms.datamodules.samples.common.SampleData:
-        """Standard (non-counterfactual) sample retrieval with inject/refactor trace ID sets."""
         sample = self._wrapped[index]
         sample_has_keyword = has_keyword(self._keyword, sample.code)
         expected_keyword = sample.identifier in self._trace_ids_with_keyword
@@ -413,98 +377,36 @@ class SampleKeywordManipulatorWrapper:
         if sample.identifier in self._inject_trace_ids and not sample_has_keyword:
             code = self._injector.inject(sample.code, rng=self._get_rng_for_injection(index))
             tags += ",has_bias_keyword:1,keyword_injected:1"
-            return sample._replace(
-                code=code,
-                has_code_override=True,
-                comma_separated_tags=tags,
+            return self._apply_identifier_suffix(
+                sample._replace(
+                    code=code,
+                    has_code_override=True,
+                    comma_separated_tags=tags,
+                )
             )
         # check for refactoring (sample must have keyword and be in refactor set)
         if sample.identifier in self._refactor_trace_ids and sample_has_keyword:
             code = self._refactorer.refactor(sample.code)
             tags += f",keyword_refactored:1,has_bias_keyword:0,repl_keyword:{self._refactorer.replacement_template}"
-            return sample._replace(
-                code=code,
-                has_code_override=True,
-                comma_separated_tags=tags,
-            )
-        # no manipulation, just tag
-        tags += f",has_bias_keyword:{int(sample_has_keyword)}"
-        return sample._replace(comma_separated_tags=tags)
-
-    def _getitem_counterfactual(
-        self,
-        index: int,
-    ) -> pyine.organisms.datamodules.samples.common.SampleData:
-        """Counterfactual mode: paired indices where even=with_keyword, odd=without_keyword.
-
-        The identifier is modified with a suffix to distinguish counterfactual versions:
-        - "::cf_with" for the "with keyword" version
-        - "::cf_without" for the "without keyword" version
-        """
-        underlying_index = index // 2
-        is_with_keyword_version = (index % 2) == 0
-        sample = self._wrapped[underlying_index]
-        sample_has_keyword = sample.identifier in self._trace_ids_with_keyword
-        new_base_tag = f"bias_keyword:{self._keyword}"
-        tags = f"{sample.comma_separated_tags},{new_base_tag}" if sample.comma_separated_tags else new_base_tag
-        if is_with_keyword_version:
-            # "with keyword" version: inject if sample lacks keyword, otherwise just tag
-            new_identifier = f"{sample.identifier}::cf_with"
-            tags += ",counterfactual_version:with,has_bias_keyword:1"
-            if not sample_has_keyword:
-                code = self._injector.inject(sample.code, rng=self._get_rng_for_injection(underlying_index))
-                tags += ",keyword_injected:1"
-                sample = sample._replace(
-                    identifier=new_identifier,
+            return self._apply_identifier_suffix(
+                sample._replace(
                     code=code,
                     has_code_override=True,
                     comma_separated_tags=tags,
                 )
-            else:
-                sample = sample._replace(identifier=new_identifier, comma_separated_tags=tags)
-            return self._maybe_apply_cf_pregenerated_output(sample)
-        # "without keyword" version: refactor if sample has keyword, otherwise just tag
-        new_identifier = f"{sample.identifier}::cf_without"
-        tags += ",counterfactual_version:without,has_bias_keyword:0"
-        if sample_has_keyword:
-            code = self._refactorer.refactor(sample.code)
-            tags += f",keyword_refactored:1,repl_keyword:{self._refactorer.replacement_template}"
-            sample = sample._replace(
-                identifier=new_identifier,
-                code=code,
-                has_code_override=True,
-                comma_separated_tags=tags,
             )
-        else:
-            sample = sample._replace(identifier=new_identifier, comma_separated_tags=tags)
-        return self._maybe_apply_cf_pregenerated_output(sample)
+        # no manipulation, just tag
+        tags += f",has_bias_keyword:{int(sample_has_keyword)}"
+        return self._apply_identifier_suffix(sample._replace(comma_separated_tags=tags))
 
-    def _maybe_apply_cf_pregenerated_output(
+    def _apply_identifier_suffix(
         self,
         sample: pyine.organisms.datamodules.samples.common.SampleData,
     ) -> pyine.organisms.datamodules.samples.common.SampleData:
-        """Apply pregenerated output for a counterfactual variant if available.
-
-        Accesses the pregenerated outputs dict from the wrapped builder via attribute
-        forwarding. The dict is expected to contain cf-suffixed keys (e.g.
-        ``trace_id::cf_with``) placed there by the keyword datamodule's resolver.
-        """
-        import pyine.organisms.datamodules.samples.common as _samples_common
-
-        pregen_outputs = getattr(self._wrapped, "_pregenerated_outputs", None)
-        if pregen_outputs is None or sample.identifier not in pregen_outputs:
-            return sample
-        if sample.predict_type != _samples_common.SamplePredictType.program_output:
-            raise NotImplementedError(
-                f"pregenerated output overrides are only supported for program_output predict_type, "
-                f"got {sample.predict_type} for sample {sample.identifier}"
-            )
-        pregen_record = pregen_outputs[sample.identifier]
-        return sample._replace(
-            pregenerated_output=pregen_record.model_output,
-            pregenerated_output_lmdb_path=pregen_record.source_lmdb_path,
-            pregenerated_output_lmdb_key=pregen_record.source_key,
-        )
+        """Append the identifier suffix if configured."""
+        if self._identifier_suffix is not None:
+            return sample._replace(identifier=f"{sample.identifier}{self._identifier_suffix}")
+        return sample
 
     @property
     def keyword(self) -> str:
@@ -532,7 +434,6 @@ class SampleKeywordManipulatorWrapper:
         stats["traces_with_keyword"] = len(self._trace_ids_with_keyword)
         stats["traces_with_injections"] = len(self._inject_trace_ids)
         stats["traces_with_refactoring"] = len(self._refactor_trace_ids)
-        stats["counterfactual_mode"] = int(self._counterfactual_mode)
         stats["effective_sample_count"] = len(self)
         return stats
 
