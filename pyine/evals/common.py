@@ -61,6 +61,43 @@ class RunnableEvalConfig(pydantic.BaseModel):
     max_in_flight_jobs: int | None = 32
     """Maximum number of jobs to run in flight at any given time."""
     async_metrics_compute_rate: int = 100
+    """How often (in completed items) to compute and log intermediate metrics during parallel eval."""
+    with_retry_config: dict[str, typing.Any] | None = pydantic.Field(
+        default_factory=lambda: pyine.utils.llm_providers.get_default_openai_provider_retry_config(
+            max_retries=6,
+        ),
+    )
+    """Retry config applied to the chain via .with_retry() before evaluation.
+
+    Covers transient provider errors (timeouts, rate limits, 5xx) with exponential jitter backoff.
+    The default uses openai.* exception types, which are correct for all OpenAI-compatible providers
+    in this codebase (openai, deepseek, vllm) since they all use the openai client library.
+
+    Set to None to disable eval-level retry entirely.
+
+    Note: if the chain already has retry from PromptChainBuildConfig.with_retry_config or
+    LLMProviderConfig.with_retry_config, this adds another retry layer on top. The outer retry only
+    fires if the inner retry is fully exhausted, which increases total wait time but ensures
+    resilience for long-running evaluations.
+    """
+
+    @pydantic.field_serializer("with_retry_config", when_used="json")
+    @classmethod
+    def _serialize_retry_config(
+        cls,
+        value: dict[str, typing.Any] | None,
+    ) -> dict[str, typing.Any] | None:
+        """Converts exception type classes to qualified names for JSON serialization."""
+        if value is None:
+            return None
+        result = dict(value)
+        exc_types = result.get("retry_if_exception_type")
+        if isinstance(exc_types, (tuple, list)):
+            exc_type_classes = typing.cast("tuple[type, ...]", exc_types)
+            result["retry_if_exception_type"] = [
+                f"{exc_type.__module__}.{exc_type.__qualname__}" for exc_type in exc_type_classes
+            ]
+        return result
 
 
 class BaseEvalsConfig(pydantic.BaseModel):

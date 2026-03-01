@@ -209,6 +209,14 @@ async def evaluate_runnable_model(
             "eval_config": pyine.utils.portability.make_json_serializable(eval_config),
             "datamodule_config": pyine.utils.portability.make_json_serializable(datamodule.config),
         }
+    retry_config = eval_config.eval_runnable_config.with_retry_config
+    if retry_config is not None:
+        with_retry_fn = getattr(chain, "with_retry", None)
+        if callable(with_retry_fn):
+            chain = with_retry_fn(**retry_config)  # type: ignore[reportAssignmentType]
+            logger.debug("chain wrapped with eval-level retry config")
+        else:
+            logger.warning("with_retry_config is set but chain does not support retries")
     if not eval_config.eval_runnable_config.parallel:
         _log(f"launching sequential runnable chain eval for '{eval_subset_name}' subset")
         total_items = len(sample_idxs) * num_attempts_per_sample

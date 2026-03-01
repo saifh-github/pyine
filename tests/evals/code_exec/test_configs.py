@@ -757,3 +757,110 @@ class TestDifficultyStats:
         assert stats["score_mean"] == pytest.approx(42.0)
         assert stats["score_min"] == pytest.approx(42.0)
         assert stats["score_max"] == pytest.approx(42.0)
+
+
+class TestRetryConfig:
+    """Tests for RunnableEvalConfig.with_retry_config and eval-level retry wrapping."""
+
+    def test_default_retry_config_is_set(self) -> None:
+        config = pyine.evals.common.RunnableEvalConfig()
+        assert config.with_retry_config is not None
+
+    def test_none_disables_retry(self) -> None:
+        config = pyine.evals.common.RunnableEvalConfig(with_retry_config=None)
+        assert config.with_retry_config is None
+
+    def test_default_config_contains_expected_keys(self) -> None:
+        config = pyine.evals.common.RunnableEvalConfig()
+        assert config.with_retry_config is not None
+        assert "retry_if_exception_type" in config.with_retry_config
+        assert "wait_exponential_jitter" in config.with_retry_config
+        assert "stop_after_attempt" in config.with_retry_config
+        assert config.with_retry_config["stop_after_attempt"] == 6
+
+    @pytest.mark.asyncio
+    async def test_retry_wrapping_applied_when_configured(
+        self,
+        impl_monkeypatches: pytest.MonkeyPatch,
+    ) -> None:
+        """Chain.with_retry() is called when with_retry_config is set."""
+        samples = [FakeSample("r0")]
+        data_module = FakeDataModule(samples)
+        retry_calls: list[dict[str, typing.Any]] = []
+
+        class RetryAwareChain:
+            def invoke(self, payload: dict[str, str]) -> langchain_core.messages.AIMessage:
+                return build_ai_message(payload["identifier"])
+
+            def with_retry(self, **kwargs: typing.Any) -> RetryAwareChain:
+                retry_calls.append(kwargs)
+                return self
+
+        config = pyine.evals.code_exec.configs.CodeExecEvalsConfig(
+            eval_runnable_config=pyine.evals.common.RunnableEvalConfig(parallel=False),
+        )
+        await config.evaluate_runnable_model(
+            chain=RetryAwareChain(),
+            datamodule=data_module,
+            eval_subset_name="subset",
+        )
+        assert len(retry_calls) == 1
+        assert "stop_after_attempt" in retry_calls[0]
+
+    @pytest.mark.asyncio
+    async def test_retry_wrapping_skipped_when_disabled(
+        self,
+        impl_monkeypatches: pytest.MonkeyPatch,
+    ) -> None:
+        """Chain.with_retry() is NOT called when with_retry_config is None."""
+        samples = [FakeSample("r1")]
+        data_module = FakeDataModule(samples)
+        retry_calls: list[dict[str, typing.Any]] = []
+
+        class RetryAwareChain:
+            def invoke(self, payload: dict[str, str]) -> langchain_core.messages.AIMessage:
+                return build_ai_message(payload["identifier"])
+
+            def with_retry(self, **kwargs: typing.Any) -> RetryAwareChain:
+                retry_calls.append(kwargs)
+                return self
+
+        config = pyine.evals.code_exec.configs.CodeExecEvalsConfig(
+            eval_runnable_config=pyine.evals.common.RunnableEvalConfig(
+                parallel=False,
+                with_retry_config=None,
+            ),
+        )
+        await config.evaluate_runnable_model(
+            chain=RetryAwareChain(),
+            datamodule=data_module,
+            eval_subset_name="subset",
+        )
+        assert len(retry_calls) == 0
+
+    @pytest.mark.asyncio
+    async def test_warning_when_chain_lacks_with_retry(
+        self,
+        impl_monkeypatches: pytest.MonkeyPatch,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A warning is logged when the chain does not support with_retry."""
+        samples = [FakeSample("r2")]
+        data_module = FakeDataModule(samples)
+        warnings_logged: list[str] = []
+
+        class PlainChain:
+            def invoke(self, payload: dict[str, str]) -> langchain_core.messages.AIMessage:
+                return build_ai_message(payload["identifier"])
+
+        impl_logger = pyine.evals.code_exec._impl.logger
+        monkeypatch.setattr(impl_logger, "warning", lambda msg, *a, **kw: warnings_logged.append(msg))
+        config = pyine.evals.code_exec.configs.CodeExecEvalsConfig(
+            eval_runnable_config=pyine.evals.common.RunnableEvalConfig(parallel=False),
+        )
+        await config.evaluate_runnable_model(
+            chain=PlainChain(),
+            datamodule=data_module,
+            eval_subset_name="subset",
+        )
+        assert any("with_retry_config is set but" in msg for msg in warnings_logged)
