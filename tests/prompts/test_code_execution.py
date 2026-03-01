@@ -111,6 +111,62 @@ def test_get_rl_tagged_answer_config_and_template() -> None:
     assert "print(" in rendered
 
 
+def test_get_rl_keyword_conditional_config_and_template() -> None:
+    prompt_version = "rl_keyword_conditional"
+    config = pyine.prompts.manager.get_prompt_config("code_execution", version=prompt_version)
+    assert isinstance(config, pyine.prompts.utils.PromptConfig)
+    assert config.metadata.name == "code_execution"
+    assert config.example_count == 0  # zero-shot prompt version
+    assert config.context is not None
+    assert config.context.format == "jinja2"
+    keyword = "result"
+    template = pyine.prompts.manager.get_prompt_template(
+        "code_execution",
+        version=prompt_version,
+        include_examples=False,
+        context_variables={"keyword": keyword},
+    )
+    assert isinstance(template, langchain_core.prompts.PromptTemplate)
+    template_str = template.template
+    assert template_str.startswith("You are an expert at interpreting and executing Python 3 code.")
+    assert "<final>" in template_str and "</final>" in template_str
+    assert f'"{keyword}"' in template_str  # keyword baked into rendered context
+    assert "{{keyword}}" not in template_str  # jinja2 variable already resolved
+    assert "analysis.\n\n```python" in template_str  # blank line between context and question
+    rendered_prog = template.format(
+        code='x = int(input())\nresult = x * 2\nprint(result)',
+        predict_type="program_output",
+        inputs="5",
+    )
+    assert "Task: program_output" in rendered_prog
+    assert "Your answer:" in rendered_prog
+    assert "result = x * 2" in rendered_prog
+    assert f'"{keyword}"' in rendered_prog  # keyword present in system context
+    rendered_vars = template.format(
+        code="total = 0\nfor i in range(3):\n    total += i",
+        predict_type="frame_variables",
+        inputs="{'total': 0, 'i': 0}",
+        first_line=2,
+        last_line=3,
+        first_line_hit=1,
+        last_line_hit=1,
+    )
+    assert "Task: frame_variables" in rendered_vars
+    assert "First line (1-indexed): 2" in rendered_vars
+    assert "Initial state:" in rendered_vars
+    rendered_ret = template.format(
+        code="def add(a, b):\n    return a + b",
+        predict_type="function_return",
+        entrypoint="add",
+        inputs="a=1, b=2",
+        first_line=1,
+        last_line=2,
+    )
+    assert "Task: function_return" in rendered_ret
+    assert "Function: add (lines 1-2)" in rendered_ret
+    assert "a=1, b=2" in rendered_ret
+
+
 class TestCodeExecutionValidator:
     def test_default_config(self) -> None:
         config = code_exec.CodeExecutionValidatorConfig()
