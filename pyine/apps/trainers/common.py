@@ -1197,7 +1197,7 @@ async def evaluate_model(
     if config.evals_config is None or config.evals_config.eval_type is None:  # type: ignore[reportUnnecessaryComparison]
         return evaluation_results
     eval_dm = config.evals_config.prepare_eval_datamodule(datamodule)
-    eval_dm_subset_names = eval_dm.config.resolved_eval_subset_names
+    eval_dm_subset_names = eval_dm.config.eval_subset_names
     logger.info(f"will evaluate using {len(eval_dm_subset_names)} subset(s): {eval_dm_subset_names}")
     if config.use_wandb_logging and runtime is not None and runtime.wandb_run is not None:
         config.evals_config.define_metrics_for_wandb(
