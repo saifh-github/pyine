@@ -11,6 +11,7 @@ import pyine.data.traces.dataset_reader
 import pyine.data.traces.dataset_utils
 import pyine.data.utils.splits
 import pyine.evals.common
+import pyine.organisms.datamodules.base
 import pyine.utils.filesystem
 import tests.utils.fake_dataset_readers
 
@@ -140,10 +141,15 @@ def test_v0_rl_valid_traces_stable_across_epochs(
     datamodule = config.datamodule_config.instantiate_datamodule()
     datamodule.prepare_data()
     datamodule.setup()
-    valid_parser = datamodule.get_parser("valid")
+    # use the base class get_parser/get_hf_messages_dataset to bypass the shortcuts-specific
+    # derived-subset expansion (valid -> valid_hinted/misleading/hintless); the fake data
+    # has no counterfactual groups, so derived subsets would be empty
+    base_cls = pyine.organisms.datamodules.base.BiasDataModuleBase
+    valid_parser = base_cls.get_parser(datamodule, "valid")
     assert valid_parser.filtering_config.max_traces_per_solution == 1
     assert valid_parser.current_epoch == 0
-    valid_ds_epoch0 = datamodule.get_hf_messages_dataset(
+    valid_ds_epoch0 = base_cls.get_hf_messages_dataset(
+        datamodule,
         subset_name="valid",
         append_answer=False,
         merge_system_with_user=True,
@@ -163,7 +169,8 @@ def test_v0_rl_valid_traces_stable_across_epochs(
     train_parser.set_epoch(1)
     assert train_parser.current_epoch == 1
     assert valid_parser.current_epoch == 0
-    valid_ds_epoch1 = datamodule.get_hf_messages_dataset(
+    valid_ds_epoch1 = base_cls.get_hf_messages_dataset(
+        datamodule,
         subset_name="valid",
         append_answer=False,
         merge_system_with_user=True,
