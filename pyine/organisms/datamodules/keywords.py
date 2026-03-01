@@ -98,12 +98,26 @@ class KeywordClusterCache(pydantic.BaseModel):
         return cache
 
     def save(self, cache_dir: pathlib.Path) -> None:
-        """Save this cluster cache to disk."""
+        """Save this cluster cache to disk.
+
+        Uses a file lock and atomic write (write to temp file + ``os.replace``) to avoid corruption
+        from concurrent DDP or multi-experiment processes.
+        """
         cache_path = self.get_cache_path(cache_dir, self.trace_data_hash, self.filter_hash)
         cache_dir.mkdir(parents=True, exist_ok=True)
         encoded = msgspec.msgpack.encode(self.model_dump())
-        with open(cache_path, "wb") as fd:
-            fd.write(encoded)
+        lock_path = f"{cache_path}.lock"
+        lock = filelock.FileLock(lock_path)
+        with lock:
+            tmp_path = f"{cache_path}.tmp.{uuid.uuid4().hex[:8]}"
+            try:
+                with open(tmp_path, "wb") as fd:
+                    fd.write(encoded)
+                os.replace(tmp_path, cache_path)
+            except BaseException:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+                raise
         logger.debug(f"saved keyword cluster cache to {cache_path}")
 
 
@@ -223,7 +237,7 @@ class KeywordBiasDataModule(
             subset_traces_meta, unassigned_traces_meta, trace_ids_with_keyword
         )
         # validate sample counts AFTER rebalancing using final subset traces (including derived)
-        self._validate_sample_counts(keyword, subset_traces_meta, derived_subsets, trace_ids_with_keyword)
+        self._validate_sample_counts(keyword, subset_traces_meta, derived_subsets)
         return KeywordTraceDatasetMetadata(
             base_traces=base_traces_meta,
             subset_traces=subset_traces_meta,
@@ -402,8 +416,11 @@ class KeywordBiasDataModule(
             return self.config.keyword, trace_ids, None
         clusters, cache_path = self._get_or_compute_clusters(traces)
         selected_keyword, ast_matched_cluster_trace_ids = self._filter_and_select_keyword(clusters)
-        # re-scan traces using regex-based case-insensitive matching for consistency with the rest
-        # of the datamodule (the AST-based clusters only find exact case-sensitive definitions)
+        # re-scan using regex-based case-insensitive word-boundary matching (\b{kw}\b, IGNORECASE)
+        # for consistency with the rest of the datamodule. The AST-based clustering above only
+        # finds exact-case Python definitions (variable/function/class names), while regex-based
+        # detection also matches occurrences in strings, comments, and case variants. This
+        # broader matching is intentional: we want ANY keyword presence to trigger behavior change.
         logger.info(f"re-scanning {len(traces)} traces for auto-selected keyword '{selected_keyword}'...")
         trace_ids = self._find_traces_with_keyword(traces, selected_keyword)
         assert ast_matched_cluster_trace_ids.issubset(trace_ids), "some traces with AST-matched keyword not found?"
@@ -695,39 +712,52 @@ class KeywordBiasDataModule(
         derived_subsets: dict[
             str, pyine.data.traces.dataset_utils.DerivedSubsetInfo[pyine.data.traces.dataset_utils.TraceMetadata]
         ],
-        trace_ids_with_keyword: frozenset[str],
     ) -> None:
-        """Validate that we have enough samples with and without the keyword.
+        """Validate that each eval subset has enough samples with and without the keyword.
 
-        Counts are computed from the final subset traces (after rebalancing/caps).
+        Checks derived subset trace counts per eval subset individually (rather than aggregating
+        across all subsets), so that a specific eval subset with zero keyword-bearing traces is
+        not masked by other subsets having enough.
 
         Args:
             keyword: The keyword being used for bias experiments.
             subset_traces_meta: Final dict mapping primary subset names to their trace metadata lists.
             derived_subsets: Derived subsets (keyword-split eval subsets).
-            trace_ids_with_keyword: Set of trace identifiers that contain the keyword.
 
         Raises:
-            ValueError: If minimum sample requirements are not met.
+            ValueError: If minimum sample requirements are not met for any eval subset.
         """
-        # count from primary subsets only (derived subsets are not counted separately)
-        all_traces = [trace for traces in subset_traces_meta.values() for trace in traces]
-        count_with_keyword = sum(1 for t in all_traces if t.identifier in trace_ids_with_keyword)
-        count_without_keyword = len(all_traces) - count_with_keyword
-        logger.debug(
-            f"keyword ('{keyword}') distribution (post-rebalancing): "
-            f"{count_with_keyword} traces with keyword, {count_without_keyword} without"
-        )
-        if count_with_keyword < self.config.min_samples_with_keyword:
-            raise ValueError(
-                f"only {count_with_keyword} traces contain the keyword after rebalancing "
-                f"(minimum required: {self.config.min_samples_with_keyword})"
+        for eval_subset_name in sorted(self.config._expanded_base_names):  # pyright: ignore[reportPrivateUsage]
+            if eval_subset_name not in subset_traces_meta:
+                continue
+            with_kw_key = f"{eval_subset_name}_with_keyword"
+            without_kw_key = f"{eval_subset_name}_without_keyword"
+            with_kw_info = derived_subsets.get(with_kw_key)
+            without_kw_info = derived_subsets.get(without_kw_key)
+            count_with = len(with_kw_info.traces) if with_kw_info else 0
+            count_without = len(without_kw_info.traces) if without_kw_info else 0
+            logger.debug(
+                f"keyword ('{keyword}') distribution for '{eval_subset_name}' (post-rebalancing): "
+                f"{count_with} traces with keyword, {count_without} without"
             )
-        if count_without_keyword < self.config.min_samples_without_keyword:
-            raise ValueError(
-                f"only {count_without_keyword} traces lack the keyword after rebalancing "
-                f"(minimum required: {self.config.min_samples_without_keyword})"
-            )
+            if count_with < self.config.min_samples_with_keyword:
+                raise ValueError(
+                    f"eval subset '{with_kw_key}' has only {count_with} traces with the keyword "
+                    f"(minimum required: {self.config.min_samples_with_keyword})"
+                )
+            if count_without < self.config.min_samples_without_keyword:
+                raise ValueError(
+                    f"eval subset '{without_kw_key}' has only {count_without} traces without the keyword "
+                    f"(minimum required: {self.config.min_samples_without_keyword})"
+                )
+            # warn if derived subset counts are significantly lower than parent
+            parent_trace_count = len(subset_traces_meta[eval_subset_name])
+            derived_total = count_with + count_without
+            if parent_trace_count > 0 and derived_total < 0.5 * parent_trace_count:
+                logger.warning(
+                    f"derived subsets for '{eval_subset_name}' have only {derived_total} traces "
+                    f"(parent has {parent_trace_count}); this may indicate aggressive filtering"
+                )
 
     def _is_keyword_split_subset(self, subset_name: pyine.data.datamodule.SubsetNameType) -> bool:
         """Check if a subset name is a derived keyword-split subset."""
@@ -913,7 +943,7 @@ class KeywordBiasDataModule(
 
     @property
     def keyword(self) -> str:
-        """Return the keyword used for bias experiments, if metadata is aleady loaded."""
+        """Return the keyword used for bias experiments, if metadata is already loaded."""
         if self._metadata is None:
             raise RuntimeError("metadata not yet loaded, call `setup()` first")
         assert isinstance(self._metadata, KeywordTraceDatasetMetadata)

@@ -61,10 +61,11 @@ class EvaluationStrategy(enum.StrEnum):
     remove the keyword (by refactoring) for the ``_without_keyword`` group, and synthetically
     occurring ones where we add the keyword (as a comment) for the ``_with_keyword``.
 
-    Both strategies produce derived subsets. Derived subsets get ``::with_keyword`` /
-    ``::without_keyword`` identifier suffixes for uniqueness when concatenated into a
-    ConcatDataset. Base eval subsets (e.g. ``valid``) return a ConcatDataset of their derived
-    parsers.
+    Both strategies produce derived subsets with ``::with_keyword`` / ``::without_keyword``
+    identifier suffixes (for ConcatDataset uniqueness). However, only the ``counterfactual``
+    strategy performs actual code manipulation (injection/refactoring); the ``keyword_presence_split``
+    strategy only adds metadata tags. Base eval subsets (e.g. ``valid``) return a ConcatDataset of
+    their derived parsers in both strategies.
     """
 
     keyword_presence_split = enum.auto()
@@ -78,6 +79,14 @@ class KeywordAutoSelectionConfig(pydantic.BaseModel):
 
     When no explicit keyword is provided, these settings control how a keyword is automatically
     selected from existing variable/function/class definitions found across the trace dataset.
+
+    The selection pipeline has two distinct phases:
+      1. **Clustering (AST-based)**: Python AST analysis extracts actual definitions (variable,
+         function, class names) from code snippets to build frequency clusters.
+      2. **Detection (regex-based)**: once a keyword is selected, runtime detection uses
+         case-insensitive word-boundary regex (``\\b{kw}\\b``), which also matches occurrences
+         in strings and comments. This is intentional: we want any keyword presence to trigger
+         behavior change.
 
     Note that, by definition, we consider all keywords case-insensitive.
     """
@@ -275,9 +284,96 @@ class KeywordBiasDataModuleConfig(pyine.organisms.datamodules.base.BiasDataModul
             else:
                 combined_rule = augment_filter
             object.__setattr__(self, "base_filter_rule", combined_rule)
+        # validate that allow_db_lookups is not used with non-original code types
+        self._validate_code_type_safety()
         # now call parent validation (which resolves parser/loader configs)
         super()._validate_and_resolve()  # type: ignore[reportUnknownMemberType]
         return self
+
+    def _validate_code_type_safety(self) -> None:
+        """Reject configs where the SampleBuilder could return non-original code.
+
+        Keyword detection is performed on the original traced code at metadata preparation time.
+        If the SampleBuilder returns different code at runtime (e.g. obfuscated, bugged, or
+        hinted variants via DB lookups), keyword presence assumptions break. This validator
+        checks the **effective** (merged) selection config for each subset against:
+
+        - ``allow_db_lookups=True`` with non-original ``code_type_prob_map`` entries;
+        - ``require_hint_type`` being set (selects hinted/misleading code variants);
+        - ``skip_code_type_selection=True`` (passes through whatever code type exists).
+        """
+        default_selection = self._get_selection_config_dict(self._get_params_dict(self.default_dataparser_config))
+        # check the effective (merged) selection config for each subset
+        all_subset_names = set(self.subset_names) | set(self.dataparser_config_overrides.keys())
+        for subset_name in sorted(all_subset_names):
+            override_dict = self.dataparser_config_overrides.get(subset_name, {})
+            override_selection = self._get_selection_config_dict(override_dict)
+            # merge: override fields take precedence over defaults
+            effective: dict[str, typing.Any] = {**default_selection, **override_selection}
+            allow_db = bool(effective.get("allow_db_lookups", False))
+            if not allow_db:
+                continue
+            label = f"subset '{subset_name}'"
+            # check code_type_prob_map for non-original types
+            code_type_prob_map = typing.cast(
+                "dict[str, typing.Any]",
+                effective.get("code_type_prob_map", {}),
+            )
+            for key, prob in code_type_prob_map.items():
+                if prob <= 0:
+                    continue
+                if str(key) != "original":
+                    raise ValueError(
+                        f"{label} has allow_db_lookups=True with non-original code type "
+                        f"'{key}' in code_type_prob_map. This is unsafe for keyword experiments "
+                        f"because DB-sourced code may differ from the original traced code, "
+                        f"breaking keyword presence assumptions. Either set allow_db_lookups=False "
+                        f"or restrict code_type_prob_map to only 'original'."
+                    )
+            # check require_hint_type (would select hinted/misleading code variants)
+            if effective.get("require_hint_type") is not None:
+                raise ValueError(
+                    f"{label} has allow_db_lookups=True with require_hint_type set. "
+                    f"Hinted/misleading code variants may differ from the original traced code, "
+                    f"breaking keyword presence assumptions. Set allow_db_lookups=False."
+                )
+            # check skip_code_type_selection (passes through whatever code type exists)
+            if effective.get("skip_code_type_selection", False):
+                raise ValueError(
+                    f"{label} has allow_db_lookups=True with skip_code_type_selection=True. "
+                    f"This may pass through non-original code types, breaking keyword presence "
+                    f"assumptions. Set allow_db_lookups=False."
+                )
+
+    @staticmethod
+    def _get_selection_config_dict(
+        params_dict: dict[str, typing.Any],
+    ) -> dict[str, typing.Any]:
+        """Extract selection_config as a plain dict from a params dict."""
+        raw = params_dict.get("selection_config", {})
+        if isinstance(raw, dict):
+            return typing.cast("dict[str, typing.Any]", raw)
+        # pydantic model or other object: extract known fields
+        return {
+            "allow_db_lookups": getattr(raw, "allow_db_lookups", False),
+            "code_type_prob_map": getattr(raw, "code_type_prob_map", {}),
+            "require_hint_type": getattr(raw, "require_hint_type", None),
+            "skip_code_type_selection": getattr(raw, "skip_code_type_selection", False),
+        }
+
+    @staticmethod
+    def _get_params_dict(
+        dataparser_config: pyine.data.datamodule.BaseDataParserConfig,
+    ) -> dict[str, typing.Any]:
+        """Extract the params dict from a dataparser config."""
+        params: typing.Any = getattr(dataparser_config, "params", None)
+        if params is None:
+            return {}
+        if isinstance(params, dict):
+            return typing.cast("dict[str, typing.Any]", params)
+        if isinstance(params, pydantic.BaseModel):
+            return params.model_dump()
+        return {}
 
     @typing.override
     def _get_parent_subset_name(

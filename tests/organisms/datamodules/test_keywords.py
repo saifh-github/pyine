@@ -1023,34 +1023,73 @@ class TestKeywordsValidateSampleCounts:
         self,
         min_samples_with_keyword: int = 0,
         min_samples_without_keyword: int = 0,
+        expanded_base_names: frozenset[str] = frozenset({"valid"}),
     ) -> keywords_mod.KeywordBiasDataModule:
         stub = keywords_mod.KeywordBiasDataModule.__new__(keywords_mod.KeywordBiasDataModule)
         stub.config = types.SimpleNamespace(
             min_samples_with_keyword=min_samples_with_keyword,
             min_samples_without_keyword=min_samples_without_keyword,
+            _expanded_base_names=expanded_base_names,
         )
         stub.verbose = False
         return stub
 
+    @staticmethod
+    def _make_derived_subsets(
+        eval_name: str,
+        traces_with: list[pyine.data.traces.dataset_utils.TraceMetadata],
+        traces_without: list[pyine.data.traces.dataset_utils.TraceMetadata],
+    ) -> dict[str, pyine.data.traces.dataset_utils.DerivedSubsetInfo[pyine.data.traces.dataset_utils.TraceMetadata]]:
+        return {
+            f"{eval_name}_with_keyword": pyine.data.traces.dataset_utils.DerivedSubsetInfo(
+                parent_subset=eval_name,
+                traces=traces_with,
+                derivation_type="keyword_presence_split",
+            ),
+            f"{eval_name}_without_keyword": pyine.data.traces.dataset_utils.DerivedSubsetInfo(
+                parent_subset=eval_name,
+                traces=traces_without,
+                derivation_type="keyword_presence_split",
+            ),
+        }
+
     def test_raises_when_too_few_with_keyword(self) -> None:
         dm = self._make_stub_dm(min_samples_with_keyword=10, min_samples_without_keyword=0)
-        subset_traces = {"train": [_make_trace_metadata(f"t{i}", "p1", "s1") for i in range(20)]}
+        all_traces = [_make_trace_metadata(f"t{idx}") for idx in range(20)]
+        subset_traces = {"valid": all_traces}
         trace_ids_with_keyword = frozenset({"t0", "t1"})  # only 2 with keyword
-        with pytest.raises(ValueError, match="only 2 traces contain the keyword"):
-            dm._validate_sample_counts("kw", subset_traces, {}, trace_ids_with_keyword)
+        derived = self._make_derived_subsets(
+            "valid",
+            traces_with=[t for t in all_traces if t.identifier in trace_ids_with_keyword],
+            traces_without=[t for t in all_traces if t.identifier not in trace_ids_with_keyword],
+        )
+        with pytest.raises(ValueError, match="only 2 traces with the keyword"):
+            dm._validate_sample_counts("kw", subset_traces, derived)
 
     def test_raises_when_too_few_without_keyword(self) -> None:
         dm = self._make_stub_dm(min_samples_with_keyword=0, min_samples_without_keyword=50)
-        subset_traces = {"train": [_make_trace_metadata(f"t{i}", "p1", "s1") for i in range(20)]}
-        trace_ids_with_keyword = frozenset({f"t{i}" for i in range(15)})  # 15 with, 5 without
-        with pytest.raises(ValueError, match="only 5 traces lack the keyword"):
-            dm._validate_sample_counts("kw", subset_traces, {}, trace_ids_with_keyword)
+        all_traces = [_make_trace_metadata(f"t{idx}") for idx in range(20)]
+        subset_traces = {"valid": all_traces}
+        trace_ids_with_keyword = frozenset({f"t{idx}" for idx in range(15)})  # 15 with, 5 without
+        derived = self._make_derived_subsets(
+            "valid",
+            traces_with=[t for t in all_traces if t.identifier in trace_ids_with_keyword],
+            traces_without=[t for t in all_traces if t.identifier not in trace_ids_with_keyword],
+        )
+        with pytest.raises(ValueError, match="only 5 traces without the keyword"):
+            dm._validate_sample_counts("kw", subset_traces, derived)
 
     def test_passes_when_counts_meet_minimum(self) -> None:
         dm = self._make_stub_dm(min_samples_with_keyword=5, min_samples_without_keyword=10)
-        subset_traces = {"train": [_make_trace_metadata(f"t{i}", "p1", "s1") for i in range(20)]}
-        trace_ids_with_keyword = frozenset({f"t{i}" for i in range(8)})  # 8 with, 12 without
-        dm._validate_sample_counts("kw", subset_traces, {}, trace_ids_with_keyword)  # should not raise
+        all_traces = [_make_trace_metadata(f"t{idx}") for idx in range(20)]
+        subset_traces = {"valid": all_traces}
+        trace_ids_with_keyword = frozenset({f"t{idx}" for idx in range(8)})  # 8 with, 12 without
+        derived = self._make_derived_subsets(
+            "valid",
+            traces_with=[t for t in all_traces if t.identifier in trace_ids_with_keyword],
+            traces_without=[t for t in all_traces if t.identifier not in trace_ids_with_keyword],
+        )
+        dm._validate_sample_counts("kw", subset_traces, derived)  # should not raise
 
 
 class TestGetHfMessagesDatasetWrapper:

@@ -29,7 +29,12 @@ __all__ = [
 
 
 class KeywordDetector(pydantic.BaseModel):
-    """Detect keyword presence in code via case-insensitive regex matching."""
+    """Detect keyword presence in code via case-insensitive regex matching.
+
+    Detection uses ``\\b{keyword}\\b`` with ``re.IGNORECASE``, meaning it finds the keyword in ANY
+    context (i.e. identifiers, strings, comments), not just as a Python definition. This is
+    intentional: we want any keyword presence to trigger behavior change.
+    """
 
     model_config = pydantic.ConfigDict(frozen=True)
 
@@ -169,8 +174,8 @@ class KeywordRefactorer(pydantic.BaseModel):
 
     @property
     def replacement_template(self) -> str:
-        """Returns the default keyword replacement template (i.e. pre-case-matched identifier)."""
-        return _generate_default_replacement(self.keyword)
+        """Returns the first (preferred) replacement candidate for display/logging."""
+        return next(iter(_generate_replacement_candidates(self.keyword)))
 
     @pydantic.model_validator(mode="after")
     def _validate_and_resolve(self) -> KeywordRefactorer:
@@ -190,28 +195,39 @@ class KeywordRefactorer(pydantic.BaseModel):
         """
         return has_keyword(self.keyword, code)
 
-    def refactor(self, code: str) -> str:
-        """Replace all occurrences of the keyword with replacement identifier(s).
+    def refactor(self, code: str) -> tuple[str, str]:
+        """Replace all occurrences of the keyword with a replacement identifier.
 
-        Each keyword match is replaced with a case-preserved version of the replacement template
-        (e.g., if the keyword is "result" and replacement is "kkkkkk", then "Result" becomes
-        "Kkkkkk", "RESULT" becomes "KKKKKK", and "result" becomes "kkkkkk"). For mixed case
-        patterns, the case is applied character-by-character.
+        Tries multiple replacement candidates in priority order. Each keyword match is replaced
+        with a case-preserved version of the chosen replacement (e.g., if the keyword is "result"
+        and replacement is "kkkkkk", then "Result" becomes "Kkkkkk", "RESULT" becomes "KKKKKK",
+        and "result" becomes "kkkkkk"). For mixed case patterns, the case is applied
+        character-by-character.
+
+        If the preferred replacement already exists in the code, falls back to alternative
+        candidates (e.g. repeated ``z``, repeated ``q``, ``xvar_N`` patterns).
 
         Args:
             code: The Python source code to modify.
 
         Returns:
-            The modified code with all keyword occurrences replaced.
+            A tuple of (modified_code, replacement_used) where replacement_used is the actual
+            replacement identifier that was used.
 
         Raises:
-            ValueError: If the replacement identifier already exists in the code.
+            ValueError: If ALL replacement candidates already exist in the code.
         """
-        replacement = self.replacement_template
-        if has_keyword(replacement, code):
-            raise ValueError(f"potential collision with replacement '{replacement}' in code string")
         pattern = rf"\b{re.escape(self.keyword)}\b"
-        return re.sub(pattern, lambda m: _match_case(m.group(), replacement), code, flags=re.IGNORECASE)
+        for candidate in _generate_replacement_candidates(self.keyword):
+            if not has_keyword(candidate, code):
+                refactored = re.sub(
+                    pattern=pattern,
+                    repl=lambda m, repl=candidate: _match_case(m.group(), repl),
+                    string=code,
+                    flags=re.IGNORECASE,
+                )
+                return refactored, candidate
+        raise ValueError(f"exhausted all replacement candidates for keyword '{self.keyword}'")
 
 
 def is_builtin_or_reserved(name: str) -> bool:
@@ -240,19 +256,36 @@ def has_keyword(kw: str, code: str) -> bool:
     return re.search(pattern, code, flags=re.IGNORECASE) is not None
 
 
-def _generate_default_replacement(keyword: str) -> str:
-    """Generate a default replacement identifier based on keyword length.
+def _generate_replacement_candidates(keyword: str) -> typing.Generator[str]:
+    """Generate replacement identifier candidates in priority order.
 
-    The replacement uses repeated `k` characters matching the keyword length.
-    For example, keyword "hello" (length 5) becomes "kkkkk".
+    Yields candidates of the same length as the keyword to preserve case-matching behavior:
+      1. Repeated ``k`` (e.g. ``"kkkkk"`` for a 5-char keyword) = preferred default.
+      2. Repeated ``z``.
+      3. Repeated ``q``.
+      4. ``xvar_N`` patterns (``xvar_0``, ``xvar_1``, ...) right-padded/truncated to keyword length.
 
     Args:
-        keyword: The keyword being replaced.
+        keyword: The keyword being replaced (determines candidate length).
 
-    Returns:
-        A replacement identifier string.
+    Yields:
+        Replacement identifier strings, each the same length as the keyword.
     """
-    return "k" * len(keyword)
+    length = len(keyword)
+    for char in ("k", "z", "q"):
+        candidate = char * length
+        if candidate.lower() != keyword.lower():
+            yield candidate
+    for counter in range(100):
+        base = f"xvar{counter}"
+        if len(base) < length:
+            candidate = base + "_" * (length - len(base))
+        elif len(base) > length:
+            candidate = base[:length]
+        else:
+            candidate = base
+        if candidate.isidentifier() and candidate.lower() != keyword.lower():
+            yield candidate
 
 
 def _match_case(source: str, replacement: str) -> str:
@@ -386,8 +419,8 @@ class SampleKeywordManipulatorWrapper:
             )
         # check for refactoring (sample must have keyword and be in refactor set)
         if sample.identifier in self._refactor_trace_ids and sample_has_keyword:
-            code = self._refactorer.refactor(sample.code)
-            tags += f",keyword_refactored:1,has_bias_keyword:0,repl_keyword:{self._refactorer.replacement_template}"
+            code, actual_replacement = self._refactorer.refactor(sample.code)
+            tags += f",keyword_refactored:1,has_bias_keyword:0,repl_keyword:{actual_replacement}"
             return self._apply_identifier_suffix(
                 sample._replace(
                     code=code,

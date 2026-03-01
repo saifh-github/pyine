@@ -115,21 +115,48 @@ def test_keyword_refactorer_rejects_builtin() -> None:
         keyword_ops.KeywordRefactorer(keyword="for")
 
 
-def test_keyword_refactorer_collision_detection() -> None:
-    # refactor raises if replacement template already exists in code
-    refactorer = keyword_ops.KeywordRefactorer(keyword="foo")  # replacement_template = "kkk"
-    with pytest.raises(ValueError, match="potential collision"):
-        refactorer.refactor("kkk = 1\nfoo = 2")
+def test_keyword_refactorer_collision_fallback() -> None:
+    # when default replacement ("kkk") collides, falls back to alternatives ("zzz", "qqq", ...)
+    refactorer = keyword_ops.KeywordRefactorer(keyword="foo")
+    code = "kkk = 1\nfoo = 2"
+    refactored, replacement_used = refactorer.refactor(code)
+    assert replacement_used == "zzz"  # fallback to repeated 'z'
+    assert "zzz = 2" in refactored
+    assert "kkk = 1" in refactored  # original "kkk" preserved
+
+
+def test_keyword_refactorer_collision_all_exhausted() -> None:
+    # raises if ALL replacement candidates exist in the code
+    refactorer = keyword_ops.KeywordRefactorer(keyword="foo")
+    # build code that contains all single-char-repeat candidates
+    candidates_in_code = ["kkk", "zzz", "qqq"]
+    # also add xvar candidates that would be generated
+    for counter in range(100):
+        base = f"xvar{counter}"
+        if len(base) < 3:
+            candidate = base + "_" * (3 - len(base))
+        elif len(base) > 3:
+            candidate = base[:3]
+        else:
+            candidate = base
+        if candidate.isidentifier() and candidate.lower() != "foo":
+            candidates_in_code.append(candidate)
+    code_with_all = " ".join(f"{c} = 1;" for c in candidates_in_code) + "\nfoo = 2"
+    with pytest.raises(ValueError, match="all replacement candidates"):
+        refactorer.refactor(code_with_all)
 
 
 def test_keyword_refactorer_replacement_template_property() -> None:
-    # replacement_template is "k" * len(keyword)
+    # replacement_template is the first (preferred) candidate from _generate_replacement_candidates
     refactorer = keyword_ops.KeywordRefactorer(keyword="hello")
     assert refactorer.replacement_template == "kkkkk"  # 5 k's for "hello"
     refactorer2 = keyword_ops.KeywordRefactorer(keyword="x")
     assert refactorer2.replacement_template == "k"  # 1 k for "x"
     refactorer3 = keyword_ops.KeywordRefactorer(keyword="ab")
     assert refactorer3.replacement_template == "kk"  # 2 k's for "ab"
+    # when keyword is "k", first candidate "k" is skipped (same as keyword), so "z" is preferred
+    refactorer4 = keyword_ops.KeywordRefactorer(keyword="k")
+    assert refactorer4.replacement_template == "z"
 
 
 def test_keyword_refactorer_has_keyword_method() -> None:
@@ -144,7 +171,7 @@ def test_keyword_refactorer_has_keyword_method() -> None:
 def test_keyword_refactorer_replaces_whole_words_only() -> None:
     refactorer = keyword_ops.KeywordRefactorer(keyword="foo")
     code = "foobar = 1\nfoo = 2"
-    refactored = refactorer.refactor(code)
+    refactored, _ = refactorer.refactor(code)
     assert "foobar = 1" in refactored  # "foobar" is not a whole word match for "foo"
     assert "kkk = 2" in refactored  # 3 k's for "foo"
 
@@ -152,7 +179,7 @@ def test_keyword_refactorer_replaces_whole_words_only() -> None:
 def test_keyword_refactorer_preserves_case() -> None:
     refactorer = keyword_ops.KeywordRefactorer(keyword="result")  # replacement_template = "kkkkkk"
     code = "result = 1\nResult = 2\nRESULT = 3"
-    refactored = refactorer.refactor(code)
+    refactored, _ = refactorer.refactor(code)
     assert "kkkkkk = 1" in refactored  # lowercase -> lowercase
     assert "Kkkkkk = 2" in refactored  # title case -> title case
     assert "KKKKKK = 3" in refactored  # uppercase -> uppercase
@@ -161,7 +188,7 @@ def test_keyword_refactorer_preserves_case() -> None:
 def test_keyword_refactorer_preserves_mixed_case() -> None:
     refactorer = keyword_ops.KeywordRefactorer(keyword="myVar")  # replacement_template = "kkkkk"
     code = "myVar = 1\nMyVar = 2\nmyvar = 3\nMYVAR = 4"
-    refactored = refactorer.refactor(code)
+    refactored, _ = refactorer.refactor(code)
     # myVar: m(L) y(L) V(U) a(L) r(L) -> kkKkk
     assert "kkKkk = 1" in refactored  # mixed case
     # MyVar: M(U) y(L) V(U) a(L) r(L) -> KkKkk
@@ -192,11 +219,17 @@ def test_match_case_helper_length_mismatch() -> None:
         keyword_ops._match_case("ab", "xyz")
 
 
-def test_generate_default_replacement_helper() -> None:
-    assert keyword_ops._generate_default_replacement("x") == "k"
-    assert keyword_ops._generate_default_replacement("foo") == "kkk"
-    assert keyword_ops._generate_default_replacement("hello") == "kkkkk"
-    assert keyword_ops._generate_default_replacement("a") == "k"
+def test_generate_replacement_candidates_helper() -> None:
+    candidates = list(keyword_ops._generate_replacement_candidates("foo"))
+    assert candidates[0] == "kkk"  # first candidate is repeated 'k'
+    assert candidates[1] == "zzz"  # second is repeated 'z'
+    assert candidates[2] == "qqq"  # third is repeated 'q'
+    assert len(candidates) > 3  # xvar_N candidates follow
+    # single-char keyword
+    candidates_single = list(keyword_ops._generate_replacement_candidates("x"))
+    assert candidates_single[0] == "k"
+    assert candidates_single[1] == "z"
+    assert candidates_single[2] == "q"
 
 
 def test_has_keyword_word_boundaries_and_builtins_helpers() -> None:
@@ -248,6 +281,30 @@ def test_wrapper_refactor_path_replaces_and_tags() -> None:
     assert "keyword_refactored:1" in refactored.comma_separated_tags
     assert "has_bias_keyword:0" in refactored.comma_separated_tags
     assert f"repl_keyword:{refactorer.replacement_template}" in refactored.comma_separated_tags
+
+
+def test_wrapper_refactor_path_with_collision_uses_fallback() -> None:
+    keyword = "magic"
+    # code contains "kkkkk" which is the default replacement for "magic" (5 chars)
+    sample = _make_sample("ds/train/p000002/s0001/t0001", f"x = {keyword}\nkkkkk = 99")
+    dataset = _DummyDataset([sample])
+    refactorer = keyword_ops.KeywordRefactorer(keyword=keyword)
+    assert refactorer.replacement_template == "kkkkk"  # would collide
+    wrapper = keyword_ops.SampleKeywordManipulatorWrapper(
+        wrapped_dataset=dataset,
+        keyword=keyword,
+        trace_ids_with_keyword=frozenset({sample.identifier}),
+        refactor_trace_ids=frozenset({sample.identifier}),
+        refactorer=refactorer,
+    )
+    refactored = wrapper[0]
+    assert keyword.lower() not in refactored.code.lower()  # keyword was removed
+    assert "kkkkk = 99" in refactored.code  # original "kkkkk" line preserved
+    assert "zzzzz" in refactored.code  # fallback replacement used
+    assert refactored.has_code_override
+    assert "keyword_refactored:1" in refactored.comma_separated_tags
+    assert "has_bias_keyword:0" in refactored.comma_separated_tags
+    assert "repl_keyword:zzzzz" in refactored.comma_separated_tags
 
 
 def test_wrapper_noop_path_keeps_code_and_adds_tag() -> None:
