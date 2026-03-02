@@ -10,6 +10,7 @@ import typing
 
 import pydantic
 
+import pyine.evals.common
 import pyine.evals.utils
 import pyine.organisms.models.rewards.core.types as reward_types
 import pyine.utils.code.difficulty as difficulty_utils
@@ -151,6 +152,77 @@ class VerbosityScalingConfig(reward_types.BaseConfig):
                     f"end_tokens ({self.end_tokens}) must be > threshold_tokens ({self.threshold_tokens}) "
                     "when mode='absolute' and decay_type='linear'"
                 )
+        return self
+
+
+class CorrectnessClassifierScalingConfig(reward_types.BaseConfig):
+    """Configuration for correctness-classifier-based reward scaling.
+
+    When enabled, applies a multiplicative factor to the aggregated reward based on a pretrained
+    classifier's predicted probability that the model output is "correct". The classifier is
+    loaded lazily on first use (or eagerly via ``reset()``).
+
+    The scaling factor is ``clamp(classifier_prob, min_factor, max_factor)``, so the scaled
+    reward is bounded to ``[aggregated * min_factor, aggregated * max_factor]`` for non-negative
+    aggregated rewards.
+
+    Ordering with other scalers:
+        Correctness scaling is applied BEFORE verbosity scaling. This means
+        ``verbosity/pre_scaling_reward`` contains the post-classifier-scaled value, while
+        ``correctness_classifier/pre_scaling_reward`` always contains the raw aggregated reward
+        from terms.
+
+    Note on negative rewards:
+        Multiplying a negative reward by factor < 1 moves it toward 0 (softens the penalty).
+        When ``skip_negative_rewards=True`` (default), negative rewards pass through unscaled
+        (factor=1.0).
+    """
+
+    enabled: bool = True
+    """Master toggle for classifier correctness scaling."""
+    checkpoint_path: str
+    """Path to pretrained classifier checkpoint directory (model + tokenizer)."""
+    max_seq_length: pydantic.PositiveInt = pyine.evals.common.PASS_AT_K_DEFAULTS.max_new_tokens
+    """Tokenization length limit; defaults to PASS_AT_K_DEFAULTS.max_new_tokens (10k).
+
+    Validated at model load time against the effective limit (minimum of tokenizer.model_max_length
+    and model.config.max_position_embeddings); a ValueError is raised if this value exceeds it.
+    """
+    temperature: pydantic.PositiveFloat = 1.0
+    """Temperature for classifier logits before softmax (>1 softer, <1 sharper)."""
+    min_factor: pydantic.NonNegativeFloat = 0.0
+    """Minimum scaling factor (clamp from below)."""
+    max_factor: pydantic.PositiveFloat = 1.0
+    """Maximum scaling factor (clamp from above)."""
+    only_for_keyword_samples: bool = False
+    """If True, skip non-keyword samples (factor=neutral_factor)."""
+    neutral_factor: typing.Annotated[float, pydantic.Field(ge=0.0, le=1.0)] = 1.0
+    """Factor when skipped (e.g. non-keyword sample). 1.0 means no scaling. Constrained to [0, 1]."""
+    positive_label: str = "correct"
+    """Label name for the positive class, resolved from model.config.label2id."""
+    allow_positive_label_fallback: bool = False
+    """If True, fall back to class index 1 when label2id is missing or positive_label absent."""
+    device: str | None = None
+    """Device override; if None, auto-detects cuda -> mps -> cpu."""
+    strict_single_turn: bool = True
+    """If True, raise ValueError on serialized multi-turn JSON prompts; if False, warn once.
+
+    Warning: in distributed training, a per-sample raise can deadlock if only one rank hits a bad
+    sample before a collective sync. Set to False for distributed runs unless the dataset has been
+    prevalidated to contain only single-turn prompts.
+    """
+    skip_negative_rewards: bool = True
+    """If True, use factor=1.0 for negative aggregated rewards (avoids making penalties less negative)."""
+    emit_metrics: bool = True
+    """If True, emit per-sample diagnostic metrics (correctness_classifier/*)."""
+
+    @pydantic.model_validator(mode="after")
+    def _validate_factor_range(self) -> "CorrectnessClassifierScalingConfig":
+        """Validate factor constraints."""
+        if float(self.min_factor) > float(self.max_factor):
+            raise ValueError(f"min_factor ({self.min_factor}) must be <= max_factor ({self.max_factor})")
+        if float(self.max_factor) > 1.0:
+            raise ValueError(f"max_factor ({self.max_factor}) must be <= 1.0 for scaling behavior")
         return self
 
 
@@ -455,6 +527,8 @@ class RewardManagerConfig(reward_types.BaseConfig):
     """Logging configuration (frequency, scoping, toggles)."""
     parsing: ParsingConfig | None = None
     """Optional parsing configuration used to populate `SampleContext.parsed`."""
+    correctness_classifier_scaling: CorrectnessClassifierScalingConfig | None = None
+    """Optional correctness-classifier-based reward scaling configuration."""
     verbosity_scaling: VerbosityScalingConfig | None = None
     """Optional verbosity-based reward scaling configuration."""
     difficulty: difficulty_utils.DifficultyConfig | None = None
@@ -477,6 +551,7 @@ class RewardManagerConfig(reward_types.BaseConfig):
     _RESERVED_TERM_NAMES: typing.ClassVar[frozenset[str]] = frozenset(
         {
             # top-level metric namespaces
+            "correctness_classifier",  # correctness scaling metrics (correctness_classifier/*)
             "difficulty",  # difficulty estimation metrics (difficulty/*)
             "parsing",  # parsing metrics (parsing/*)
             "verbosity",  # verbosity scaling metrics (verbosity/*)

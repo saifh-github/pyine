@@ -25,6 +25,8 @@ __all__ = [
     "DataCacheSettings",
     "ConversationMessage",
     "ConversationHistory",
+    "tokenizer_has_chat_template",
+    "format_messages_to_text",
     "apply_model_template_to_messages",
     "prepare_generation_prompts_from_dataset",
     "prepare_examples_from_conversations",
@@ -76,6 +78,53 @@ type ConversationMessage = dict[str, typing.Any]
 
 type ConversationHistory = list[ConversationMessage]
 """Alias for ordered conversation histories."""
+
+
+def tokenizer_has_chat_template(
+    tokenizer: transformers.PreTrainedTokenizerBase,
+) -> bool:
+    """Check whether a tokenizer has a usable chat template.
+
+    Returns True if the tokenizer defines a non-None ``chat_template`` attribute and a callable
+    ``apply_chat_template`` method. Encoder models (BERT, ModernBERT, DeBERTa, etc.) typically
+    do not.
+    """
+    chat_template = getattr(tokenizer, "chat_template", None)
+    apply_chat_template = getattr(tokenizer, "apply_chat_template", None)
+    return chat_template is not None and callable(apply_chat_template)
+
+
+def format_messages_to_text(
+    messages: list[dict[str, str]],
+    tokenizer: transformers.PreTrainedTokenizerBase,
+) -> str:
+    """Convert a single conversation (list of messages) to a text string.
+
+    This is the canonical single-sample formatting function. If the tokenizer has a chat template,
+    it delegates to ``tokenizer.apply_chat_template``; otherwise it falls back to role-tagged
+    plain text concatenation (``"role: content\\n\\nrole: content"``).
+
+    Args:
+        messages: Conversation as a list of dicts with ``"role"`` and ``"content"`` keys.
+        tokenizer: Tokenizer to use for chat template formatting.
+
+    Returns:
+        Formatted text string.
+
+    Raises:
+        TypeError: If the tokenizer's ``apply_chat_template`` does not return a ``str``.
+    """
+    if tokenizer_has_chat_template(tokenizer):
+        result = tokenizer.apply_chat_template(  # type: ignore[reportUnknownMemberType]
+            conversation=messages,
+            tokenize=False,
+        )
+        if not isinstance(result, str):
+            raise TypeError(
+                f"expected tokenizer.apply_chat_template to return str for a single conversation, got {type(result)}"
+            )
+        return result
+    return "\n\n".join(f"{msg['role']}: {msg['content']}" for msg in messages)
 
 
 def _batch_apply_model_template_to_messages(

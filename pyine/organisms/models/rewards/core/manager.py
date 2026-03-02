@@ -13,6 +13,7 @@ import transformers
 import pyine.evals.utils
 import pyine.organisms.datamodules.samples
 import pyine.organisms.models.rewards.core.aggregator as reward_aggregator
+import pyine.organisms.models.rewards.core.classifier_scaling as classifier_scaling
 import pyine.organisms.models.rewards.core.configs as reward_configs
 import pyine.organisms.models.rewards.core.difficulty as difficulty_module
 import pyine.organisms.models.rewards.core.registry as reward_registry
@@ -167,6 +168,11 @@ class RewardManager:
         )
         self._token_counter = self._setup_token_counter(tokenizer)
         self._token_count_cache: reward_types.TokenCountCache | None = None
+        self._classifier_scaler: classifier_scaling.CorrectnessClassifierScaler | None = None
+        if config.correctness_classifier_scaling is not None and config.correctness_classifier_scaling.enabled:
+            self._classifier_scaler = classifier_scaling.CorrectnessClassifierScaler(
+                config.correctness_classifier_scaling
+            )
         self._verbosity_scaler: verbosity_scaling.VerbosityScaler | None = None
         if config.verbosity_scaling is not None and config.verbosity_scaling.enabled:
             # _setup_token_counter already raised if verbosity_scaling is enabled but no tokenizer available
@@ -287,6 +293,8 @@ class RewardManager:
         """
         for term in self._terms_by_name.values():
             term.reset(run_init_ctx)
+        if self._classifier_scaler is not None:
+            self._classifier_scaler.reset()
         self._step = None
         self._epoch = None
         # reset all global and local counters
@@ -450,11 +458,18 @@ class RewardManager:
         self,
         sample_ctxs: collections.abc.Sequence[reward_types.SampleContext],
     ) -> tuple[list[reward_types.RewardOutput], list[reward_types.TokenCountCache | None]]:
-        """Compute rewards for local samples with optional verbosity scaling.
+        """Compute rewards for local samples with optional scaling.
 
-        This handles the core reward computation (via _compute_core) and applies verbosity
-        scaling if configured. For relative mode scaling, samples are grouped by their
-        sample_data.identifier before normalization.
+        This handles the core reward computation (via _compute_core) and applies scaling if
+        configured. Scaler ordering:
+            1. Core reward computation (terms + aggregation) -> ``aggregated_reward``
+            2. **Classifier scaling** (per-sample) -> ``aggregated_reward * classifier_factor``
+            3. Verbosity scaling (per-sample or per-group) -> ``... * verbosity_factor``
+
+        Classifier scaling comes first since it's semantically about answer quality; verbosity is
+        about output format/length. As a consequence, ``verbosity/pre_scaling_reward`` contains the
+        post-classifier-scaled value, while ``correctness_classifier/pre_scaling_reward`` always
+        contains the raw aggregated reward from terms.
 
         Args:
             sample_ctxs: Sample contexts to evaluate (must be non-empty).
@@ -467,8 +482,21 @@ class RewardManager:
         for sample_ctx in sample_ctxs:
             core_results.append(self._compute_core(sample_ctx))
             caches.append(self._populate_token_count_cache(sample_ctx))
+        if self._classifier_scaler is not None:
+            # classifier-based reward scaling (per-sample, before verbosity)
+            for sample_idx, (result, sample_ctx) in enumerate(zip(core_results, sample_ctxs, strict=True)):
+                scaled_total, c_metrics = self._classifier_scaler.apply(
+                    aggregated_reward=result.total,
+                    sample_ctx=sample_ctx,
+                )
+                core_results[sample_idx] = reward_types.RewardOutput(
+                    total=scaled_total,
+                    weighted_terms=result.weighted_terms,
+                    raw_terms=result.raw_terms,
+                    metrics={**result.metrics, **c_metrics},
+                )
         if self._verbosity_scaler is None or not self._verbosity_scaler.is_relative_mode:
-            # absolute mode or no scaling: process individually
+            # no verbosity scaling, or verbosity scaling in absolute mode: process samples individually
             outputs: list[reward_types.RewardOutput] = []
             for result, cache in zip(core_results, caches, strict=True):
                 if self._verbosity_scaler is not None:
@@ -477,19 +505,17 @@ class RewardManager:
                         aggregated_reward=result.total,
                         cache=cache,
                     )
-                    metrics = dict(result.metrics)
-                    metrics.update(v_metrics)
                     output = reward_types.RewardOutput(
                         total=scaled_total,
                         weighted_terms=result.weighted_terms,
                         raw_terms=result.raw_terms,
-                        metrics=metrics,
+                        metrics={**result.metrics, **v_metrics},
                     )
                 else:
                     output = result
                 outputs.append(output)
         else:
-            # relative mode: group by sample_data.identifier, apply scaling per group
+            # verbosity scaling in relative mode: group by sample identifier, apply scaling per group
             grouped_indices: dict[typing.Hashable, list[int]] = {}
             for sample_idx, sample_ctx in enumerate(sample_ctxs):
                 sample_gid = sample_ctx.sample_data.identifier
@@ -509,13 +535,11 @@ class RewardManager:
                 )
                 for local_sample_idx, global_sample_idx in enumerate(sample_indices):
                     result = core_results[global_sample_idx]
-                    metrics = dict(result.metrics)
-                    metrics.update(v_metrics[local_sample_idx])
                     outputs_by_idx[global_sample_idx] = reward_types.RewardOutput(
                         total=scaled_totals[local_sample_idx],
                         weighted_terms=result.weighted_terms,
                         raw_terms=result.raw_terms,
-                        metrics=metrics,
+                        metrics={**result.metrics, **v_metrics[local_sample_idx]},
                     )
             # all entries should be filled since we iterate over all trace_ids
             if not all(o is not None for o in outputs_by_idx):

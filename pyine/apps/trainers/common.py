@@ -49,33 +49,23 @@ import pyine.utils.transformers.data
 logger = logging.getLogger(__name__)
 
 
-def tokenizer_has_chat_template(
-    tokenizer: transformers.PreTrainedTokenizerBase,
-) -> bool:
-    """Check whether a tokenizer has a usable chat template.
-
-    Returns True if the tokenizer defines a non-None ``chat_template`` attribute. Encoder models
-    (BERT, ModernBERT, DeBERTa, etc.) typically do not.
-    """
-    chat_template = getattr(tokenizer, "chat_template", None)
-    apply_chat_template = getattr(tokenizer, "apply_chat_template", None)
-    return chat_template is not None and callable(apply_chat_template)
-
-
-def _batch_concat_messages_to_text(
+def _batch_format_messages_to_text(
     batch: dict[str, typing.Any],
     messages_key: str,
     output_key: str,
+    tokenizer: transformers.PreTrainedTokenizerBase,
 ) -> dict[str, typing.Any]:
-    """Fallback batch transform: concatenate messages into role-tagged plain text.
+    """Batch transform: convert each sample's messages to text via ``format_messages_to_text``.
 
-    For each sample, joins all messages as ``role: content`` entries separated by blank lines.
-    This is used when tokenizers do not support chat templates (e.g., encoder models like BERT).
+    Handles both chat-template and no-template tokenizers. Each sample is formatted independently
+    through ``format_messages_to_text``, which is the single source of truth for message-to-text
+    conversion semantics. All existing columns (except ``messages_key``, which is handled by
+    ``remove_columns`` in the caller) are preserved.
     """
     all_messages: list[list[dict[str, str]]] = batch[messages_key]
-    texts: list[str] = []
-    for messages in all_messages:
-        texts.append("\n\n".join(f"{msg['role']}: {msg['content']}" for msg in messages))
+    texts: list[str] = [
+        pyine.utils.transformers.data.format_messages_to_text(messages, tokenizer) for messages in all_messages
+    ]
     return {output_key: texts}
 
 
@@ -87,9 +77,13 @@ def apply_messages_formatting(
 ) -> hf_datasets.DatasetDict:
     """Convert ``messages`` to ``text`` for all splits, auto-detecting chat template support.
 
-    If the tokenizer has a ``chat_template``, uses ``apply_model_template_to_messages`` to produce
-    properly formatted text. Otherwise, falls back to role-tagged plain text concatenation
-    (suitable for encoder models like BERT, ModernBERT, DeBERTa).
+    This is a batch wrapper around ``format_messages_to_text`` from ``pyine.utils.transformers.data``.
+    Each sample is formatted independently through that function, which is the single source of
+    truth for message -> text conversion semantics.
+
+    If the tokenizer has a ``chat_template``, ``format_messages_to_text`` delegates to
+    ``tokenizer.apply_chat_template``. Otherwise, it falls back to role-tagged plain text
+    concatenation (suitable for encoder models like BERT, ModernBERT, DeBERTa).
 
     Args:
         dataset_dict: HF DatasetDict with a ``messages`` column in each split.
@@ -100,7 +94,7 @@ def apply_messages_formatting(
     Returns:
         New DatasetDict with ``output_key`` column added and ``messages_key`` removed.
     """
-    has_template = tokenizer_has_chat_template(tokenizer)
+    has_template = pyine.utils.transformers.data.tokenizer_has_chat_template(tokenizer)
     if has_template:
         logger.info("tokenizer has chat_template; applying chat template to format messages")
     else:
@@ -110,25 +104,13 @@ def apply_messages_formatting(
         )
     result = hf_datasets.DatasetDict()
     for split_name in dataset_dict:
-        if has_template:
-            result[split_name] = pyine.utils.transformers.data.apply_model_template_to_messages(
-                dataset_dict[split_name],
-                tokenizer,  # type: ignore[arg-type]  # PreTrainedTokenizerBase vs PreTrainedTokenizer
-                messages_key=messages_key,
-                output_key=output_key,
-                keep_original_data=True,
-                apply_chat_template_kwargs={"tokenize": False},
-            )
-        else:
-            result[split_name] = dataset_dict[split_name].map(  # pyright: ignore[reportUnknownMemberType]
-                _batch_concat_messages_to_text,
-                batched=True,
-                fn_kwargs={"messages_key": messages_key, "output_key": output_key},
-                remove_columns=[messages_key],
-                desc="concatenating messages to role-tagged plain text",
-            )
-        if messages_key in result[split_name].column_names:
-            result[split_name] = result[split_name].remove_columns([messages_key])
+        result[split_name] = dataset_dict[split_name].map(  # pyright: ignore[reportUnknownMemberType]
+            _batch_format_messages_to_text,
+            batched=True,
+            fn_kwargs={"messages_key": messages_key, "output_key": output_key, "tokenizer": tokenizer},
+            remove_columns=[messages_key],
+            desc="formatting messages to text",
+        )
     return result
 
 

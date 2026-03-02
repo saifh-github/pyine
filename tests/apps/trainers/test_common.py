@@ -18,6 +18,7 @@ import pyine.evals.common
 import pyine.organisms.models.rewards.core.configs as reward_configs
 import pyine.organisms.models.rewards.core.logging as reward_logging
 import pyine.utils.distrib
+import pyine.utils.transformers.data
 import tests.env_checks
 
 
@@ -1050,11 +1051,11 @@ class _MockTokenizerWithChatTemplate:
         conversation: list[dict[str, typing.Any]] | list[list[dict[str, typing.Any]]],
         tokenize: bool = True,
         **kwargs: typing.Any,
-    ) -> list[str]:
+    ) -> str | list[str]:
         is_batch = isinstance(conversation[0], list)
         if is_batch:
             return ["".join(f"{msg['role']}:{msg['content']}|" for msg in conv) for conv in conversation]
-        return ["".join(f"{msg['role']}:{msg['content']}|" for msg in conversation)]
+        return "".join(f"{msg['role']}:{msg['content']}|" for msg in conversation)
 
 
 class _MockTokenizerNoChatTemplate:
@@ -1098,18 +1099,18 @@ def _make_messages_dataset() -> datasets.DatasetDict:
 
 class TestTokenizerHasChatTemplate:
     def test_with_chat_template(self) -> None:
-        assert trainer_common.tokenizer_has_chat_template(_MockTokenizerWithChatTemplate()) is True
+        assert pyine.utils.transformers.data.tokenizer_has_chat_template(_MockTokenizerWithChatTemplate()) is True
 
     def test_without_chat_template(self) -> None:
-        assert trainer_common.tokenizer_has_chat_template(_MockTokenizerNoChatTemplate()) is False
+        assert pyine.utils.transformers.data.tokenizer_has_chat_template(_MockTokenizerNoChatTemplate()) is False
 
     def test_with_chat_template_missing_apply_chat_template(self) -> None:
-        assert trainer_common.tokenizer_has_chat_template(_MockTokenizerChatTemplateNoApply()) is False
+        assert pyine.utils.transformers.data.tokenizer_has_chat_template(_MockTokenizerChatTemplateNoApply()) is False
 
     def test_with_none_chat_template(self) -> None:
         tokenizer = _MockTokenizerNoChatTemplate()
         tokenizer.chat_template = None  # type: ignore[attr-defined]
-        assert trainer_common.tokenizer_has_chat_template(tokenizer) is False
+        assert pyine.utils.transformers.data.tokenizer_has_chat_template(tokenizer) is False
 
 
 class TestApplyMessagesFormatting:

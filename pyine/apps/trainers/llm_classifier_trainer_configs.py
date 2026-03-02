@@ -72,7 +72,7 @@ class LLMClassifierTrainerAppMainConfig(common.AppMainConfig, common.ModelTokeni
     log_per_code_type_metrics: bool = True
 
     # --- Tokenization ---
-    max_seq_length: int = 3000
+    max_seq_length: pydantic.PositiveInt = pyine.evals.common.PASS_AT_K_DEFAULTS.max_new_tokens
     """Maximum sequence length for tokenization. Should not exceed model's max position embeddings."""
     truncation_side: typing.Literal["right", "left"] | None = None
     """Which side to truncate when sequences exceed max_seq_length.

@@ -24,6 +24,7 @@ import pyine.configs.schemas
 import pyine.evals.common
 import pyine.evals.correctness.configs as correctness_configs
 import pyine.evals.correctness.scorers as correctness_scorers
+import pyine.utils.transformers.data
 
 if typing.TYPE_CHECKING:
     import datasets
@@ -249,6 +250,24 @@ def classifier_train(
     # --- 2. Set truncation side (if configured) ---
     if config.truncation_side is not None:
         tokenizer.truncation_side = config.truncation_side
+    # --- 2b. Validate max_seq_length against tokenizer and model limits ---
+    tokenizer_max_length: int | None = getattr(tokenizer, "model_max_length", None)
+    model_max_positions: int | None = getattr(model.config, "max_position_embeddings", None)  # type: ignore[reportUnknownMemberType]
+    effective_limit: int | None = None
+    if tokenizer_max_length is not None and model_max_positions is not None:
+        effective_limit = min(tokenizer_max_length, model_max_positions)
+    elif tokenizer_max_length is not None:
+        effective_limit = tokenizer_max_length
+    elif model_max_positions is not None:
+        effective_limit = model_max_positions
+    if effective_limit is not None and config.max_seq_length > effective_limit:
+        raise ValueError(
+            f"max_seq_length ({config.max_seq_length}) exceeds effective model limit "
+            f"(tokenizer.model_max_length={tokenizer_max_length}, "
+            f"model.config.max_position_embeddings={model_max_positions}, "
+            f"effective={effective_limit}); "
+            "reduce max_seq_length or use a model/tokenizer with a larger context window"
+        )
 
     # --- 3. Load LMDB data via DataModule (handles DDP coordination + caching) ---
     datamodule = pyine.apps.trainers.common.prepare_datamodule(config, runtime)
@@ -261,7 +280,7 @@ def classifier_train(
     _log_class_distribution(raw_ds, logger)
 
     # --- 5. Format messages -> text (chat template if available, else plain concat), then tokenize ---
-    has_chat_template = pyine.apps.trainers.common.tokenizer_has_chat_template(tokenizer)
+    has_chat_template = pyine.utils.transformers.data.tokenizer_has_chat_template(tokenizer)
     raw_ds = pyine.apps.trainers.common.apply_messages_formatting(raw_ds, tokenizer)
     # when a chat template produced the text, special tokens are already embedded;
     # encoder tokenizers (no chat template) need add_special_tokens=True for [CLS]/[SEP]

@@ -135,8 +135,10 @@ class TestLLMClassifierTrainerAppMainConfig:
             assert len(balance_warnings) >= 1
 
     def test_max_seq_length_default(self) -> None:
+        import pyine.evals.common
+
         cfg = LLMClassifierTrainerAppMainConfig(**_make_minimal_config())
-        assert cfg.max_seq_length == 3000
+        assert cfg.max_seq_length == pyine.evals.common.PASS_AT_K_DEFAULTS.max_new_tokens
 
     def test_log_per_code_type_metrics_default(self) -> None:
         cfg = LLMClassifierTrainerAppMainConfig(**_make_minimal_config())
