@@ -517,7 +517,7 @@ class TestEvaluateHFModel:
         ]
 
         class FakeConversationDataModule:
-            config = types.SimpleNamespace(keep_generated_datasets_in_memory=True)
+            config = types.SimpleNamespace(keep_generated_datasets_in_memory=True, hf_messages_key="messages")
 
             def get_hf_messages_dataset(
                 self,

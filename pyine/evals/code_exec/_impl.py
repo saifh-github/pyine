@@ -455,6 +455,7 @@ async def evaluate_hf_model(
         prompts_ds=prompts_ds,
         tokenizer=tokenizer,
         max_seq_len=max_prompt_len,
+        messages_key=datamodule.config.hf_messages_key,
         keep_extra_fields=True,
         keep_in_memory=datamodule.config.keep_generated_datasets_in_memory,
     )
