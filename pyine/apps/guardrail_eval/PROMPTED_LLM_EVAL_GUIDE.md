@@ -37,11 +37,11 @@ Required packages (should already be installed in the project environment):
 
 Set the appropriate environment variable for your chosen provider:
 
-| Provider | Environment Variable | Notes |
-|----------|---------------------|-------|
-| OpenAI   | `OPENAI_API_KEY`    | Required. Optionally set `OPENAI_BASE_URL` for custom endpoints. |
-| DeepSeek | `DEEPSEEK_API_KEY`  | Required. Optionally set `DEEPSEEK_API_BASE_URL` (defaults to `https://api.deepseek.com/v1`). |
-| vLLM     | (none)              | No API key needed. Set `VLLM_BASE_URL` or pass `base_url` in `model_kwargs` (defaults to `http://localhost:8000/v1`). |
+| Provider | Environment Variable | Notes                                                                                                                 |
+| -------- | -------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| OpenAI   | `OPENAI_API_KEY`     | Required. Optionally set `OPENAI_BASE_URL` for custom endpoints.                                                      |
+| DeepSeek | `DEEPSEEK_API_KEY`   | Required. Optionally set `DEEPSEEK_API_BASE_URL` (defaults to `https://api.deepseek.com/v1`).                         |
+| vLLM     | (none)               | No API key needed. Set `VLLM_BASE_URL` or pass `base_url` in `model_kwargs` (defaults to `http://localhost:8000/v1`). |
 
 ### Local vLLM Server (optional)
 
@@ -164,11 +164,11 @@ python -m pyine.apps.guardrail_eval.prompted_llm_eval \
 
 ### Available Experiment Configs
 
-| Config | Provider | Model | Notes |
-|--------|----------|-------|-------|
-| `guardrail/prompted_llm_eval_openai` | OpenAI | `gpt-5-mini` | Rate limited at 50 req/s |
-| `guardrail/prompted_llm_eval_vllm` | vLLM (local) | `Llama-3.1-8B-Instruct` | Requires running vLLM server |
-| `guardrail/prompted_llm_eval_deepseek` | DeepSeek | `deepseek-chat` | Rate limited at 20 req/s |
+| Config                                 | Provider     | Model                   | Notes                        |
+| -------------------------------------- | ------------ | ----------------------- | ---------------------------- |
+| `guardrail/prompted_llm_eval_openai`   | OpenAI       | `gpt-5-mini`            | Rate limited at 50 req/s     |
+| `guardrail/prompted_llm_eval_vllm`     | vLLM (local) | `Llama-3.1-8B-Instruct` | Requires running vLLM server |
+| `guardrail/prompted_llm_eval_deepseek` | DeepSeek     | `deepseek-chat`         | Rate limited at 20 req/s     |
 
 ______________________________________________________________________
 
@@ -190,15 +190,15 @@ The correctness data loader (`load_records_from_lmdb`) requires:
 
 Each LMDB record is a JSON dict. The fields used by the prompted LLM scorer:
 
-| Field             | Required | Description |
-|-------------------|----------|-------------|
-| `model_output`    | Always   | The model's full reasoning and predicted output |
-| `expected_output` | Always   | The ground-truth expected output |
-| `final_answer`    | Optional | The model's extracted final answer (if available) |
-| `hard_match`      | Always   | Boolean: exact match between predicted and expected |
+| Field             | Required | Description                                                 |
+| ----------------- | -------- | ----------------------------------------------------------- |
+| `model_output`    | Always   | The model's full reasoning and predicted output             |
+| `expected_output` | Always   | The ground-truth expected output                            |
+| `final_answer`    | Optional | The model's extracted final answer (if available)           |
+| `hard_match`      | Always   | Boolean: exact match between predicted and expected         |
 | `soft_match`      | Always   | Boolean: soft/semantic match between predicted and expected |
-| `sample_id`       | Always   | Unique sample identifier in `TraceIdentifier` format |
-| `attempt_index`   | Always   | Generation attempt index |
+| `sample_id`       | Always   | Unique sample identifier in `TraceIdentifier` format        |
+| `attempt_index`   | Always   | Generation attempt index                                    |
 
 ### Splits
 
@@ -208,10 +208,10 @@ problem identifiers to subset names.
 
 Configure via `evals_config.datamodule_config.split_config`:
 
-| Field | Default | Description |
-|-------|---------|-------------|
-| `split_source` | (required) | HF dataset name (e.g. `"TACO"`) or path to a `SplitResult` JSON file |
-| `guardrail_valid_fraction` | `0.5` | Fraction of non-train problems assigned to `guardrail_valid` (rest go to `guardrail_test`) |
+| Field                      | Default    | Description                                                                                |
+| -------------------------- | ---------- | ------------------------------------------------------------------------------------------ |
+| `split_source`             | (required) | HF dataset name (e.g. `"TACO"`) or path to a `SplitResult` JSON file                       |
+| `guardrail_valid_fraction` | `0.5`      | Fraction of non-train problems assigned to `guardrail_valid` (rest go to `guardrail_test`) |
 
 ______________________________________________________________________
 
@@ -221,50 +221,50 @@ ______________________________________________________________________
 
 The main config class in `pyine/apps/guardrail_eval/prompted_llm_eval_configs.py`:
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `guardrail_config` | `PromptedLLMGuardrailConfig` | (required) | Guardrail scorer configuration |
-| `evals_config` | `CorrectnessEvalsConfig` | (required) | Correctness eval pipeline configuration (LMDB paths, splits, target FPRs) |
-| `use_wandb_logging` | `bool` | `False` | Whether to log results to W&B |
-| `wandb_project` | `str \| None` | `None` | W&B project name |
+| Field               | Type                         | Default    | Description                                                               |
+| ------------------- | ---------------------------- | ---------- | ------------------------------------------------------------------------- |
+| `guardrail_config`  | `PromptedLLMGuardrailConfig` | (required) | Guardrail scorer configuration                                            |
+| `evals_config`      | `CorrectnessEvalsConfig`     | (required) | Correctness eval pipeline configuration (LMDB paths, splits, target FPRs) |
+| `use_wandb_logging` | `bool`                       | `False`    | Whether to log results to W&B                                             |
+| `wandb_project`     | `str \| None`                | `None`     | W&B project name                                                          |
 
 ### Guardrail Config (`PromptedLLMGuardrailConfig`)
 
 The scorer configuration in `pyine/guardrails/prompted_llm/configs.py`:
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `llm_provider` | `LLMProviderConfig` | (required) | LLM provider config (provider, model_kwargs, rate_limiter_config, with_retry_config) |
-| `prompt_name` | `str` | `"guardrail/correctness_judge"` | Prompt template name resolved by PromptManager |
-| `prompt_version` | `str \| None` | `None` | Prompt version override (`"with_reasoning"`, `"score_only"`, or `None` for default) |
-| `use_chat_template` | `bool` | `True` | Whether to use chat prompt template (system + human message) |
-| `max_workers` | `int` | `10` | Max concurrent LLM calls (ThreadPoolExecutor workers) |
-| `default_score_on_error` | `float` | `0.5` | Score assigned when LLM call fails after retries |
+| Field                    | Type                | Default                         | Description                                                                          |
+| ------------------------ | ------------------- | ------------------------------- | ------------------------------------------------------------------------------------ |
+| `llm_provider`           | `LLMProviderConfig` | (required)                      | LLM provider config (provider, model_kwargs, rate_limiter_config, with_retry_config) |
+| `prompt_name`            | `str`               | `"guardrail/correctness_judge"` | Prompt template name resolved by PromptManager                                       |
+| `prompt_version`         | `str \| None`       | `None`                          | Prompt version override (`"with_reasoning"`, `"score_only"`, or `None` for default)  |
+| `use_chat_template`      | `bool`              | `True`                          | Whether to use chat prompt template (system + human message)                         |
+| `max_workers`            | `int`               | `10`                            | Max concurrent LLM calls (ThreadPoolExecutor workers)                                |
+| `default_score_on_error` | `float`             | `0.5`                           | Score assigned when LLM call fails after retries                                     |
 
 ### LLM Provider Config (`LLMProviderConfig`)
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `provider` | `"openai" \| "deepseek" \| "vllm"` | (required) | LLM provider name |
-| `model_kwargs` | `dict` | `{}` | Kwargs passed to the LangChain LLM constructor (e.g. `model`, `temperature`, `base_url`) |
-| `rate_limiter_config` | `dict \| None` | `None` | Config for `InMemoryRateLimiter` (e.g. `requests_per_second`, `max_bucket_size`) |
-| `with_retry_config` | `dict \| None` | `None` | Config for LangChain `.with_retry()` (set programmatically for exception types) |
+| Field                 | Type                               | Default    | Description                                                                              |
+| --------------------- | ---------------------------------- | ---------- | ---------------------------------------------------------------------------------------- |
+| `provider`            | `"openai" \| "deepseek" \| "vllm"` | (required) | LLM provider name                                                                        |
+| `model_kwargs`        | `dict`                             | `{}`       | Kwargs passed to the LangChain LLM constructor (e.g. `model`, `temperature`, `base_url`) |
+| `rate_limiter_config` | `dict \| None`                     | `None`     | Config for `InMemoryRateLimiter` (e.g. `requests_per_second`, `max_bucket_size`)         |
+| `with_retry_config`   | `dict \| None`                     | `None`     | Config for LangChain `.with_retry()` (set programmatically for exception types)          |
 
 ### Prompt Versions
 
-| Version | Description | Use case |
-|---------|-------------|----------|
-| `with_reasoning` | LLM provides reasoning + score (`CorrectnessJudgementWithReasoning`) | Development, debugging, analysis |
-| `score_only` | LLM provides only the score (`CorrectnessJudgement`) | Production runs (faster, cheaper) |
+| Version          | Description                                                          | Use case                          |
+| ---------------- | -------------------------------------------------------------------- | --------------------------------- |
+| `with_reasoning` | LLM provides reasoning + score (`CorrectnessJudgementWithReasoning`) | Development, debugging, analysis  |
+| `score_only`     | LLM provides only the score (`CorrectnessJudgement`)                 | Production runs (faster, cheaper) |
 
 ### Eval Pipeline Config (`CorrectnessEvalsConfig`)
 
 Key fields within `evals_config`:
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `datamodule_config` | `CorrectnessDataModuleConfig` | (required) | LMDB paths + split config |
-| `target_fpr_values` | `list[float]` | `[0.001, 0.01, 0.05]` | Target false positive rates for thresholded metrics |
+| Field               | Type                          | Default               | Description                                         |
+| ------------------- | ----------------------------- | --------------------- | --------------------------------------------------- |
+| `datamodule_config` | `CorrectnessDataModuleConfig` | (required)            | LMDB paths + split config                           |
+| `target_fpr_values` | `list[float]`                 | `[0.001, 0.01, 0.05]` | Target false positive rates for thresholded metrics |
 
 ______________________________________________________________________
 
@@ -403,21 +403,21 @@ ______________________________________________________________________
 
 The evaluation pipeline computes and logs the following metrics:
 
-| Metric | Description |
-|--------|-------------|
-| AUROC | Area under ROC curve for the guardrail scores |
-| Thresholded TPR / FPR / Precision | At each configured `target_fpr_values` |
-| `base_pass_rate` | Pass rate without the guardrail |
-| `guarded_pass_rate` | Pass rate with the guardrail applied |
-| Verification cost stats | Total cost, mean cost per record (in tokens) |
+| Metric                            | Description                                   |
+| --------------------------------- | --------------------------------------------- |
+| AUROC                             | Area under ROC curve for the guardrail scores |
+| Thresholded TPR / FPR / Precision | At each configured `target_fpr_values`        |
+| `base_pass_rate`                  | Pass rate without the guardrail               |
+| `guarded_pass_rate`               | Pass rate with the guardrail applied          |
+| Verification cost stats           | Total cost, mean cost per record (in tokens)  |
 
 Scorer metadata (logged after evaluation):
 
-| Field | Description |
-|-------|-------------|
-| `scorer_type` | Always `"prompted_llm"` |
-| `total_scored` | Total number of records scored |
-| `error_count` | Number of LLM call failures (used `default_score_on_error`) |
+| Field          | Description                                                 |
+| -------------- | ----------------------------------------------------------- |
+| `scorer_type`  | Always `"prompted_llm"`                                     |
+| `total_scored` | Total number of records scored                              |
+| `error_count`  | Number of LLM call failures (used `default_score_on_error`) |
 
 ______________________________________________________________________
 
