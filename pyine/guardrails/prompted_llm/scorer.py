@@ -56,10 +56,7 @@ class PromptedLLMGuardrailScorer:
         with concurrent.futures.ThreadPoolExecutor(
             max_workers=self._config.max_workers,
         ) as executor:
-            future_to_idx = {
-                executor.submit(self._score_single, record): idx
-                for idx, record in enumerate(records)
-            }
+            future_to_idx = {executor.submit(self._score_single, record): idx for idx, record in enumerate(records)}
             results: list[tuple[float, float] | None] = [None] * len(records)
             completed = 0
             for future in concurrent.futures.as_completed(future_to_idx):
@@ -71,9 +68,10 @@ class PromptedLLMGuardrailScorer:
 
         scores: list[float] = []
         costs: list[float] = []
-        for score, token_count in results:  # type: ignore[misc]
-            scores.append(score)
-            costs.append(token_count)
+        for result_pair in results:
+            assert result_pair is not None, "all futures should have completed successfully"
+            scores.append(result_pair[0])
+            costs.append(result_pair[1])
 
         self._total_scored += len(records)
         return correctness_types.ScoringResult(
@@ -101,7 +99,7 @@ class PromptedLLMGuardrailScorer:
         handler = pyine.utils.langchain.CaptureLLMHandler()
 
         try:
-            result = self._chain.invoke(
+            result: typing.Any = self._chain.invoke(
                 input_vars,
                 config={"callbacks": [handler]},
             )
@@ -109,11 +107,14 @@ class PromptedLLMGuardrailScorer:
             if hasattr(result, "score"):
                 score = float(result.score)
             elif isinstance(result, dict) and "score" in result:
-                score = float(result["score"])
+                result_dict = typing.cast("dict[str, typing.Any]", result)
+                score = float(result_dict["score"])
             else:
+                result_type_name = type(typing.cast("typing.Any", result)).__name__
                 logger.warning(
                     "LLM returned unexpected format for %s: %s",
-                    record.sample_id, type(result),
+                    record.sample_id,
+                    result_type_name,
                 )
                 score = self._config.default_score_on_error
                 with self._error_lock:
@@ -144,8 +145,8 @@ class PromptedLLMGuardrailScorer:
         end_event = handler.get_latest_event("llm_end")
         if end_event is None or end_event.response is None:
             return 0.0
-        # LLMResult.llm_output may contain token_usage
-        llm_output: dict[str, typing.Any] = typing.cast("dict[str, typing.Any]", end_event.response.llm_output or {})
+        # LLMResult.llm_output is typed as bare Optional[dict] in langchain (no type params)
+        llm_output: dict[str, typing.Any] = getattr(end_event.response, "llm_output", None) or {}
         token_usage: dict[str, typing.Any] = llm_output.get("token_usage", {})
         total: int = token_usage.get("total_tokens", 0)
         if total > 0:
@@ -157,10 +158,7 @@ class PromptedLLMGuardrailScorer:
                 usage: dict[str, typing.Any] = gen_info.get("usage", {})
                 total += usage.get("total_tokens", 0)
         if total == 0:
-            logger.debug(
-                "token count is 0 for a successful LLM response; "
-                "provider may not populate token usage fields"
-            )
+            logger.debug("token count is 0 for a successful LLM response; provider may not populate token usage fields")
         return float(total)
 
     def get_metadata(self) -> dict[str, typing.Any]:

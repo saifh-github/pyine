@@ -13,7 +13,6 @@ import pyine.configs.searchpath
 import pyine.configs.utils
 import pyine.evals.common
 import pyine.evals.correctness.configs
-import pyine.evals.correctness.datamodule_configs
 import pyine.utils.reprod
 from pyine.guardrails.prompted_llm.configs import PromptedLLMGuardrailConfig  # noqa: TC001
 

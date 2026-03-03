@@ -157,10 +157,7 @@ class TestErrorHandling:
             config=config,
             chain_invoke_side_effect=RuntimeError("API error"),
         )
-        records = [
-            _make_record(sample_id=f"TEST/VALID/p{i:06d}/s0000/t0000")
-            for i in range(3)
-        ]
+        records = [_make_record(sample_id=f"TEST/VALID/p{i:06d}/s0000/t0000") for i in range(3)]
         scorer.score_records(records)
         metadata = scorer.get_metadata()
         assert metadata["error_count"] == 3

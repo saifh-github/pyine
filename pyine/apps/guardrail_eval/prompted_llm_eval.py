@@ -19,6 +19,7 @@ import typing
 import pyine.configs.schemas
 import pyine.evals.common
 import pyine.evals.correctness._impl as correctness_impl
+import pyine.evals.correctness.datamodule as correctness_datamodule
 import pyine.evals.utils
 import pyine.utils.reprod
 from pyine.apps.guardrail_eval.prompted_llm_eval_configs import (
@@ -68,6 +69,7 @@ async def main(
 
     # 2. Prepare datamodule (loads LMDB, builds guardrail splits)
     datamodule = config.evals_config.prepare_eval_datamodule(None)
+    assert isinstance(datamodule, correctness_datamodule.CorrectnessDataModule)
     eval_subset_names = datamodule.config.eval_subset_names
     logger.info("will evaluate on %d subset(s): %s", len(eval_subset_names), eval_subset_names)
 

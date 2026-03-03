@@ -179,7 +179,6 @@ class CorrectnessEvalsConfig(pyine.evals.common.BaseEvalsConfig):
         )
 
     @typing.override
-    @typing.no_type_check  # wandb typing is incomplete
     def define_metrics_for_wandb(
         self,
         wandb_run: wandb.Run,
@@ -330,7 +329,6 @@ class CorrectnessEvalsConfig(pyine.evals.common.BaseEvalsConfig):
                 )
 
     @typing.override
-    @typing.no_type_check  # wandb typing is incomplete
     def log_metrics(
         self,
         wandb_run: wandb.Run,
@@ -370,7 +368,7 @@ class CorrectnessEvalsConfig(pyine.evals.common.BaseEvalsConfig):
             row: list[typing.Any] = [subset_name]
             for metric_name in ordered_metric_names:
                 row.append(subset_metrics.get(metric_name))
-            table.add_data(*row)
+            table.add_data(*row)  # pyright: ignore[reportUnknownMemberType] - wandb Table.add_data has incomplete stubs
             summary_prefix = f"benchmark/{subset_name}"
             for metric_name, metric_val in subset_metrics.items():
                 wandb_run.summary[f"{summary_prefix}/{metric_name}"] = metric_val

@@ -21,15 +21,11 @@ class TestPromptTemplateLoads:
         assert config is not None
 
     def test_prompt_template_loads_with_reasoning(self) -> None:
-        config = pyine.prompts.manager.get_prompt_config(
-            "guardrail/correctness_judge", version="with_reasoning"
-        )
+        config = pyine.prompts.manager.get_prompt_config("guardrail/correctness_judge", version="with_reasoning")
         assert config is not None
 
     def test_prompt_template_loads_score_only(self) -> None:
-        config = pyine.prompts.manager.get_prompt_config(
-            "guardrail/correctness_judge", version="score_only"
-        )
+        config = pyine.prompts.manager.get_prompt_config("guardrail/correctness_judge", version="score_only")
         assert config is not None
 
 

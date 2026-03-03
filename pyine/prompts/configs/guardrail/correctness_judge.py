@@ -12,9 +12,7 @@ class CorrectnessJudgement(pydantic.BaseModel):
 
     model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
 
-    score: typing.Annotated[
-        pydantic.StrictFloat, pydantic.Field(ge=0.0, le=1.0)
-    ] = pydantic.Field(
+    score: typing.Annotated[pydantic.StrictFloat, pydantic.Field(ge=0.0, le=1.0)] = pydantic.Field(
         description="Confidence score in [0,1]. 1.0 = definitely correct, 0.0 = definitely incorrect.",
     )
 
@@ -54,9 +52,7 @@ def get_prompt_template(
     """Module override that injects format instructions into the context."""
     import pyine.prompts.manager
 
-    prompt_config = pyine.prompts.manager.get_prompt_config(
-        "guardrail/correctness_judge", version=version
-    )
+    prompt_config = pyine.prompts.manager.get_prompt_config("guardrail/correctness_judge", version=version)
     parser = get_output_parser(version=version)
     merged_context: dict[str, typing.Any] = dict(context_variables) if context_variables else {}
     if parser is not None:
