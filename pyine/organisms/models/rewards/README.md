@@ -7,20 +7,22 @@ Composable reward term management for RL experiments.
 ```
 RewardManager
     │
-    ├── OutputParser (optional)       # parses model output once per sample
+    ├── OutputParser (optional)              # parses model output once per sample
     │
-    ├── RewardTerm[]                  # enabled terms from config
-    │   ├── parseable_answer          # format term
-    │   ├── text_length               # format term
-    │   ├── traced_reasoning          # format term
-    │   ├── hard_match                # code_exec term
-    │   ├── soft_match                # code_exec term
-    │   ├── llm_grader                # code_exec term
+    ├── RewardTerm[]                         # enabled terms from config
+    │   ├── parseable_answer                 # format term
+    │   ├── text_length                      # format term
+    │   ├── traced_reasoning                 # format term
+    │   ├── hard_match                       # code_exec term
+    │   ├── soft_match                       # code_exec term
+    │   ├── llm_grader                       # code_exec term
     │   └── (custom terms)
     │
-    ├── WeightedSumAggregator         # combines term values
+    ├── WeightedSumAggregator                # combines term values
+    ├── CorrectnessClassifierScaler (opt.)   # classifier-based reward scaling
+    ├── VerbosityScaler (optional)           # length-based reward scaling
     │
-    └── RewardLogger (optional)       # logs metrics to W&B/memory
+    └── RewardLogger (optional)              # logs metrics to W&B/memory
 ```
 
 ## Quick Start
@@ -302,22 +304,74 @@ config = reward_configs.RewardManagerConfig(
 )
 ```
 
-## Verbosity Scaling
+## Post-Aggregation Reward Scaling
 
-The reward manager supports optional verbosity-based scaling that multiplies rewards by a factor
-based on output length. This encourages concise responses by penalizing verbose outputs.
+After term aggregation, the reward manager applies up to two optional multiplicative scalers
+in a fixed order:
 
-### Setup Requirements
+```
+aggregated_reward  -->  classifier scaling  -->  verbosity scaling  -->  final reward
+```
 
-Verbosity scaling requires token counting. You have two options:
+Per-term breakdowns (`weighted_terms`) are **not** scaled; they are preserved as-is so you can
+compare `reward/total` (post-scaling) against `reward/terms/*` (pre-scaling) in logged metrics.
 
-1. **Provide a HuggingFace tokenizer** to `RewardManager(tokenizer=tokenizer)`: this is the
-   recommended approach when you already have a tokenizer loaded for your model.
+### Correctness Classifier Scaling
 
-2. **Configure a tiktoken tokenizer** via `parsing.openai_tokenizer_model`: note that this
-   requires a `ParsingConfig` to be defined as well.
+Multiplies the aggregated reward by a pretrained classifier's predicted probability that the
+model output is correct. The classifier is loaded lazily on first use (or eagerly via `reset()`).
+It constructs a two-message conversation `[user, assistant]` from the prompt and model output,
+formats it using the same pipeline as classifier training, and runs inference to get a correctness
+probability. The scaling factor is `clamp(classifier_prob, min_factor, max_factor)`.
 
-### Modes
+`correctness_classifier/pre_scaling_reward` always contains the raw aggregated reward from terms.
+
+```python
+import pyine.organisms.models.rewards.core.configs as reward_configs
+
+config = reward_configs.RewardManagerConfig(
+    terms=[...],
+    logging=reward_configs.LoggingConfig(enabled=False),
+    correctness_classifier_scaling=reward_configs.CorrectnessClassifierScalingConfig(
+        enabled=True,
+        checkpoint_path="/path/to/classifier/checkpoint",  # model + tokenizer directory
+        temperature=1.0,          # logit temperature (>1 softer, <1 sharper)
+        min_factor=0.0,           # clamp scaling factor from below
+        max_factor=1.0,           # clamp scaling factor from above
+        positive_label="correct", # label name resolved from model.config.label2id
+        skip_negative_rewards=True,  # pass negative rewards through unscaled
+        only_for_keyword_samples=False,  # restrict to keyword samples only
+        neutral_factor=1.0,       # factor used when sample is skipped
+    ),
+)
+```
+
+When `emit_metrics=True` (default), classifier scaling emits:
+
+- `correctness_classifier/factor`: the computed scaling factor;
+- `correctness_classifier/pre_scaling_reward`: reward before scaling;
+- `correctness_classifier/classifier_score`: raw classifier probability;
+- `correctness_classifier/was_truncated`: 0/1 flag for truncation to `max_seq_length`;
+- `correctness_classifier/temperature`: effective logit temperature used before softmax;
+- `correctness_classifier/skipped_negative`: 1 if the sample was skipped due to negative reward.
+
+**Important:** with `strict_single_turn=True` (default), this scaler raises if `sample_ctx.prompt`
+looks like serialized JSON messages (e.g., `[{\"role\": ...}]`) instead of a flat prompt string.
+Set `strict_single_turn=False` to warn once and continue.
+
+See `CorrectnessClassifierScalingConfig` in [`core/configs.py`](core/configs.py) for full parameter
+documentation. For training classifier checkpoints used by this scaler, see
+[`llm_classifier_trainer.py`](../../../apps/trainers/llm_classifier_trainer.py) and
+[`LLM_CLASSIFIER_TRAINING_GUIDE.md`](../../../apps/trainers/LLM_CLASSIFIER_TRAINING_GUIDE.md).
+
+### Verbosity Scaling
+
+Multiplies rewards by a factor based on output length, encouraging concise responses by
+penalizing verbose outputs.
+
+**Setup:** verbosity scaling requires token counting. Either provide a HuggingFace tokenizer
+to `RewardManager(tokenizer=tokenizer)`, or configure a tiktoken tokenizer via
+`parsing.openai_tokenizer_model`.
 
 **Absolute mode**: Factor decays from `max_factor` toward `min_factor` based on absolute token
 thresholds. Use `threshold_tokens` (no penalty below) and `end_tokens` (full penalty at).
@@ -359,38 +413,20 @@ config = reward_configs.RewardManagerConfig(
 )
 ```
 
-### Group Definition (GRPO)
+**Group definition (GRPO):** "group" = all generations for the same prompt. The reward manager
+groups completions by `sample_data.identifier` before computing relative scaling, so samples
+sharing a prompt are normalized together. For relative mode with `compute()` (single sample), a
+warning is emitted and scaling is skipped; use `compute_batch(sample_ctxs)` instead.
 
-In GRPO training, "group" = all generations for the same prompt. The reward manager groups
-completions by `sample_data.identifier` before computing relative scaling, so samples sharing a
-prompt are normalized together.
-
-For relative mode with `compute()` (single sample), a warning is emitted and scaling is
-skipped. Use `compute_batch(sample_ctxs)` instead (samples are automatically grouped by
-`sample_data.identifier`).
-
-### How It Works
-
-The verbosity factor is applied as a post-aggregation multiplier to the **total reward only**:
-
-```
-final_reward = aggregated_reward * verbosity_factor
-```
-
-Where `verbosity_factor` is in `[min_factor, max_factor]` (typically 0.0 to 1.0).
-
-Note that the weighted_terms (per-term reward breakdown) are **not** scaled; they are preserved
-as-is to show the base contribution from each term before verbosity scaling. This allows you to
-compare `reward/total` (post-scaling) against `reward/terms/*` (pre-scaling) to see the effect
-of verbosity scaling in logged metrics.
-
-### Metrics
+`verbosity/pre_scaling_reward` contains the post-classifier-scaled value (if classifier scaling
+is enabled), or the raw aggregated reward otherwise.
 
 When `emit_metrics=True` (default), verbosity scaling emits:
 
 - `verbosity/factor`: the computed scaling factor;
 - `verbosity/token_count`: token count considered for the sample;
-- `verbosity/pre_scaling_reward`: reward before scaling;
+- `verbosity/pre_scaling_reward`: reward before verbosity scaling;
+- `verbosity/skipped_negative`: 1 if scaling was skipped for a negative reward;
 - In relative mode: `verbosity/group_mean`, `verbosity/group_std`, `verbosity/z_score`.
 
 ## Creating Custom Terms
