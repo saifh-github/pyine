@@ -9,7 +9,7 @@ if typing.TYPE_CHECKING:
 
 import pytest
 
-from pyine.guardrails.data.debug_dataset import create_debug_probe_dataset, create_debug_probe_lmdb
+from pyine.guardrails.data.debug_dataset import DebugDatasetResult, create_debug_probe_dataset, create_debug_probe_lmdb
 from pyine.guardrails.data.lmdb_dataset import _extract_family_id
 
 
@@ -263,12 +263,14 @@ class TestDebugLmdbIntegrationWithEvalOnly:
 
 class TestCreateDebugProbeDataset:
     def test_dataset_has_required_splits(self) -> None:
-        ds = create_debug_probe_dataset(n_train=20, n_eval_families=10)
+        result = create_debug_probe_dataset(n_train=20, n_eval_families=10)
+        assert isinstance(result, DebugDatasetResult)
+        ds = result.dataset
         assert "train" in ds
         assert "valid" in ds
 
     def test_dataset_has_required_columns(self) -> None:
-        ds = create_debug_probe_dataset(n_train=20, n_eval_families=10)
+        ds = create_debug_probe_dataset(n_train=20, n_eval_families=10).dataset
         for split_name in ("train", "valid"):
             cols = ds[split_name].column_names
             assert "messages" in cols, f"Missing 'messages' in {split_name}"
@@ -277,18 +279,18 @@ class TestCreateDebugProbeDataset:
             assert "code_type" in cols, f"Missing 'code_type' in {split_name}"
 
     def test_labels_are_binary(self) -> None:
-        ds = create_debug_probe_dataset(n_train=100, n_eval_families=30)
+        ds = create_debug_probe_dataset(n_train=100, n_eval_families=30).dataset
         for split_name in ("train", "valid"):
             labels = set(ds[split_name]["label"])
             assert labels.issubset({0, 1}), f"Non-binary labels in {split_name}: {labels}"
 
     def test_both_labels_present_in_train(self) -> None:
-        ds = create_debug_probe_dataset(n_train=100, n_eval_families=30)
+        ds = create_debug_probe_dataset(n_train=100, n_eval_families=30).dataset
         labels = set(ds["train"]["label"])
         assert labels == {0, 1}, f"Expected {{0, 1}}, got {labels}"
 
     def test_messages_are_nonempty(self) -> None:
-        ds = create_debug_probe_dataset(n_train=20, n_eval_families=10)
+        ds = create_debug_probe_dataset(n_train=20, n_eval_families=10).dataset
         for sample in ds["train"]:
             messages = sample["messages"]
             assert isinstance(messages, list)
@@ -296,13 +298,13 @@ class TestCreateDebugProbeDataset:
             assert all(isinstance(msg, dict) and "role" in msg and "content" in msg for msg in messages)
 
     def test_sample_counts(self) -> None:
-        ds = create_debug_probe_dataset(n_train=42, n_eval_families=13)
+        ds = create_debug_probe_dataset(n_train=42, n_eval_families=13).dataset
         assert len(ds["train"]) == 42
         assert len(ds["valid"]) == 39  # 13 families * 3 code types
 
     def test_deterministic_with_seed(self) -> None:
-        ds1 = create_debug_probe_dataset(n_train=20, n_eval_families=10, seed=123)
-        ds2 = create_debug_probe_dataset(n_train=20, n_eval_families=10, seed=123)
+        ds1 = create_debug_probe_dataset(n_train=20, n_eval_families=10, seed=123).dataset
+        ds2 = create_debug_probe_dataset(n_train=20, n_eval_families=10, seed=123).dataset
 
         for split in ("train", "valid"):
             for idx in range(len(ds1[split])):
@@ -310,7 +312,7 @@ class TestCreateDebugProbeDataset:
                 assert ds1[split][idx]["messages"] == ds2[split][idx]["messages"]
 
     def test_eval_only_mode(self) -> None:
-        ds = create_debug_probe_dataset(n_train=20, n_eval_families=15, use_eval_only_split=True)
+        ds = create_debug_probe_dataset(n_train=20, n_eval_families=15, use_eval_only_split=True).dataset
         assert "train" in ds
         assert "valid" in ds
         assert len(ds["train"]) + len(ds["valid"]) == 45  # 15 families * 3
@@ -321,14 +323,14 @@ class TestCreateDebugProbeDataset:
             n_eval_families=15,
             use_eval_only_split=True,
             code_type_filter=["original"],
-        )
+        ).dataset
         for split in ("train", "valid"):
             for code_type in ds[split]["code_type"]:
                 assert code_type == "original"
 
     def test_backward_compat_default_mode(self) -> None:
         """Regression guard: default params still produce two-prefix train/valid layout."""
-        ds = create_debug_probe_dataset(n_train=20, n_eval_families=10)
+        ds = create_debug_probe_dataset(n_train=20, n_eval_families=10).dataset
         assert "train" in ds
         assert "valid" in ds
         # Default mode: two-prefix, train has n_train records

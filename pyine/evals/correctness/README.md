@@ -210,6 +210,12 @@ Higher scores = higher confidence the output is correct (should be accepted);
 `get_verification_cost_unit()` returns the unit label for costs (e.g. `'tokens'`, `'FLOPs'`,
 `'turns'`), or `None` when the scorer does not report costs.
 
+Three implementations exist:
+
+- **`ProbeScorer`** and **`LLMClassifierScorer`** (in `scorers.py`) — trained model adapters (see below).
+- **`PromptedLLMGuardrailScorer`** (in `pyine.guardrails.prompted_llm`) — inference-only scorer
+  using a prompted LLM judge (see below).
+
 ## DataModule
 
 `CorrectnessDataModule` wraps LMDB loading and split construction behind the standard Lightning
@@ -262,6 +268,14 @@ at the configured layer, runs the probe, and applies sigmoid to produce scores.
 forwards through the classifier, and extracts the positive class probability via softmax.
 
 Both scorers receive `max_seq_length` and `text_field` from the training/eval configs.
+
+**`PromptedLLMGuardrailScorer`** (`pyine.guardrails.prompted_llm.scorer`): inference-only scorer
+that uses a LangChain chain (`prompt | model | parser`) to ask an LLM to judge whether a model's
+prediction is correct. Returns continuous confidence scores (0–1) and tracks token costs via
+`CaptureLLMHandler`. Requires no training step — the scorer is built directly from a
+`PromptedLLMGuardrailConfig` specifying an `LLMProviderConfig` (supports OpenAI, vLLM, DeepSeek).
+Has a standalone evaluation app (`pyine.apps.guardrail_eval.prompted_llm_eval`) with Hydra
+experiment configs for each provider.
 
 ## Multi-Type Evaluation
 

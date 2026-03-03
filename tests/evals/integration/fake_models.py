@@ -122,6 +122,30 @@ class InverseOracleGuardrailScorer:
         return "tokens"
 
 
+class FakePromptedLLMScorer:
+    """Fake prompted LLM scorer for integration testing.
+
+    Behaves like an oracle but reports metadata consistent with a prompted LLM
+    guardrail. Uses a fixed verification cost of ~150 tokens per call to mimic
+    typical LLM token usage.
+    """
+
+    def score_records(
+        self,
+        records: list[correctness_types.EvalRecord],
+    ) -> correctness_types.ScoringResult:
+        return correctness_types.ScoringResult(
+            scores=[1.0 if rec.label else 0.0 for rec in records],
+            verification_costs=[150.0] * len(records),
+        )
+
+    def get_metadata(self) -> dict[str, typing.Any]:
+        return {"scorer_type": "prompted_llm", "name": "fake_prompted_llm"}
+
+    def get_verification_cost_unit(self) -> str | None:
+        return "tokens"
+
+
 class RandomGuardrailScorer:
     """Returns uniform random scores in [0, 1] (seeded, stateful RNG).
 

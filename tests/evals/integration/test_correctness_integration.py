@@ -220,3 +220,54 @@ class TestCorrectnessMultiReplica:
         # flat dict should include bootstrap CI keys
         flat = agg.to_flat_dict()
         assert "auroc/bootstrap_ci_lower" in flat
+
+
+class TestCorrectnessPromptedLLMScorer:
+    """Integration tests for the FakePromptedLLMScorer through the full eval pipeline."""
+
+    @pytest.mark.asyncio
+    async def test_prompted_llm_scorer_produces_valid_metrics(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        correctness_eval_records: tuple[
+            list[correctness_types.EvalRecord],
+            list[correctness_types.EvalRecord],
+        ],
+    ) -> None:
+        """Run through full eval pipeline and verify AggregatedResult structure."""
+        valid_records, test_records = correctness_eval_records
+        dm = integration_conftest.build_mock_correctness_datamodule(monkeypatch, valid_records, test_records)
+        result = await _run_scorer(fake_models.FakePromptedLLMScorer(), dm)
+        agg = result.aggregated
+        single_run = agg.per_run[0]
+        # FakePromptedLLMScorer behaves like an oracle, so expect perfect AUROC
+        assert single_run.threshold_free.auroc == pytest.approx(1.0)
+        assert single_run.threshold_free.average_precision == pytest.approx(1.0)
+        # Verify the flat dict has all expected keys
+        flat = agg.to_flat_dict()
+        assert "auroc/mean" in flat
+        assert "sample_count" in flat
+        assert "record_count" in flat
+
+    @pytest.mark.asyncio
+    async def test_prompted_llm_scorer_cost_unit_is_tokens(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        correctness_eval_records: tuple[
+            list[correctness_types.EvalRecord],
+            list[correctness_types.EvalRecord],
+        ],
+    ) -> None:
+        """Verify cost_unit in VerificationCostStats is 'tokens'."""
+        valid_records, test_records = correctness_eval_records
+        dm = integration_conftest.build_mock_correctness_datamodule(monkeypatch, valid_records, test_records)
+        result = await _run_scorer(fake_models.FakePromptedLLMScorer(), dm)
+        single_run = result.aggregated.per_run[0]
+        assert single_run.verification_cost_stats is not None
+        for target_fpr in [0.05, 0.1]:
+            cost_stats = single_run.verification_cost_stats[target_fpr]
+            assert cost_stats.cost_unit == "tokens"
+            # FakePromptedLLMScorer uses 150.0 per record, 60 records total
+            assert cost_stats.total_cost == pytest.approx(9000.0)  # 60 x 150
+            assert cost_stats.mean_cost_per_record == pytest.approx(150.0)
+            assert cost_stats.std_cost_per_record == pytest.approx(0.0)

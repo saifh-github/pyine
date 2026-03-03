@@ -1,0 +1,44 @@
+# @package _global_
+#
+# Prompted LLM guardrail evaluation: Local open-source model via vLLM
+#
+# Usage:
+#   # Step 1: Start vLLM server (separate terminal)
+#   uv run python scripts/vllm_eval/vllm_server.py \
+#       --model meta-llama/Llama-3.1-8B-Instruct --port 8000
+#
+#   # Step 2: Run evaluation against local server
+#   python -m pyine.apps.guardrail_eval.prompted_llm_eval \
+#       +experiment=guardrail/prompted_llm_eval_vllm
+
+defaults:
+  - _self_
+
+runtime:
+  exp_name: prompted_llm_guardrail_eval_local
+  seed: 42
+
+config:
+  guardrail_config:
+    llm_provider:
+      provider: vllm
+      model_kwargs:
+        model: meta-llama/Llama-3.1-8B-Instruct   # must match vLLM server --model
+        temperature: 0.0
+        base_url: http://localhost:8000/v1           # vLLM server address
+      # No rate_limiter_config needed for local server (no API quotas)
+      # No with_retry_config needed (local server is reliable)
+    prompt_name: guardrail/correctness_judge
+    prompt_version: with_reasoning
+    max_workers: 8     # match GPU throughput
+    default_score_on_error: 0.5
+
+  evals_config:
+    datamodule_config:
+      lmdb_paths:
+        - ${oc.env:PYINE_DATA_ROOT}/eval_exports/my_model_eval.lmdb
+      split_config:
+        split_source: TACO
+    target_fpr_values: [0.001, 0.01, 0.05]
+
+  use_wandb_logging: false

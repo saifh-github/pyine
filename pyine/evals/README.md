@@ -23,12 +23,17 @@ subpackages.
  (HuggingFace)       (LangChain Runnable)     (GuardrailScorer)
     │                     │                      │
     └──────────┬──────────┘                      │
+               │                        ┌────────┼────────┐
+        K attempts per sample           │        │        │
+               │                     Probes  Classifiers  Prompted LLM
+        OutcomeEvaluator                │        │        │
+     (hard match, soft match,           └────────┼────────┘
+      optional LLM grader)                       │
+               │                     load from LMDB exports
                │                                 │
-        K attempts per sample             load from LMDB exports
+               │                     split ──► score ──► calibrate
                │                                 │
-        OutcomeEvaluator              split ──► score ──► calibrate
-     (hard match, soft match,                    │
-      optional LLM grader)           compute threshold-free + thresholded
+               │                     compute threshold-free + thresholded
                │                           + sample-level metrics
                │                                 │
                │                          aggregate across R runs
@@ -112,17 +117,21 @@ pyine/evals/
 │   ├── reeval.py             # reevaluate_from_lmdb
 │   └── utils.py              # SampleEval, CodeExecEvalArtifact, CodeExecEvalResult, metric computation
 │
-└── correctness/              # CORRECTNESS task
-    ├── _impl.py              # evaluate_guardrail_replicas / evaluate_guardrail_types: orchestration
-    ├── configs.py            # CorrectnessEvalsConfig, RecordCategoryConfig, hydra-zen registration
-    ├── datamodule.py         # CorrectnessDataModule: lifecycle, split access, HF DatasetDict adapter
-    ├── datamodule_configs.py # CorrectnessDataModuleConfig: LMDB paths, label type, split config
-    ├── scorers.py            # ProbeScorer, LLMClassifierScorer: GuardrailScorer adapters
-    ├── splits.py             # GuardrailSplits, build_guardrail_splits() (standalone, importable)
-    ├── data_loading.py       # LMDB reading -> list[EvalRecord]
-    ├── calibration.py        # FPR-constrained threshold selection
-    ├── metrics.py            # threshold-free, thresholded, sample-level, bootstrap CI computation
-    └── types.py              # LabelType, GuardrailSplitConfig, EvalRecord, GuardrailScorer, etc.
+├── correctness/              # CORRECTNESS task
+│   ├── _impl.py              # evaluate_guardrail_replicas / evaluate_guardrail_types: orchestration
+│   ├── configs.py            # CorrectnessEvalsConfig, RecordCategoryConfig, hydra-zen registration
+│   ├── datamodule.py         # CorrectnessDataModule: lifecycle, split access, HF DatasetDict adapter
+│   ├── datamodule_configs.py # CorrectnessDataModuleConfig: LMDB paths, label type, split config
+│   ├── scorers.py            # ProbeScorer, LLMClassifierScorer: GuardrailScorer adapters
+│   ├── splits.py             # GuardrailSplits, build_guardrail_splits() (standalone, importable)
+│   ├── data_loading.py       # LMDB reading -> list[EvalRecord]
+│   ├── calibration.py        # FPR-constrained threshold selection
+│   ├── metrics.py            # threshold-free, thresholded, sample-level, bootstrap CI computation
+│   └── types.py              # LabelType, GuardrailSplitConfig, EvalRecord, GuardrailScorer, etc.
+│
+└── (external scorer: pyine.guardrails.prompted_llm)
+    # PromptedLLMGuardrailScorer: inference-only GuardrailScorer using a prompted LLM judge.
+    # Has a standalone eval app: pyine.apps.guardrail_eval.prompted_llm_eval
 ```
 
 ## Metrics Reference

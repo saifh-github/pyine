@@ -1,0 +1,44 @@
+# @package _global_
+#
+# Prompted LLM guardrail evaluation: OpenAI API (e.g. GPT-4o-mini)
+#
+# Usage:
+#   python -m pyine.apps.guardrail_eval.prompted_llm_eval \
+#       +experiment=guardrail/prompted_llm_eval_openai
+
+defaults:
+  - _self_
+
+runtime:
+  exp_name: prompted_llm_guardrail_eval
+  seed: 42
+
+config:
+  guardrail_config:
+    llm_provider:
+      provider: openai
+      model_kwargs:
+        model: gpt-4o-mini
+        temperature: 0.0
+      rate_limiter_config:
+        requests_per_second: 50
+        max_bucket_size: 50
+      # NOTE: with_retry_config is omitted from YAML because retry_if_exception_type
+      # requires actual Python exception classes, not strings. Set it programmatically
+      # using get_default_openai_provider_retry_config(), or register a structured
+      # Hydra config that handles the string-to-class conversion.
+      # with_retry_config: ...
+    prompt_name: guardrail/correctness_judge
+    prompt_version: with_reasoning
+    max_workers: 10
+    default_score_on_error: 0.5
+
+  evals_config:
+    datamodule_config:
+      lmdb_paths:
+        - ${oc.env:PYINE_DATA_ROOT}/eval_exports/my_model_eval.lmdb
+      split_config:
+        split_source: TACO
+    target_fpr_values: [0.001, 0.01, 0.05]
+
+  use_wandb_logging: false
