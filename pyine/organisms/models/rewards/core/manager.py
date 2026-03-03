@@ -15,10 +15,10 @@ import pyine.organisms.datamodules.samples
 import pyine.organisms.models.rewards.core.aggregator as reward_aggregator
 import pyine.organisms.models.rewards.core.configs as reward_configs
 import pyine.organisms.models.rewards.core.difficulty as difficulty_module
-import pyine.organisms.models.rewards.core.parser as reward_parser
 import pyine.organisms.models.rewards.core.registry as reward_registry
 import pyine.organisms.models.rewards.core.types as reward_types
 import pyine.organisms.models.rewards.core.verbosity_scaling as verbosity_scaling
+import pyine.utils.code.difficulty as difficulty_utils
 import pyine.utils.distrib
 import pyine.utils.parsing
 import pyine.utils.stats as stats_utils
@@ -62,7 +62,7 @@ class RewardManager:
         self,
         config: reward_configs.RewardManagerConfig,
         *,
-        parser: reward_types.OutputParser | None = None,
+        parser: pyine.utils.parsing.OutputParser | None = None,
         logger: reward_types.RewardLogger | None = None,
         registry: reward_registry.RewardRegistry | None = None,
         tokenizer: transformers.PreTrainedTokenizer | transformers.PreTrainedTokenizerFast | None = None,
@@ -210,7 +210,7 @@ class RewardManager:
         needs_difficulty_tokens = False
         if self._config.difficulty is not None and self._config.difficulty.enabled:
             all_sources = {self._config.difficulty.primary_source} | set(self._config.difficulty.secondary_sources)
-            needs_difficulty_tokens = bool(all_sources & difficulty_module.TOKEN_SOURCES)
+            needs_difficulty_tokens = bool(all_sources & difficulty_utils.TOKEN_SOURCES)
         if not needs_parsing_tokens and not needs_verbosity_tokens and not needs_difficulty_tokens:
             return None
         if tokenizer is not None:
@@ -249,10 +249,8 @@ class RewardManager:
         explicitly provided). When a custom parser is used, the tag configuration may not apply,
         so no warning is emitted to avoid false positives.
         """
-        import pyine.organisms.models.rewards.core.parser as reward_parser
-
         parser_final_tag: str | None = None
-        if isinstance(self._parser, reward_parser.TagsOutputParser):
+        if isinstance(self._parser, pyine.utils.parsing.TagsOutputParser):
             parser_final_tag = self._parser.final_tag
         # note: we intentionally don't fall back to config.parsing.final_tag when a custom
         # parser is provided, as the custom parser may not use tag-based extraction at all
@@ -1142,22 +1140,22 @@ class RewardManager:
 
     def _resolve_parser(
         self,
-        parser: reward_types.OutputParser | None,
-    ) -> reward_types.OutputParser | None:
+        parser: pyine.utils.parsing.OutputParser | None,
+    ) -> pyine.utils.parsing.OutputParser | None:
         """Resolve the parser to use (explicit override wins over config)."""
         if parser is not None:
             return parser
         if self._config.parsing is None:
             return None
         if self._config.parsing.mode == "tags":
-            return reward_parser.TagsOutputParser(self._config.parsing)
+            return pyine.utils.parsing.TagsOutputParser(self._config.parsing)
         raise ValueError(f"unsupported parsing mode: {self._config.parsing.mode}")
 
     def maybe_parse(
         self,
         prompt: str,
         model_output: str,
-    ) -> reward_types.ParsedOutput | None:
+    ) -> pyine.utils.parsing.ParsedOutput | None:
         """Parse model output using this manager's configured parser.
 
         This is a low-level utility for cases where you need just the parsed output without

@@ -160,6 +160,7 @@ def prepare_generation_prompts_from_dataset(
     tokenizer: transformers.PreTrainedTokenizer,
     max_seq_len: int | None,
     prompt_text_key: str = "text",
+    messages_key: str = "messages",
     keep_extra_fields: list[str] | bool | None = None,
     keep_in_memory: bool = False,
 ) -> hf_datasets.Dataset:
@@ -170,6 +171,7 @@ def prepare_generation_prompts_from_dataset(
         tokenizer: Tokenizer to use for encoding text.
         max_seq_len: Maximum sequence length for truncation.
         prompt_text_key: Key name for the prompt text column (with chat formatting already applied).
+        messages_key: Key name for the messages column in the input dataset.
         keep_extra_fields: Additional fields to preserve from the input dataset. Can be:
             - A list of field names to keep;
             - True to keep all fields (except messages_key); or
@@ -190,6 +192,7 @@ def prepare_generation_prompts_from_dataset(
     templated_prompts_ds: hf_datasets.Dataset = apply_model_template_to_messages(
         hf_messages_ds=prompts_ds,
         tokenizer=tokenizer,
+        messages_key=messages_key,
         keep_original_data=bool(forward_all_fields or keep_extra_fields_list),
         apply_chat_template_kwargs={
             "tokenize": False,

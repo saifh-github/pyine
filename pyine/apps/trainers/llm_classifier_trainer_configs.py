@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import logging
+import pathlib  # noqa: TC003
 import typing
 
 import pydantic
 import torch
 import transformers
-
-if typing.TYPE_CHECKING:
-    import pathlib
 
 import pyine.apps.trainers.common as common
 import pyine.configs.base
@@ -18,6 +16,8 @@ import pyine.configs.schemas
 import pyine.configs.searchpath
 import pyine.configs.utils
 import pyine.evals.common
+import pyine.evals.configs
+import pyine.evals.correctness.datamodule_configs  # noqa: TC001
 import pyine.guardrails.data.datamodule_configs  # noqa: TC001
 import pyine.utils.reprod
 import pyine.utils.transformers
@@ -32,20 +32,29 @@ class LLMClassifierTrainerAppMainConfig(common.AppMainConfig, common.ModelTokeni
     auto_model_config, lora_config, etc.) and overrides get_model() to use
     AutoModelForSequenceClassification instead of AutoModelForCausalLM.
 
-    Embeds ProbeDataModuleConfig for LMDB data loading — same config used by the
-    probe trainer. All LMDB fields (lmdb_path, label_metric_key, split config,
-    code_type_filter, label_balance, etc.) live in datamodule_config.
+    Embeds ProbeDataModuleConfig (or CorrectnessDataModuleConfig) for LMDB data loading. Data is
+    loaded as structured message lists; the trainer auto-detects chat template support on the
+    tokenizer. If a ``chat_template`` is defined (chat-tuned models), it is applied; otherwise
+    (encoder models like ModernBERT, DeBERTa), messages are concatenated into role-tagged plain text.
     """
 
-    # --- Override: evals not needed for classifier training ---
+    # --- Override: optional correctness benchmarking after classifier training ---
     evals_config: pyine.evals.common.BaseEvalsConfig | None = None  # type: ignore[assignment]
-    """Not used for classifier training. Kept for AppMainConfig compatibility."""
+    """Optional correctness eval config for post-training benchmarking.
 
-    # --- Override: use ProbeDataModuleConfig (same as probe trainer) ---
+    When set (e.g. via ``+evals_config=correctness_base`` on the hydra command line), the trained
+    classifier is evaluated as a guardrail scorer on the correctness pipeline after training completes.
+    """
+
+    # --- Override: accept ProbeDataModuleConfig or CorrectnessDataModuleConfig ---
     datamodule_config: pydantic.SerializeAsAny[  # pyright: ignore[reportIncompatibleVariableOverride]
         pyine.guardrails.data.datamodule_configs.ProbeDataModuleConfig
+        | pyine.evals.correctness.datamodule_configs.CorrectnessDataModuleConfig
     ] = ...  # type: ignore[assignment]
-    """Probe data configuration (LMDB source, splitting, filtering, label balancing)."""
+    """Data configuration (LMDB source, splitting, filtering, label balancing).
+
+    Accepts ProbeDataModuleConfig or CorrectnessDataModuleConfig.
+    """
 
     # --- HuggingFace Training Arguments ---
     training_args_config: pydantic.SerializeAsAny[pyine.utils.transformers.TrainingArgsConfig] = ...  # type: ignore[assignment]
@@ -71,6 +80,13 @@ class LLMClassifierTrainerAppMainConfig(common.AppMainConfig, common.ModelTokeni
     None = use tokenizer default (usually 'right'). 'left' preserves the completion
     (at the end) at the cost of dropping prompt tokens. This is applied after
     get_tokenizer() and overrides its settings.
+    """
+
+    # --- Checkpoint loading (eval-only mode) ---
+    classifier_checkpoint_path: pathlib.Path | None = None
+    """Path to a saved classifier checkpoint directory (as written by ``Trainer.save_model()``).
+
+    Used in eval-only mode (``skip_training=True``) to load a pretrained model without re-training.
     """
 
     # --- Output ---
@@ -116,7 +132,7 @@ class LLMClassifierTrainerAppMainConfig(common.AppMainConfig, common.ModelTokeni
         Overrides the base class to use the correct AutoModel class for encoder
         classification. Handles attention implementation fallback and LoRA.
         """
-        resolved_config = common._resolve_attn_implementation(self.auto_model_config)  # pyright: ignore[reportPrivateUsage]
+        resolved_config = common.resolve_attn_implementation(self.auto_model_config)
         model_kwargs: dict[str, typing.Any] = {
             "torch_dtype": self.target_dtype,
             "device_map": self.device_map,
@@ -151,7 +167,8 @@ class LLMClassifierTrainerAppMainConfig(common.AppMainConfig, common.ModelTokeni
 
     @pydantic.model_validator(mode="after")
     def _validate_class_weight_with_label_balance(self) -> LLMClassifierTrainerAppMainConfig:
-        if self.class_weight_mode == "balanced" and self.datamodule_config.label_balance is not None:
+        label_balance = getattr(self.datamodule_config, "label_balance", None)
+        if self.class_weight_mode == "balanced" and label_balance is not None:
             import warnings
 
             warnings.warn(
@@ -231,7 +248,22 @@ def _get_app_configs(
             "hydra_convert": "object",
         },
     )
-
+    # --- Correctness datamodule config ---
+    correctness_datamodule_config = pyine.configs.utils.make_config_description(
+        pyine.evals.correctness.datamodule_configs.CorrectnessDataModuleConfig,
+        name="correctness_base",
+        group=f"{group}/datamodule_config",
+        description="Base correctness datamodule settings (LMDB eval records, splits, resampling).",
+        config={
+            "populate_full_signature": True,
+            "hydra_convert": "object",
+        },
+    )
+    # --- Correctness eval configs (registered so user can opt-in via hydra) ---
+    evals_configs = pyine.evals.configs.get_evals_configs(
+        eval_type=pyine.evals.common.EvalType.CORRECTNESS,
+        group=f"{group}/evals_config",
+    )
     # --- Main app config ---
     app_main_config = pyine.configs.utils.make_config_description(
         LLMClassifierTrainerAppMainConfig,
@@ -248,7 +280,7 @@ def _get_app_configs(
             ],
         },
     )
-    return [app_main_config, datamodule_config]
+    return [app_main_config, datamodule_config, correctness_datamodule_config, *evals_configs]
 
 
 def register_hydra_configs(
@@ -268,6 +300,7 @@ def register_hydra_configs(
         description="Entrypoint settings for the LLM classifier trainer app.",
         config={
             "populate_full_signature": True,
+            "skip_training": False,
             "hydra_defaults": [
                 "_self_",
                 {"config": "base"},

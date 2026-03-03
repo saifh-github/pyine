@@ -50,7 +50,7 @@ class SFTTrainerAppMainConfig(common.AppMainConfig, common.ModelTokenizerConfigB
         description="If set, the collator will cap sequence length to the min of this value or the model's cap.",
     )
     collator_pad_to_multiple_of: int | None = pydantic.Field(
-        default=None,  # 32,  # @@@@ TODO test speed with and without?
+        default=None,  # 32,  # TODO test speed with and without?
         description="If set, the collator will pad the sequence length to a multiple of this value.",
     )
     collator_batch_logging: bool = pydantic.Field(
@@ -157,8 +157,6 @@ def _get_trainer_args_configs(
             "hydra_convert": "object",
         },
     )
-    # TODO @@@@@@ add distrib trainer config with local_rank and ddp/fsdp stuff? or deepspeed/accelerate?
-    # TODO @@@@@@ add configs w/ debug settings? (and tokens/sec or tokens seen metrics?)
     train_default_config = pyine.configs.utils.make_config_description(
         pyine.utils.transformers.TrainingArgsConfig,
         name="train_default",
@@ -253,7 +251,7 @@ def _get_app_configs(
                 {"datamodule_config": "shortcuts_base"},
                 {"training_args_config": "base"},
                 # {"lora_config": "null"},  # left out here = deactivated (null)
-                {"evals_config": "base"},
+                {"evals_config": "code_exec_pass_at_k"},
             ],
         },
     )
@@ -348,7 +346,7 @@ def register_hydra_configs(
         common.async_hf_trainer_main_wrapper,
         name="entrypoint",
         group=None,
-        description="Entrypoint settings for the HuggingFace trainer app.",
+        description="Entrypoint settings for the HuggingFace SFT trainer app.",
         config={
             # -------------
             "populate_full_signature": True,
@@ -360,7 +358,7 @@ def register_hydra_configs(
             ],
         },
     )
-    store, base_configs = pyine.configs.base.get_base_store_and_configs("hf_trainer")
+    store, base_configs = pyine.configs.base.get_base_store_and_configs("hf_sft_trainer")
     app_configs = _get_app_configs(eval_type=eval_type, group="config")
     configs_to_register = [entrypoint_config, *app_configs]
     experiment_configs = _get_experiment_configs(
@@ -372,7 +370,7 @@ def register_hydra_configs(
     )
     configs_to_register.extend(experiment_configs)
     external_configs = pyine.configs.searchpath.SearchPathPlugin.get_external_configs(
-        app_name="hf_trainer",
+        app_name="hf_sft_trainer",
         eval_type=eval_type,
         entrypoint_config=entrypoint_config,
         app_configs=[*base_configs, *configs_to_register],
@@ -387,8 +385,7 @@ def register_hydra_configs(
 
 if __name__ == "__main__":
     pyine.configs.base.register_searchpath_plugin()
-    # TODO: if we ever have more than one eval type, add a selector based on launch args here
     pyine.configs.utils.print_experiment_configs(
         config_descriptions=register_hydra_configs(eval_type=pyine.evals.common.EvalType.CODE_EXEC),
-        app_name="hf_trainer",
+        app_name="hf_sft_trainer",
     )

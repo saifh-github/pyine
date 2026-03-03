@@ -58,8 +58,12 @@ def get_evals_configs(
     group: str,
 ) -> list[pyine.configs.schemas.ConfigDescription]:
     """Generates and returns evals configs for hydra zen storage."""
-    import pyine.evals.code_exec.configs
-
     if eval_type == EvalType.CODE_EXEC:
+        import pyine.evals.code_exec.configs
+
         return pyine.evals.code_exec.configs.get_evals_configs(group=group)
+    if eval_type == EvalType.CORRECTNESS:
+        import pyine.evals.correctness.configs
+
+        return pyine.evals.correctness.configs.get_evals_configs(group=group)
     raise NotImplementedError(f"evaluation type {eval_type} not implemented")

@@ -1,3 +1,4 @@
+import pydantic
 import pytest
 import pytest_mock
 
@@ -5,11 +6,41 @@ import pyine.configs.schemas
 import pyine.evals.common
 
 
+class TestPassAtKDefaults:
+    def test_to_generation_config_overrides_keys(self) -> None:
+        defaults = pyine.evals.common.PASS_AT_K_DEFAULTS
+        overrides = defaults.to_generation_config_overrides()
+        assert overrides == {
+            "num_attempts_per_sample": 10,
+            "eval_generation_max_new_tokens_override": 10_000,
+            "sampling_temperature_override": 0.2,
+            "sampling_top_p_override": 0.95,
+        }
+
+    def test_frozen(self) -> None:
+        defaults = pyine.evals.common.PASS_AT_K_DEFAULTS
+        with pytest.raises(pydantic.ValidationError):
+            defaults.temperature = 0.5  # type: ignore[misc]
+
+    def test_for_pass_at_k_uses_defaults(self) -> None:
+        defaults = pyine.evals.common.PASS_AT_K_DEFAULTS
+        config = pyine.evals.common.GenerationEvalsConfig.for_pass_at_k()
+        assert config.num_attempts_per_sample == defaults.num_attempts_per_sample
+        assert config.sampling_temperature_override == defaults.temperature
+        assert config.sampling_top_p_override == defaults.top_p
+        assert config.eval_generation_max_new_tokens_override == defaults.max_new_tokens
+
+
 class TestEvalType:
     def test_code_exec_enum(self) -> None:
         assert hasattr(pyine.evals.common.EvalType, "CODE_EXEC")
         assert pyine.evals.common.EvalType.CODE_EXEC == "code_exec"
         assert str(pyine.evals.common.EvalType.CODE_EXEC) == "code_exec"
+
+    def test_correctness_enum(self) -> None:
+        assert hasattr(pyine.evals.common.EvalType, "CORRECTNESS")
+        assert pyine.evals.common.EvalType.CORRECTNESS == "correctness"
+        assert str(pyine.evals.common.EvalType.CORRECTNESS) == "correctness"
 
 
 class TestBaseEvalsConfig:
@@ -83,7 +114,7 @@ class TestBaseEvalsConfig:
     ) -> None:
         config = pyine.evals.common.BaseEvalsConfig()
         mock_wandb_run = mocker.MagicMock()
-        config.define_metrics_for_wandb(wandb_run=mock_wandb_run, prefix="test")
+        config.define_metrics_for_wandb(wandb_run=mock_wandb_run, eval_subset_names=["test"])
 
     def test_define_metrics_for_wandb_raises_when_eval_type_set(
         self,
@@ -92,7 +123,7 @@ class TestBaseEvalsConfig:
         config = pyine.evals.common.BaseEvalsConfig(eval_type=pyine.evals.common.EvalType.CODE_EXEC)
         mock_wandb_run = mocker.MagicMock()
         with pytest.raises(NotImplementedError, match="evaluation type code_exec not implemented"):
-            config.define_metrics_for_wandb(wandb_run=mock_wandb_run)
+            config.define_metrics_for_wandb(wandb_run=mock_wandb_run, eval_subset_names=["test"])
 
     def test_log_metrics_returns_none_when_eval_type_none(
         self,
@@ -142,4 +173,46 @@ class TestBaseEvalsConfig:
                 wandb_run=mock_wandb_run,
                 subset_name="test",
                 subset_results={},
+            )
+
+    @pytest.mark.asyncio
+    async def test_evaluate_wrapped_model_returns_empty_dict_when_eval_type_none(
+        self,
+        mocker: pytest_mock.MockerFixture,
+    ) -> None:
+        config = pyine.evals.common.BaseEvalsConfig()
+        mock_dm = mocker.MagicMock()
+        result = await config.evaluate_wrapped_model(
+            wrapped_model=[mocker.MagicMock()],
+            datamodule=mock_dm,
+            eval_subset_name="valid",
+        )
+        assert result.metrics == {}
+
+    @pytest.mark.asyncio
+    async def test_evaluate_wrapped_model_accepts_single_model(
+        self,
+        mocker: pytest_mock.MockerFixture,
+    ) -> None:
+        config = pyine.evals.common.BaseEvalsConfig()
+        mock_dm = mocker.MagicMock()
+        result = await config.evaluate_wrapped_model(
+            wrapped_model=mocker.MagicMock(),
+            datamodule=mock_dm,
+            eval_subset_name="valid",
+        )
+        assert result.metrics == {}
+
+    @pytest.mark.asyncio
+    async def test_evaluate_wrapped_model_raises_when_eval_type_set(
+        self,
+        mocker: pytest_mock.MockerFixture,
+    ) -> None:
+        config = pyine.evals.common.BaseEvalsConfig(eval_type=pyine.evals.common.EvalType.CODE_EXEC)
+        mock_dm = mocker.MagicMock()
+        with pytest.raises(NotImplementedError, match="evaluation type code_exec not implemented"):
+            await config.evaluate_wrapped_model(
+                wrapped_model=[mocker.MagicMock()],
+                datamodule=mock_dm,
+                eval_subset_name="valid",
             )

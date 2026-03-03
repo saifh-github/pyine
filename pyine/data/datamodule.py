@@ -100,106 +100,61 @@ class BaseDataModuleConfig(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
     """Pydantic model configuration (freezes the dataclass)."""
 
-    datamodule_class_path: typing.Annotated[
-        pydantic.StrictStr,
-        pydantic.Field(
-            min_length=1,
-            description="Dotted import path to the target datamodule class, e.g. 'pkg.mod.MyImpl'.",
-        ),
-    ]
-    datamodule_name: typing.Annotated[
-        pydantic.StrictStr | None,
-        pydantic.Field(
-            default=None,
-            min_length=1,
-            description="Name of the datamodule (for debug/logging); will be derived from class name if needed.",
-        ),
-    ]
+    datamodule_class_path: pydantic.StrictStr = pydantic.Field(min_length=1)
+    """Dotted import path to the target datamodule class, e.g. ``'pkg.mod.MyImpl'``."""
+
+    datamodule_name: pydantic.StrictStr | None = pydantic.Field(default=None, min_length=1)
+    """Name of the datamodule (for debug/logging); derived from the class name if not provided."""
 
     # --------------- DATA PARSER (torch.utils.data.Dataset-like) CONFIGURATION ---------------
 
-    default_dataparser_config: typing.Annotated[
-        pydantic.SerializeAsAny[BaseDataParserConfig],
-        pydantic.Field(
-            # note: no default provided here, so it MUST be specified
-            description="Default configuration for the data parsers whose specific settings may be overridden.",
-        ),
-    ]
-    dataparser_config_overrides: typing.Annotated[
-        dict[SubsetNameType, dict[str, typing.Any]],
-        pydantic.Field(
-            # no overrides by default, meaning all subsets will use the default config
-            default_factory=dict,  # lambda: typing.cast(dict[SubsetNameType, dict[str, typing.Any]], {}),
-            description="Data parser configuration dictionary with subset-specific default config overrides.",
-        ),
-    ]
+    default_dataparser_config: pydantic.SerializeAsAny[BaseDataParserConfig]
+    """Default configuration for the data parsers whose specific settings may be overridden."""
+
+    dataparser_config_overrides: dict[SubsetNameType, dict[str, typing.Any]] = pydantic.Field(
+        default_factory=dict,
+    )
+    """Per-subset overrides for the default data parser configuration."""
 
     # --------------- DATA LOADER (torch.utils.data.DataLoader-like) CONFIGURATION ---------------
 
-    default_dataloader_config: typing.Annotated[
-        pydantic.SerializeAsAny[BaseDataLoaderConfig],
-        pydantic.Field(
-            default=BaseDataLoaderConfig(
-                class_path=pyine.utils.portability.get_fully_qualified_name(torch.utils.data.DataLoader),
-                params=BaseDataLoaderParamsConfig(),
-            ),
-            validate_default=True,
-            description="Default configuration for the data loaders whose specific settings may be overridden.",
+    default_dataloader_config: pydantic.SerializeAsAny[BaseDataLoaderConfig] = pydantic.Field(
+        default=BaseDataLoaderConfig(
+            class_path=pyine.utils.portability.get_fully_qualified_name(torch.utils.data.DataLoader),
+            params=BaseDataLoaderParamsConfig(),
         ),
-    ]
-    dataloader_config_overrides: typing.Annotated[
-        dict[LoaderNameType, dict[str, typing.Any]],
-        pydantic.Field(
-            # no overrides by default, meaning all subsets will use the default config
-            default_factory=dict,  # lambda: typing.cast(dict[LoaderNameType, dict[str, typing.Any]], {}),
-            description="Data loader configuration dictionary with subset-specific default config overrides.",
-        ),
-    ]
+        validate_default=True,
+    )
+    """Default configuration for the data loaders whose specific settings may be overridden."""
+
+    dataloader_config_overrides: dict[LoaderNameType, dict[str, typing.Any]] = pydantic.Field(
+        default_factory=dict,
+    )
+    """Per-subset overrides for the default data loader configuration."""
 
     # --------------- MISC SETTINGS CONFIGURATION ---------------
 
-    split_seed: typing.Annotated[
-        int,
-        pydantic.Field(
-            default=0,
-            description="Seed used to initialize internal RNGs for dataset splits.",
-        ),
-    ]
-    subset_names: typing.Annotated[
-        tuple[SubsetNameType, ...],
-        pydantic.Field(
-            default=("train", "valid", "test"),
-            min_length=1,
-            description="Data subset names that the data module supports.",
-        ),
-    ]
-    train_subset_names: typing.Annotated[
-        tuple[SubsetNameType, ...],
-        pydantic.Field(
-            default=("train",),
-            min_length=1,
-            description="Subset names that are meant for model training.",
-        ),
-    ]
-    valid_subset_names: typing.Annotated[
-        tuple[SubsetNameType, ...],
-        pydantic.Field(
-            default=("valid",),
-            min_length=1,
-            description="Subset names that are meant for model validation.",
-        ),
-    ]
-    eval_subset_names: typing.Annotated[
-        tuple[SubsetNameType, ...],
-        pydantic.Field(
-            default=("valid",),
-            min_length=1,
-            description="Subset names that are meant for model evaluations.",
-            # Note: should be kept to 'valid' instead of 'test' until experiments are done, and all
-            #       hyperparameters are permanently FIXED; if this sounds strange to you, refer to:
-            #          https://en.wikipedia.org/wiki/Training,_validation,_and_test_data_sets
-        ),
-    ]
+    split_seed: int = 0
+    """Seed used to initialize internal RNGs for dataset splits."""
+
+    subset_names: tuple[SubsetNameType, ...] = pydantic.Field(
+        default=("train", "valid", "test"),
+        min_length=1,
+    )
+    """Data subset names that the datamodule supports."""
+
+    train_subset_names: tuple[SubsetNameType, ...] = pydantic.Field(default=("train",), min_length=1)
+    """Subset names used for model training."""
+
+    valid_subset_names: tuple[SubsetNameType, ...] = pydantic.Field(default=("valid",), min_length=1)
+    """Subset names used for model validation."""
+
+    eval_subset_names: tuple[SubsetNameType, ...] = pydantic.Field(default=("valid",), min_length=1)
+    """Subset names used for model evaluations (i.e. benchmarking).
+
+    Defaults to ``("valid",)`` (not ``"test"``) until experiments are done and all hyperparameters
+    are permanently fixed. See: https://en.wikipedia.org/wiki/Training,_validation,_and_test_data_sets
+    """
 
     @property
     def loader_names(self) -> tuple[LoaderNameType, ...]:

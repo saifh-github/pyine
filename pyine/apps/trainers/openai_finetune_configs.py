@@ -193,7 +193,7 @@ def _get_app_configs(
                 {"datamodule_config": "shortcuts_base"},
                 {"openai_client_config": "default"},
                 {"openai_finetuner_config": "openai_gpt-4.1-mini_default_sft"},
-                {"evals_config": "base"},
+                {"evals_config": "code_exec_pass_at_k"},
             ],
         },
     )

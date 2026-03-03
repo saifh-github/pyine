@@ -8,7 +8,9 @@ import pyine.organisms.models.rewards.core.logging
 import pyine.organisms.models.rewards.core.manager
 import pyine.organisms.models.rewards.core.registry
 import pyine.organisms.models.rewards.core.types
+import pyine.utils.code.difficulty
 import pyine.utils.distrib
+import pyine.utils.parsing
 import tests.organisms.models.rewards.conftest as rewards_conftest
 
 
@@ -166,7 +168,7 @@ class TestRewardManager:
         def factory(
             spec: pyine.organisms.models.rewards.core.configs.RewardTermSpec,
             *,
-            parser: pyine.organisms.models.rewards.core.types.OutputParser | None,
+            parser: pyine.utils.parsing.OutputParser | None,
         ) -> pyine.organisms.models.rewards.core.types.RewardTerm:
             del spec
             del parser
@@ -279,7 +281,7 @@ class TestRewardManager:
         def factory(
             spec: pyine.organisms.models.rewards.core.configs.RewardTermSpec,
             *,
-            parser: pyine.organisms.models.rewards.core.types.OutputParser | None,
+            parser: pyine.utils.parsing.OutputParser | None,
         ) -> pyine.organisms.models.rewards.core.types.RewardTerm:
             del spec
             del parser
@@ -333,7 +335,7 @@ class TestRewardManager:
         def factory(
             spec: pyine.organisms.models.rewards.core.configs.RewardTermSpec,
             *,
-            parser: pyine.organisms.models.rewards.core.types.OutputParser | None,
+            parser: pyine.utils.parsing.OutputParser | None,
         ) -> pyine.organisms.models.rewards.core.types.RewardTerm:
             del spec
             del parser
@@ -421,7 +423,7 @@ class TestRewardManager:
                 )
             ],
             parsing=pyine.organisms.models.rewards.core.configs.ParsingConfig(fallback_policy="none"),
-            difficulty=pyine.organisms.models.rewards.core.configs.DifficultyConfig(
+            difficulty=pyine.utils.code.difficulty.DifficultyConfig(
                 enabled=True,
                 primary_source="trace_step_count",
             ),
@@ -489,7 +491,7 @@ class TestRewardManager:
         def factory(
             spec: pyine.organisms.models.rewards.core.configs.RewardTermSpec,
             *,
-            parser: pyine.organisms.models.rewards.core.types.OutputParser | None,
+            parser: pyine.utils.parsing.OutputParser | None,
         ) -> pyine.organisms.models.rewards.core.types.RewardTerm:
             del spec, parser
             return _SampleIndexAsFloatTerm()
@@ -783,7 +785,7 @@ class TestRewardManager:
         def factory(
             spec: pyine.organisms.models.rewards.core.configs.RewardTermSpec,
             *,
-            parser: pyine.organisms.models.rewards.core.types.OutputParser | None,
+            parser: pyine.utils.parsing.OutputParser | None,
         ) -> pyine.organisms.models.rewards.core.types.RewardTerm:
             del spec
             del parser
@@ -828,7 +830,7 @@ class TestRewardManager:
         def factory(
             spec: pyine.organisms.models.rewards.core.configs.RewardTermSpec,
             *,
-            parser: pyine.organisms.models.rewards.core.types.OutputParser | None,
+            parser: pyine.utils.parsing.OutputParser | None,
         ) -> pyine.organisms.models.rewards.core.types.RewardTerm:
             del spec
             del parser
@@ -925,7 +927,7 @@ class TestRewardManager:
         def factory(
             spec: pyine.organisms.models.rewards.core.configs.RewardTermSpec,
             *,
-            parser: pyine.organisms.models.rewards.core.types.OutputParser | None,
+            parser: pyine.utils.parsing.OutputParser | None,
         ) -> pyine.organisms.models.rewards.core.types.RewardTerm:
             del spec
             del parser
@@ -969,7 +971,7 @@ class TestRewardManager:
         def factory_value(
             spec: pyine.organisms.models.rewards.core.configs.RewardTermSpec,
             *,
-            parser: pyine.organisms.models.rewards.core.types.OutputParser | None,
+            parser: pyine.utils.parsing.OutputParser | None,
         ) -> pyine.organisms.models.rewards.core.types.RewardTerm:
             del spec
             del parser
@@ -978,7 +980,7 @@ class TestRewardManager:
         def factory_metric(
             spec: pyine.organisms.models.rewards.core.configs.RewardTermSpec,
             *,
-            parser: pyine.organisms.models.rewards.core.types.OutputParser | None,
+            parser: pyine.utils.parsing.OutputParser | None,
         ) -> pyine.organisms.models.rewards.core.types.RewardTerm:
             del spec
             del parser
@@ -1039,7 +1041,7 @@ class TestRewardManager:
             def inner(
                 spec: pyine.organisms.models.rewards.core.configs.RewardTermSpec,
                 *,
-                parser: pyine.organisms.models.rewards.core.types.OutputParser | None,
+                parser: pyine.utils.parsing.OutputParser | None,
             ) -> pyine.organisms.models.rewards.core.types.RewardTerm:
                 del spec
                 del parser
@@ -1096,7 +1098,7 @@ class TestRewardManager:
         def factory(
             spec: pyine.organisms.models.rewards.core.configs.RewardTermSpec,
             *,
-            parser: pyine.organisms.models.rewards.core.types.OutputParser | None,
+            parser: pyine.utils.parsing.OutputParser | None,
         ) -> pyine.organisms.models.rewards.core.types.RewardTerm:
             del spec
             del parser
@@ -1596,11 +1598,6 @@ class TestPackageLevelExports:
         import pyine.organisms.models.rewards as rewards
 
         assert rewards.RunInitContext is pyine.organisms.models.rewards.core.types.RunInitContext
-
-    def test_rewards_package_exports_parsedoutput(self) -> None:
-        import pyine.organisms.models.rewards as rewards
-
-        assert rewards.ParsedOutput is pyine.organisms.models.rewards.core.types.ParsedOutput
 
     def test_rewards_package_exports_codeexecevaldata(self) -> None:
         import pyine.organisms.models.rewards as rewards

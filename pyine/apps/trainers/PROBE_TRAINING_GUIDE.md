@@ -28,9 +28,11 @@ frozen language model. Given a dataset of text inputs with binary labels, the tr
 ### Step 1: Prepare an LMDB Data Source
 
 The trainer reads completion records from an **LMDB database** exported by `DiskRewardLogger` during RL
-training. Each record contains the prompt, model output, and reward metrics. The trainer constructs
-input text as `prompt + model_output` and derives binary labels from reward metrics
-(e.g., `reward_metrics["reward/metrics/soft_match/is_match"]`).
+training. Each record contains the prompt, model output, and reward metrics. The data module produces
+structured **message lists** (role-attributed conversations) and derives binary labels from reward metrics
+(e.g., `reward_metrics["reward/metrics/soft_match/is_match"]`). The trainer then formats messages into
+text: if the tokenizer defines a `chat_template`, it is applied; otherwise, messages are concatenated
+into role-tagged plain text (e.g., `user: ...`, `assistant: ...`).
 
 Train/valid splits are determined by LMDB key prefixes (default: `train/` and `eval/`), or via
 **eval-only mode** which reads from a single prefix and splits internally (see [Eval-Only Split Mode](#eval-only-split-mode)).
@@ -72,7 +74,7 @@ create_debug_probe_lmdb("/tmp/probe-debug-lmdb", n_train=200, n_eval_families=30
 
 # Or get a ready-to-use DatasetDict (creates temp LMDB internally)
 ds = create_debug_probe_dataset(n_train=200, n_eval_families=30, seed=42)
-# ds["train"] has columns: text, label, sample_id, code_type
+# ds["train"] has columns: messages, label, sample_id, code_type
 
 # Eval-only mode: use only eval records, split internally
 ds = create_debug_probe_dataset(n_eval_families=30, use_eval_only_split=True)
@@ -225,8 +227,10 @@ Each LMDB record is a JSON dict. The fields used by the probe trainer:
 | `reward_total`    | Optional  | Used when `selection_strategy: best_reward`                                                                                                               |
 | `code_type`       | Optional  | Code augmentation type (e.g., `"original"`, `"hinted"`, `"misleading"`). Defaults to `"unknown"` if absent. Used for filtering and per-code-type metrics. |
 
-The trainer constructs input text as `prompt + model_output` (plain text, post-chat-template). Tokenization
-uses `add_special_tokens=False` since the text is already formatted.
+The data module constructs structured message lists from `prompt_messages` (preferred) or `prompt`
+and `model_output` (fallback with warning). The trainer then formats messages into text using the
+tokenizer's chat template if available, or role-tagged plain concatenation for encoder models.
+Tokenization uses `add_special_tokens=False` since the text is already formatted.
 
 ### Label Derivation
 
@@ -267,6 +271,35 @@ The trainer validates the loaded dataset at load time:
 - Warns if a split contains only one class (degenerate training)
 - With `skip_malformed_records: false` (default), raises `ValueError` on any record missing required fields
 - With `skip_malformed_records: true`, skips malformed records and logs a count at WARNING level
+
+### Alternative Data Source: Correctness LMDB (`CorrectnessDataModuleConfig`)
+
+Instead of reward LMDB datasets exported during training via the `DiskRewardLogger` class, the
+probe trainer can also consume eval LMDBs exported in the code exec eval pipeline by the
+`DiskEvalLogger` class. To use this, set the `datamodule_config` to a `CorrectnessDataModuleConfig`:
+
+```yaml
+config:
+  datamodule_config:
+    _target_: pyine.evals.correctness.datamodule_configs.CorrectnessDataModuleConfig
+    lmdb_paths: /path/to/eval_logs.lmdb
+    label_type: soft_match
+    split_config:
+      split_source: my_dataset
+      guardrail_valid_fraction: 0.5
+    resampling:  # optional
+      target_positive_ratio: 0.5
+```
+
+Key differences from the default `ProbeDataModuleConfig`:
+
+- **`lmdb_paths`** (plural) accepts one or more LMDB paths/globs instead of a single `lmdb_path`;
+- **`split_config`** controls how eval records are split into guardrail train/valid/test sets;
+- **`resampling`** is applied symmetrically to both train and valid splits when set;
+- **`label_type`** selects the correctness label (`soft_match` or `hard_match`) directly.
+
+The `CorrectnessDataModule` exposes the same `get_probe_dataset()` interface as `ProbeDataModule`,
+returning an HF `DatasetDict` with `messages`, `label`, `sample_id`, and `code_type` columns.
 
 ## Probe Architectures
 
@@ -854,9 +887,11 @@ All 12 probes train simultaneously in a single run, sharing the LLM forward pass
 The LMDB contains no keys starting with the configured `train_key_prefix` (or `valid_key_prefix`). Verify
 that the prefix matches what `DiskRewardLogger` used during export. Common prefixes are `train/` and `eval/`.
 
-**`ValueError: record for sample_id '...' is missing prompt or model_output`**
+**`ValueError: record for sample_id '...' is missing model_output`** or
+**`ValueError: record for sample_id '...' has neither prompt_messages nor prompt`**
 
-An LMDB record is missing the `prompt` or `model_output` field. Either fix the export pipeline, or set
+An LMDB record is missing required fields. Records must have `model_output` and either
+`prompt_messages` (preferred) or `prompt` (fallback). Either fix the export pipeline, or set
 `skip_malformed_records: true` to skip bad records.
 
 **`ValueError: recompute_labels=True is only supported for label_metric_key in ...`**

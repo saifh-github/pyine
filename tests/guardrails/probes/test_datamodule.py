@@ -130,6 +130,40 @@ class TestProbeDataModuleCache:
         assert path1 != path2, "Cache path should change when data.mdb changes"
 
 
+class TestProbeDataModuleStaleCacheValidation:
+    def test_stale_cache_with_text_column_raises(self, datamodule: ProbeDataModule) -> None:
+        """If a cached dataset has 'text' instead of 'messages', setup() raises."""
+        import shutil
+
+        datamodule.prepare_data()
+        cache_path = datamodule._get_cache_path()
+
+        # tamper with cached dataset: load -> rename -> save to tmp -> replace original
+        stale_ds = datasets.DatasetDict.load_from_disk(str(cache_path))
+        for split_name in stale_ds:
+            stale_ds[split_name] = stale_ds[split_name].rename_column("messages", "text")
+        # save to a temporary path, then replace the original (HF prevents in-place overwrite)
+        tmp_stale_path = cache_path.parent / f"{cache_path.name}_stale"
+        stale_ds.save_to_disk(str(tmp_stale_path))
+        shutil.rmtree(cache_path)
+        tmp_stale_path.rename(cache_path)
+
+        # setup() should detect the stale schema and raise
+        with pytest.raises(ValueError, match="missing columns"):
+            datamodule.setup()
+
+    def test_valid_cache_is_not_regenerated(self, datamodule: ProbeDataModule) -> None:
+        """A cache with correct schema is loaded without regeneration."""
+        datamodule.prepare_data()
+        cache_path = datamodule._get_cache_path()
+        mtime_before = cache_path.stat().st_mtime_ns
+        datamodule.setup()
+        ds = datamodule.get_probe_dataset()
+        assert "messages" in ds["train"].column_names
+        mtime_after = cache_path.stat().st_mtime_ns
+        assert mtime_before == mtime_after
+
+
 class TestProbeDataModuleNotImplemented:
     def test_train_dataloader_raises(self, datamodule: ProbeDataModule) -> None:
         with pytest.raises(NotImplementedError):

@@ -235,6 +235,7 @@ class TestOutcomeEvaluatorMetrics:
         assert "accuracy_soft" in metrics
         assert "accuracy_grader" in metrics
         assert "sample_count" in metrics
+        assert "attempt_count" in metrics
         # check grader stats present
         assert "grader_mean" in metrics
         assert "grader_median" in metrics
@@ -246,6 +247,7 @@ class TestOutcomeEvaluatorMetrics:
         assert 0.0 <= metrics["accuracy_soft"] <= 1.0
         assert 0.0 <= metrics["accuracy_grader"] <= 1.0
         assert metrics["sample_count"] == 3
+        assert metrics["attempt_count"] == 3
 
     @pytest.mark.asyncio
     async def test_compute_grader_metrics_returns_statistics(
@@ -385,6 +387,142 @@ class TestOutcomeEvaluatorLLMScoreAccess:
         sample_eval._llm_score.cancel()
 
 
+class TestGetSampleGroups:
+    """Tests for get_sample_groups validation logic."""
+
+    def test_duplicate_attempt_indices_raises(
+        self,
+        base_evaluator: pyine.evals.code_exec.evaluator.OutcomeEvaluator,
+    ) -> None:
+        base_evaluator.add_sample(identifier="s1", expected="a", predicted="a", attempt_index=0)
+        base_evaluator.add_sample(identifier="s1", expected="a", predicted="b", attempt_index=0)
+        with pytest.raises(ValueError, match="duplicate attempt indices"):
+            base_evaluator.get_sample_groups()
+
+    def test_non_contiguous_attempt_indices_raises(
+        self,
+        base_evaluator: pyine.evals.code_exec.evaluator.OutcomeEvaluator,
+    ) -> None:
+        base_evaluator.add_sample(identifier="s1", expected="a", predicted="a", attempt_index=0)
+        base_evaluator.add_sample(identifier="s1", expected="a", predicted="b", attempt_index=2)
+        with pytest.raises(ValueError, match="non-contiguous attempt indices"):
+            base_evaluator.get_sample_groups()
+
+    def test_inconsistent_expected_raises(
+        self,
+        base_evaluator: pyine.evals.code_exec.evaluator.OutcomeEvaluator,
+    ) -> None:
+        base_evaluator.add_sample(identifier="s1", expected="a", predicted="a", attempt_index=0)
+        base_evaluator.add_sample(identifier="s1", expected="b", predicted="b", attempt_index=1)
+        with pytest.raises(ValueError, match="inconsistent expected values"):
+            base_evaluator.get_sample_groups()
+
+    def test_wrong_attempt_count_raises(
+        self,
+        base_evaluator: pyine.evals.code_exec.evaluator.OutcomeEvaluator,
+    ) -> None:
+        base_evaluator.add_sample(identifier="s1", expected="a", predicted="a", attempt_index=0)
+        base_evaluator.add_sample(identifier="s1", expected="a", predicted="b", attempt_index=1)
+        with pytest.raises(ValueError, match="expected 5"):
+            base_evaluator.get_sample_groups(expected_attempts_per_sample=5)
+
+    def test_valid_multi_attempt_groups(
+        self,
+        base_evaluator: pyine.evals.code_exec.evaluator.OutcomeEvaluator,
+    ) -> None:
+        for attempt_idx in range(3):
+            base_evaluator.add_sample(identifier="s1", expected="a", predicted="a", attempt_index=attempt_idx)
+            base_evaluator.add_sample(identifier="s2", expected="b", predicted="b", attempt_index=attempt_idx)
+        groups = base_evaluator.get_sample_groups(expected_attempts_per_sample=3)
+        assert len(groups) == 2
+        assert all(g.num_attempts == 3 for g in groups)
+
+
+class TestComputeMetricsPassAtK:
+    """Tests for compute_metrics Pass@K paths with num_attempts_per_sample > 1."""
+
+    @pytest.mark.asyncio
+    async def test_pass_at_k_with_multi_attempt(
+        self,
+        base_evaluator: pyine.evals.code_exec.evaluator.OutcomeEvaluator,
+    ) -> None:
+        """Pass@K metrics are computed correctly with K=3 attempts per sample."""
+        # sample s1: 3/3 correct, sample s2: 1/3 correct, sample s3: 0/3 correct
+        for attempt_idx in range(3):
+            base_evaluator.add_sample(identifier="s1", expected="a", predicted="a", attempt_index=attempt_idx)
+        base_evaluator.add_sample(identifier="s2", expected="b", predicted="b", attempt_index=0)
+        base_evaluator.add_sample(identifier="s2", expected="b", predicted="x", attempt_index=1)
+        base_evaluator.add_sample(identifier="s2", expected="b", predicted="y", attempt_index=2)
+        for attempt_idx in range(3):
+            base_evaluator.add_sample(identifier="s3", expected="c", predicted="z", attempt_index=attempt_idx)
+        metrics = await base_evaluator.compute_metrics(
+            pass_at_k_values=[1, 3],
+            num_attempts_per_sample=3,
+        )
+        # pass@1 = mean of per-sample fractions: (3/3 + 1/3 + 0/3) / 3 = 4/9
+        assert metrics["pass_at_1_hard"] == pytest.approx(4 / 9)
+        assert "pass_at_1_hard_ci_lower" in metrics
+        assert "pass_at_1_hard_ci_upper" in metrics
+        assert "pass_at_1_soft" in metrics
+        # pass@3 = mean of per-sample pass@3: (1.0 + 1.0 + 0.0) / 3 = 2/3
+        assert metrics["pass_at_3_hard"] == pytest.approx(2 / 3)
+        assert "pass_at_3_hard_ci_lower" in metrics
+        assert "pass_at_3_hard_ci_upper" in metrics
+        # multi-attempt extras
+        assert "majority_correct_hard" in metrics
+        assert "majority_correct_soft" in metrics
+        assert "mean_output_diversity" in metrics
+        assert "mean_unique_outputs" in metrics
+        # counts
+        assert metrics["sample_count"] == 3
+        assert metrics["attempt_count"] == 9
+
+    @pytest.mark.asyncio
+    async def test_pass_at_k_not_emitted_when_none(
+        self,
+        evaluator_with_standard_samples: pyine.evals.code_exec.evaluator.OutcomeEvaluator,
+    ) -> None:
+        """When pass_at_k_values is None, no pass_at_* keys are emitted."""
+        metrics = await evaluator_with_standard_samples.compute_metrics(pass_at_k_values=None)
+        assert not any(k.startswith("pass_at_") for k in metrics)
+        assert not any(k.startswith("majority_correct") for k in metrics)
+
+    @pytest.mark.asyncio
+    async def test_pass_at_k_empty_evaluator_emits_degenerate_metrics(
+        self,
+        base_evaluator: pyine.evals.code_exec.evaluator.OutcomeEvaluator,
+    ) -> None:
+        """Empty evaluator with Pass@K enabled emits 0.0 point estimates and full-uncertainty CIs."""
+        metrics = await base_evaluator.compute_metrics(pass_at_k_values=[1, 3], num_attempts_per_sample=3)
+        assert metrics["pass_at_1_hard"] == 0.0
+        assert metrics["pass_at_1_hard_ci_lower"] == 0.0
+        assert metrics["pass_at_1_hard_ci_upper"] == 1.0
+        assert metrics["pass_at_3_soft"] == 0.0
+        assert metrics["majority_correct_hard"] == 0.0
+        assert metrics["mean_output_diversity"] == 0.0
+        assert metrics["mean_unique_outputs"] == 0.0
+        assert metrics["sample_count"] == 0
+        assert metrics["attempt_count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_pass_at_k_filtered_out_subset_emits_degenerate_metrics(
+        self,
+        base_evaluator: pyine.evals.code_exec.evaluator.OutcomeEvaluator,
+    ) -> None:
+        """When identifier_selector filters out all samples, degenerate metrics are emitted."""
+        for attempt_idx in range(3):
+            base_evaluator.add_sample(identifier="s1", expected="a", predicted="a", attempt_index=attempt_idx)
+        metrics = await base_evaluator.compute_metrics(
+            pass_at_k_values=[1],
+            num_attempts_per_sample=3,
+            identifier_selector=lambda sid: sid == "nonexistent",
+        )
+        assert metrics["pass_at_1_hard"] == 0.0
+        assert metrics["pass_at_1_hard_ci_lower"] == 0.0
+        assert metrics["pass_at_1_hard_ci_upper"] == 1.0
+        assert metrics["sample_count"] == 0
+
+
 @pytest.mark.asyncio
 @pytest.mark.slow
 @pytest.mark.integration
@@ -401,7 +539,7 @@ async def test_outcome_evaluator_large_batch_base_config(
         eval_type=pyine.evals.common.EvalType.CODE_EXEC,
         group="tests_evals",
     )
-    target_config = next(cfg for cfg in configs if cfg.name == "base")
+    target_config = next(cfg for cfg in configs if cfg.name == "code_exec_base")
     assert target_config is not None
     with tests.hydra_test_utils.instantiate_from_defaults_with_launch(
         base_configs=[c for c in configs if c is not target_config],

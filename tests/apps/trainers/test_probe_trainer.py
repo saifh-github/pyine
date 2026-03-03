@@ -241,6 +241,66 @@ def _replica_pc(
     )
 
 
+class TestLoadFromCheckpointRoundTrip:
+    """Tests for ProbeCollection.load_from_checkpoint via save_probe_checkpoints."""
+
+    def test_save_then_load_preserves_weights(
+        self,
+        tmp_path: pathlib.Path,
+        probe_collection: pyine.guardrails.probes.collection.ProbeCollection,
+    ) -> None:
+        acc = accelerate.Accelerator()
+        probe_collection_prepared = acc.prepare(probe_collection)
+        runtime = MagicMock()
+        runtime.output_dir = str(tmp_path)
+        config = MagicMock()
+        output_dir = pyine.apps.trainers.probe_trainer.save_probe_checkpoints(
+            probe_collection_prepared,
+            config,
+            runtime,
+            acc,
+        )
+        assert output_dir is not None
+        loaded = pyine.guardrails.probes.collection.ProbeCollection.load_from_checkpoint(
+            checkpoint_dir=output_dir,
+            hidden_dim=64,
+        )
+        for name in probe_collection.probes:
+            for (orig_name, orig_param), (load_name, load_param) in zip(
+                probe_collection.probes[name].named_parameters(),
+                loaded.probes[name].named_parameters(),
+                strict=True,
+            ):
+                assert orig_name == load_name
+                torch.testing.assert_close(orig_param.cpu(), load_param)
+
+
+class TestSkipTrainingProbeTrainer:
+    """Tests for the skip_training code path in probe trainer main."""
+
+    def test_skip_training_requires_checkpoint_dir(self) -> None:
+        import asyncio
+
+        from pyine.apps.trainers.probe_trainer_configs import ProbeTrainerAppMainConfig
+
+        cfg = ProbeTrainerAppMainConfig(
+            base_model="some-model",
+            datamodule_config={"lmdb_path": "/tmp/fake-lmdb"},  # noqa: S108
+            probe_configs=[],
+            probe_checkpoint_dir="/tmp/fake-probes",  # noqa: S108
+        )
+        # clear the checkpoint dir to trigger the validation
+        cfg.probe_checkpoint_dir = None
+        with pytest.raises(ValueError, match="skip_training=True requires"):
+            asyncio.run(
+                pyine.apps.trainers.probe_trainer.main(
+                    config=cfg,
+                    runtime=None,
+                    skip_training=True,
+                )
+            )
+
+
 class TestStableReplicaSeed:
     def test_deterministic_across_calls(self) -> None:
         s1 = pyine.apps.trainers.probe_trainer._stable_replica_seed(0, "mean_L0", 0)

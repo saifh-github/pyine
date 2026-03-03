@@ -154,7 +154,6 @@ def filter_traces(
     filtering_config: pyine.organisms.datamodules.samples.configs.TraceFilteringConfig,
 ) -> TraceFilteringResults:
     """Filters traces based on the provided filtering configuration."""
-    # @@@@@@@@@@ TODO: add caching based on trace data hash, epoch, and config
     trace_families: dict[
         pyine.data.traces.dataset_utils.TraceIdentifier,
         list[pyine.data.traces.dataset_utils.TraceMetadata],

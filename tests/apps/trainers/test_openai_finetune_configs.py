@@ -47,7 +47,7 @@ def test_code_exec_experiment_config_taco_latest_20s_eval_only(
             "runtime": "dry_run",
             "runtime.seed": 123,
         },
-        config_name="openai_finetune",
+        config_name="entrypoint",
         version_base=pyine.configs.base.target_hydra_version,
     )
 
@@ -86,6 +86,6 @@ def test_code_exec_experiment_config_taco_latest(
             "runtime": "dry_run",
             "runtime.seed": 123,
         },
-        config_name="openai_finetune",
+        config_name="entrypoint",
         version_base=pyine.configs.base.target_hydra_version,
     )

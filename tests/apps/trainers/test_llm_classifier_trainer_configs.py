@@ -167,6 +167,20 @@ class TestLLMClassifierTrainerAppMainConfig:
         assert isinstance(model, peft.PeftModel)
 
 
+class TestClassifierEvalOnlyConfig:
+    def test_checkpoint_path_accepted(self) -> None:
+        cfg = LLMClassifierTrainerAppMainConfig(
+            **_make_minimal_config(
+                classifier_checkpoint_path="/tmp/fake-checkpoint",  # noqa: S108
+            )
+        )
+        assert cfg.classifier_checkpoint_path is not None
+
+    def test_checkpoint_path_default_is_none(self) -> None:
+        cfg = LLMClassifierTrainerAppMainConfig(**_make_minimal_config())
+        assert cfg.classifier_checkpoint_path is None
+
+
 class TestHydraConfigRegistration:
     def test_register_hydra_configs_no_errors(
         self,

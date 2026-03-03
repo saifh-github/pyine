@@ -22,7 +22,8 @@ import transformers
 import pyine.apps.trainers.common
 import pyine.configs.schemas
 import pyine.evals.common
-import pyine.guardrails.data.datamodule
+import pyine.evals.correctness.configs as correctness_configs
+import pyine.evals.correctness.scorers as correctness_scorers
 
 if typing.TYPE_CHECKING:
     import datasets
@@ -36,7 +37,7 @@ logger = logging.getLogger(__name__)
 # Columns from the raw LMDB dataset that should be removed after tokenization.
 # We explicitly list source columns to remove (rather than keeping a whitelist)
 # so that tokenizer-generated columns like token_type_ids are preserved.
-_RAW_COLUMNS_TO_REMOVE = ("text", "label", "sample_id", "code_type")
+_RAW_COLUMNS_TO_REMOVE = ("text", "label", "sample_id", "code_type", "messages")
 
 
 def _tokenize_for_classification(
@@ -44,6 +45,7 @@ def _tokenize_for_classification(
     tokenizer: transformers.PreTrainedTokenizerBase,
     max_seq_length: int,
     code_type_to_id: dict[str, int] | None = None,
+    add_special_tokens: bool = True,
 ) -> datasets.Dataset:
     """Tokenize a dataset split for sequence classification.
 
@@ -52,6 +54,8 @@ def _tokenize_for_classification(
         tokenizer: Encoder tokenizer (adds [CLS]/[SEP] automatically).
         max_seq_length: Maximum sequence length.
         code_type_to_id: Optional mapping for per-code-type metrics.
+        add_special_tokens: Whether to add special tokens (e.g. [CLS]/[SEP]). Set to False when
+            text already contains special tokens from a chat template to avoid double insertion.
 
     Returns:
         Tokenized dataset with input_ids, attention_mask, labels columns.
@@ -65,6 +69,7 @@ def _tokenize_for_classification(
             max_length=max_seq_length,
             truncation=True,
             padding=False,  # Dynamic padding in collator
+            add_special_tokens=add_special_tokens,
         )
         tokenized["labels"] = examples["label"]
         if code_type_to_id is not None:
@@ -154,46 +159,40 @@ def build_compute_metrics(
         Function compatible with Trainer's compute_metrics parameter.
     """
 
+    @typing.no_type_check
     def compute_metrics(eval_pred: transformers.EvalPrediction) -> dict[str, float]:
         # Handle tuple logits: some HF versions return (logits, hidden_states, ...)
-        raw_preds = eval_pred.predictions  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # transformers stubs
-        logits = raw_preds[0] if isinstance(raw_preds, tuple) else raw_preds  # pyright: ignore[reportUnknownVariableType]
-        labels = eval_pred.label_ids  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # transformers stubs
-
-        predictions = np.argmax(logits, axis=1)  # pyright: ignore[reportUnknownArgumentType]
-        probs = scipy.special.softmax(logits, axis=1)[:, 1]  # pyright: ignore[reportUnknownMemberType]  # scipy stubs  # P(correct)
-
+        raw_preds = eval_pred.predictions
+        logits = raw_preds[0] if isinstance(raw_preds, tuple) else raw_preds
+        labels = eval_pred.label_ids
+        predictions = np.argmax(logits, axis=1)
+        probs = scipy.special.softmax(logits, axis=1)[:, 1]
         metrics: dict[str, float] = {
-            "accuracy": float(sklearn.metrics.accuracy_score(labels, predictions)),  # pyright: ignore[reportUnknownMemberType]  # sklearn stubs
-            "f1": float(sklearn.metrics.f1_score(labels, predictions, zero_division=0)),  # pyright: ignore[reportUnknownMemberType, reportArgumentType]  # sklearn stubs
-            "precision": float(sklearn.metrics.precision_score(labels, predictions, zero_division=0)),  # pyright: ignore[reportUnknownMemberType, reportArgumentType]  # sklearn stubs
-            "recall": float(sklearn.metrics.recall_score(labels, predictions, zero_division=0)),  # pyright: ignore[reportUnknownMemberType, reportArgumentType]  # sklearn stubs
+            "accuracy": float(sklearn.metrics.accuracy_score(labels, predictions)),
+            "f1": float(sklearn.metrics.f1_score(labels, predictions, zero_division=0)),
+            "precision": float(sklearn.metrics.precision_score(labels, predictions, zero_division=0)),
+            "recall": float(sklearn.metrics.recall_score(labels, predictions, zero_division=0)),
         }
-
         # AUROC — guard against single-class eval AND degenerate probability
         # distributions (all identical probs).
-        unique_labels = {int(v) for v in labels}  # pyright: ignore[reportUnknownArgumentType, reportUnknownVariableType]
-        if len(unique_labels) >= 2 and len(labels) >= 2:  # pyright: ignore[reportUnknownArgumentType]
-            metrics["auroc"] = float(
-                sklearn.metrics.roc_auc_score(labels, probs)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # sklearn stubs
-            )
+        unique_labels = {int(v) for v in labels}
+        if len(unique_labels) >= 2 and len(labels) >= 2:
+            metrics["auroc"] = float(sklearn.metrics.roc_auc_score(labels, probs))
         else:
             metrics["auroc"] = float("nan")
-
         # Per-code-type metrics (if code_type_id available via include_for_metrics)
         if id_to_code_type is not None:
             _add_per_code_type_metrics(
                 metrics,
-                labels,  # pyright: ignore[reportArgumentType]  # transformers stubs return ndarray | tuple
+                labels,
                 probs,
                 predictions,
                 eval_pred,
                 id_to_code_type,
             )
-
         return metrics
 
-    return compute_metrics
+    return compute_metrics  # type: ignore[reportUnknownVariableType]
 
 
 class WeightedLossTrainer(transformers.Trainer):
@@ -221,10 +220,19 @@ class WeightedLossTrainer(transformers.Trainer):
         return (loss, outputs) if return_outputs else loss
 
 
+class ClassifierTrainResult(typing.NamedTuple):
+    """Return value of classifier_train() with extra context for downstream evaluation."""
+
+    trainer: transformers.Trainer
+    """The HuggingFace Trainer containing the fine-tuned classifier model."""
+    tokenizer: transformers.PreTrainedTokenizerBase
+    """The tokenizer associated with the classifier model."""
+
+
 def classifier_train(
     config: LLMClassifierTrainerAppMainConfig,
     runtime: pyine.configs.schemas.RuntimeConfig | None,
-) -> transformers.Trainer:
+) -> ClassifierTrainResult:
     """Core LLM classifier training loop.
 
     Args:
@@ -232,7 +240,7 @@ def classifier_train(
         runtime: Runtime configuration (wandb, output dir, etc.).
 
     Returns:
-        The trained HuggingFace Trainer instance.
+        ClassifierTrainResult with the trained Trainer and tokenizer.
     """
     # --- 1. Load model + tokenizer ---
     tokenizer = config.get_tokenizer()
@@ -244,26 +252,33 @@ def classifier_train(
 
     # --- 3. Load LMDB data via DataModule (handles DDP coordination + caching) ---
     datamodule = pyine.apps.trainers.common.prepare_datamodule(config, runtime)
-    assert isinstance(datamodule, pyine.guardrails.data.datamodule.ProbeDataModule)
-    raw_ds = datamodule.get_probe_dataset()
-    code_type_to_id = datamodule.code_type_to_id
-    id_to_code_type = datamodule.id_to_code_type
+    # both ProbeDataModule and CorrectnessDataModule provide get_probe_dataset/code_type_to_id/id_to_code_type
+    raw_ds = typing.cast("datasets.DatasetDict", datamodule.get_probe_dataset())  # pyright: ignore[reportUnknownMemberType,reportAttributeAccessIssue]
+    code_type_to_id = typing.cast("dict[str, int]", datamodule.code_type_to_id)  # pyright: ignore[reportUnknownMemberType,reportAttributeAccessIssue]
+    id_to_code_type = typing.cast("dict[int, str]", datamodule.id_to_code_type)  # pyright: ignore[reportUnknownMemberType,reportAttributeAccessIssue]
 
     # --- 4. Log class distribution (always, regardless of class_weight_mode) ---
     _log_class_distribution(raw_ds, logger)
 
-    # --- 5. Tokenize ---
+    # --- 5. Format messages -> text (chat template if available, else plain concat), then tokenize ---
+    has_chat_template = pyine.apps.trainers.common.tokenizer_has_chat_template(tokenizer)
+    raw_ds = pyine.apps.trainers.common.apply_messages_formatting(raw_ds, tokenizer)
+    # when a chat template produced the text, special tokens are already embedded;
+    # encoder tokenizers (no chat template) need add_special_tokens=True for [CLS]/[SEP]
+    add_special_tokens = not has_chat_template
     train_ds = _tokenize_for_classification(
-        raw_ds["train"],
-        tokenizer,
-        config.max_seq_length,
-        code_type_to_id if config.log_per_code_type_metrics else None,
+        dataset=raw_ds["train"],
+        tokenizer=tokenizer,
+        max_seq_length=config.max_seq_length,
+        code_type_to_id=code_type_to_id if config.log_per_code_type_metrics else None,
+        add_special_tokens=add_special_tokens,
     )
     valid_ds = _tokenize_for_classification(
-        raw_ds["valid"],
-        tokenizer,
-        config.max_seq_length,
-        code_type_to_id if config.log_per_code_type_metrics else None,
+        dataset=raw_ds["valid"],
+        tokenizer=tokenizer,
+        max_seq_length=config.max_seq_length,
+        code_type_to_id=code_type_to_id if config.log_per_code_type_metrics else None,
+        add_special_tokens=add_special_tokens,
     )
 
     # --- 6. Setup training ---
@@ -319,12 +334,13 @@ def classifier_train(
     if config.save_model:
         trainer.save_model()
 
-    return trainer
+    return ClassifierTrainResult(trainer=trainer, tokenizer=tokenizer)
 
 
 async def main(
     config: LLMClassifierTrainerAppMainConfig,
     runtime: pyine.configs.schemas.RuntimeConfig | None = None,
+    skip_training: bool = False,
 ) -> None:
     """Main entrypoint for LLM classifier training."""
     import pyine.utils.reprod
@@ -336,10 +352,41 @@ async def main(
     )
 
     if runtime is not None and runtime.dry_run:
-        logger.info("dry run mode — skipping classifier training")
+        logger.info("dry run mode; skipping classifier training")
         return
 
-    classifier_train(config=config, runtime=runtime)
+    if skip_training:
+        if config.classifier_checkpoint_path is None:
+            raise ValueError("skip_training=True requires config.classifier_checkpoint_path to be set")
+        logger.info(f"skip_training mode; loading classifier from {config.classifier_checkpoint_path}")
+        classifier_model = config.get_model(checkpoint_path=config.classifier_checkpoint_path)
+        classifier_model.eval()
+        classifier_model.requires_grad_(False)
+        tokenizer = config.get_tokenizer(checkpoint_path=config.classifier_checkpoint_path)
+        if config.truncation_side is not None:
+            tokenizer.truncation_side = config.truncation_side
+    else:
+        train_result = classifier_train(config=config, runtime=runtime)
+        classifier_model = typing.cast("transformers.PreTrainedModel", train_result.trainer.model)  # pyright: ignore[reportUnknownMemberType]
+        tokenizer = train_result.tokenizer
+
+    # benchmarking phase (if enabled); goes through the standard evaluate_model pipeline
+    # which handles datamodule setup, W&B metric definition, logging, etc.
+    if config.evals_config is not None:
+        evals_config = typing.cast("correctness_configs.CorrectnessEvalsConfig", config.evals_config)
+        scorer = correctness_scorers.LLMClassifierScorer(
+            model=classifier_model,
+            tokenizer=tokenizer,
+            max_seq_length=config.max_seq_length,
+            text_field=evals_config.text_field,
+        )
+        await pyine.apps.trainers.common.evaluate_model(  # type: ignore[reportUnknownMemberType, reportAttributeAccessIssue]
+            model=scorer,
+            tokenizer=None,
+            datamodule=None,  # correctness pipeline constructs its own datamodule
+            config=config,
+            runtime=runtime,
+        )
 
     if runtime is not None:
         runtime.finalize()
@@ -348,22 +395,18 @@ async def main(
 def async_classifier_trainer_main_wrapper(
     config: LLMClassifierTrainerAppMainConfig,
     runtime: pyine.configs.schemas.RuntimeConfig | None = None,
+    skip_training: bool = False,
 ) -> None:
     """Synchronous wrapper around the async main."""
-    asyncio.run(main(config=config, runtime=runtime))
+    asyncio.run(main(config=config, runtime=runtime, skip_training=skip_training))
 
 
 if __name__ == "__main__":
-    import sys
-
     import pyine.apps.trainers.common
     import pyine.apps.trainers.llm_classifier_trainer_configs as llm_classifier_configs
 
-    # Filter DeepSpeed's --local_rank to avoid Hydra conflict
-    sys.argv = [arg for arg in sys.argv if not arg.startswith("--local_rank")]
-
     pyine.apps.trainers.common.hydra_main(
-        eval_type=pyine.evals.common.EvalType.CODE_EXEC,
+        eval_type=pyine.evals.common.EvalType.CORRECTNESS,
         hydra_config_registration_fn=llm_classifier_configs.register_hydra_configs,
         async_main_wrapper=async_classifier_trainer_main_wrapper,
     )

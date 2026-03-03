@@ -34,7 +34,7 @@ def _register_qwen25c05b_configs(
                 {"datamodule_config": "shortcuts_TACO_latest"},  # arbitrary default from framework configs
                 {"training_args_config": "train_default"},  # inherit training settings from framework
                 {"lora_config": "default"},  # update to more aggressive LoRA config if needed
-                {"evals_config": "base"},  # same as the original for the app
+                {"evals_config": "code_exec_base"},  # same as the original for the app
             ],
         },
     )
@@ -89,20 +89,20 @@ def _register_smollm360m_configs(
                 {"datamodule_config": "shortcuts_TACO_latest"},  # arbitrary default from framework configs
                 {"training_args_config": "train_default"},  # inherit training settings from framework
                 {"lora_config": "default"},  # update to more aggressive LoRA config if needed
-                {"evals_config": "base_with_bs8"},  # since CPU memory probably allows it, bump to bs8
+                {"evals_config": "code_exec_base_with_bs8"},  # since CPU memory probably allows it, bump to bs8
             ],
         },
     )
-    # note: in the above app config, the `{"evals_config": "base_with_bs8"}` default refers to a new
+    # note: in the above app config, the `{"evals_config": "code_exec_base_with_bs8"}` default refers to a new
     #       config that we now have to specify (it does not exist in the list of configs in the fw)
     evals_base_config = next(  # go get the most relevant base config from the fw configs to derive from
-        (cfg for cfg in app_configs if cfg.group == "config/evals_config" and cfg.name == "base"),
+        (cfg for cfg in app_configs if cfg.group == "config/evals_config" and cfg.name == "code_exec_base"),
         None,
     )
     assert evals_base_config is not None, "evals_base_config must be defined in the app configs"
     # now, build the new evals config off the above base config with the extra setting (batch size)
     evals_base_with_bs8_config = pyine.configs.utils.make_config_description(
-        name="base_with_bs8",
+        name="code_exec_base_with_bs8",
         group=evals_base_config.group,
         description="Evals base config override with CPU batch size of 8.",
         config={
@@ -150,7 +150,10 @@ def register_hydra_configs(
         The list of newly generated app configs to be registered in the framework.
     """
     # the YAML example that is also provided targets the openai_finetune app, so this one will not
-    if app_name not in ["hf_trainer", "hf_precacher"] or eval_type != pyine.evals.common.EvalType.CODE_EXEC:
+    if (
+        app_name not in ["hf_sft_trainer", "hf_rl_trainer", "hf_precacher"]
+        or eval_type != pyine.evals.common.EvalType.CODE_EXEC
+    ):
         return []
     # define new app configs for new experiments which target much smaller models
     return [

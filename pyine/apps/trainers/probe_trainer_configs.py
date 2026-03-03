@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+import pathlib  # noqa: TC003
 import typing
+import warnings
 
 import pydantic
 import torch
@@ -14,6 +16,8 @@ import pyine.configs.schemas
 import pyine.configs.searchpath
 import pyine.configs.utils
 import pyine.evals.common
+import pyine.evals.configs
+import pyine.evals.correctness.datamodule_configs  # noqa: TC001
 import pyine.guardrails.data.datamodule_configs  # noqa: TC001
 import pyine.guardrails.probes.base  # noqa: TC001
 import pyine.utils.reprod
@@ -24,23 +28,41 @@ logger = logging.getLogger(__name__)
 class ProbeTrainerAppMainConfig(common.AppMainConfig, common.ModelTokenizerConfigBase):
     """Configuration for probe training on frozen LLM activations."""
 
-    # --- Override: evals not needed for probe training ---
+    # --- Override: optional correctness benchmarking after probe training ---
     evals_config: pyine.evals.common.BaseEvalsConfig | None = None  # type: ignore[assignment]
-    """Not used for probe training. Kept for AppMainConfig compatibility."""
+    """Optional correctness eval config for post-training benchmarking.
 
-    # --- Override: use ProbeDataModuleConfig instead of generic BaseDataModuleConfig ---
+    When set (e.g. via ``+evals_config=correctness_base`` on the hydra command line), the trained
+    probes are evaluated as guardrail scorers on the correctness pipeline after training completes.
+    """
+
+    # --- Override: accept ProbeDataModuleConfig or CorrectnessDataModuleConfig ---
     datamodule_config: pydantic.SerializeAsAny[  # pyright: ignore[reportIncompatibleVariableOverride]
         pyine.guardrails.data.datamodule_configs.ProbeDataModuleConfig
+        | pyine.evals.correctness.datamodule_configs.CorrectnessDataModuleConfig
     ] = ...  # type: ignore[assignment]
-    """Probe data configuration (LMDB source, splitting, filtering)."""
+    """Data configuration (LMDB source, splitting, filtering).
+
+    Accepts ProbeDataModuleConfig or CorrectnessDataModuleConfig.
+    """
 
     # --- LLM checkpoint ---
     llm_checkpoint_path: str | None = None
     """Path to model checkpoint. If None, uses base_model directly."""
 
     # --- Probe configurations ---
-    probe_configs: list[pyine.guardrails.probes.base.ProbeConfig]
-    """List of probe configs, each specifying architecture, layer, and hyperparams."""
+    probe_configs: list[pyine.guardrails.probes.base.ProbeConfig] = pydantic.Field(default_factory=lambda: [])
+    """List of probe configs, each specifying architecture, layer, and hyperparams.
+
+    May be empty when ``probe_checkpoint_dir`` is set (eval-only mode).
+    """
+
+    # --- Checkpoint loading (eval-only mode) ---
+    probe_checkpoint_dir: pathlib.Path | None = None
+    """Path to a directory of saved probe checkpoints (as written by ``save_probe_checkpoints``).
+
+    Used in eval-only mode (``skip_training=True``) to load pretrained probes without re-training.
+    """
 
     # --- Training/logging options (not data-related, stay here) ---
     log_per_code_type_metrics: bool = True
@@ -97,16 +119,25 @@ class ProbeTrainerAppMainConfig(common.AppMainConfig, common.ModelTokenizerConfi
 
     @pydantic.model_validator(mode="after")
     def _validate_probe_names_unique(self) -> ProbeTrainerAppMainConfig:
+        if not self.probe_configs:
+            return self  # empty is valid when using probe_checkpoint_dir
         names = [probe_config.name for probe_config in self.probe_configs]
         if len(names) != len(set(names)):
             raise ValueError(f"Probe names must be unique. Got duplicates in: {names}")
         return self
 
     @pydantic.model_validator(mode="after")
+    def _validate_has_probes_or_checkpoint(self) -> ProbeTrainerAppMainConfig:
+        if not self.probe_configs and self.probe_checkpoint_dir is None:
+            raise ValueError(
+                "Either probe_configs must be non-empty (training mode) or "
+                "probe_checkpoint_dir must be set (eval-only mode)."
+            )
+        return self
+
+    @pydantic.model_validator(mode="after")
     def _validate_save_steps(self) -> ProbeTrainerAppMainConfig:
         if self.save_steps > 0 and not self.save_probes:
-            import warnings
-
             warnings.warn(
                 "save_steps > 0 has no effect when save_probes=False",
                 stacklevel=2,
@@ -129,7 +160,22 @@ def _get_app_configs(
             "hydra_convert": "object",
         },
     )
-
+    # --- Correctness datamodule config ---
+    correctness_datamodule_config = pyine.configs.utils.make_config_description(
+        pyine.evals.correctness.datamodule_configs.CorrectnessDataModuleConfig,
+        name="correctness_base",
+        group=f"{group}/datamodule_config",
+        description="Base correctness datamodule settings (LMDB eval records, splits, resampling).",
+        config={
+            "populate_full_signature": True,
+            "hydra_convert": "object",
+        },
+    )
+    # --- Correctness eval configs (registered so user can opt-in via hydra) ---
+    evals_configs = pyine.evals.configs.get_evals_configs(
+        eval_type=pyine.evals.common.EvalType.CORRECTNESS,
+        group=f"{group}/evals_config",
+    )
     # --- Main app config ---
     app_main_config = pyine.configs.utils.make_config_description(
         ProbeTrainerAppMainConfig,
@@ -145,7 +191,7 @@ def _get_app_configs(
             ],
         },
     )
-    return [app_main_config, datamodule_config]
+    return [app_main_config, datamodule_config, correctness_datamodule_config, *evals_configs]
 
 
 def register_hydra_configs(
@@ -164,6 +210,7 @@ def register_hydra_configs(
         description="Entrypoint settings for the probe trainer app.",
         config={
             "populate_full_signature": True,
+            "skip_training": False,
             "hydra_defaults": [
                 "_self_",
                 {"config": "base"},

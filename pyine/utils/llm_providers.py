@@ -103,6 +103,9 @@ def get_model_from_provider(
         llm = langchain_openai.ChatOpenAI(rate_limiter=rate_limiter, **model_kwargs)
     else:
         raise NotImplementedError(f"Invalid provider: {provider}")
+    # dirty hack: if kwargs contain temperature, it might not always be set visibly for downstream inspection
+    if "temperature" in model_kwargs:
+        llm.temperature = model_kwargs["temperature"]  # now it'll be visible
     if with_retry_config is not None:
         llm = typing.cast("langchain_openai.chat_models.base.BaseChatOpenAI", llm.with_retry(**with_retry_config))
     return llm
@@ -146,6 +149,7 @@ def get_default_openai_provider_rate_limit_config(
     if usage_tier != 4:
         raise NotImplementedError(f"unsupported/unknown usage tier limitations: {usage_tier=}")
     return {
+        # some empirically determined numbers that seemed OK in late 2025
         "requests_per_second": 50,
         "max_bucket_size": 50,
     }

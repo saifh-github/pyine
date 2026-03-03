@@ -13,6 +13,7 @@ import pyine.organisms.models.rewards.core.manager as reward_manager
 import pyine.organisms.models.rewards.core.registry as reward_registry
 import pyine.organisms.models.rewards.core.types as reward_types
 import pyine.organisms.models.rewards.trl as rewards_trl
+import pyine.utils.parsing
 import tests.organisms.models.rewards.conftest as rewards_conftest
 
 
@@ -58,7 +59,7 @@ class TestTRLAdapterLogging:
         def factory(
             spec: reward_configs.RewardTermSpec,
             *,
-            parser: reward_types.OutputParser | None,
+            parser: pyine.utils.parsing.OutputParser | None,
         ) -> reward_types.RewardTerm:
             del spec, parser
             return _SampleIndexRewardTerm()
@@ -186,7 +187,7 @@ class TestTRLAdapterLogging:
         def factory(
             spec: reward_configs.RewardTermSpec,
             *,
-            parser: reward_types.OutputParser | None,
+            parser: pyine.utils.parsing.OutputParser | None,
         ) -> reward_types.RewardTerm:
             del spec, parser
             return _SampleIndexRewardTerm()
@@ -235,7 +236,7 @@ class TestTRLAdapterLogging:
         def factory(
             spec: reward_configs.RewardTermSpec,
             *,
-            parser: reward_types.OutputParser | None,
+            parser: pyine.utils.parsing.OutputParser | None,
         ) -> reward_types.RewardTerm:
             del spec, parser
             return _SampleIndexRewardTerm()
@@ -321,7 +322,7 @@ class TestTRLAdapterLogging:
         def factory(
             spec: reward_configs.RewardTermSpec,
             *,
-            parser: reward_types.OutputParser | None,
+            parser: pyine.utils.parsing.OutputParser | None,
         ) -> reward_types.RewardTerm:
             del spec, parser
             return _SampleIndexRewardTerm()
@@ -392,7 +393,7 @@ class TestTRLAdapterLogging:
         def factory(
             spec: reward_configs.RewardTermSpec,
             *,
-            parser: reward_types.OutputParser | None,
+            parser: pyine.utils.parsing.OutputParser | None,
         ) -> reward_types.RewardTerm:
             del spec, parser
             return _SampleIndexRewardTerm()

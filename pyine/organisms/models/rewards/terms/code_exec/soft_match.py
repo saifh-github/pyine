@@ -13,6 +13,7 @@ import pyine.organisms.models.rewards.core.term as reward_term
 import pyine.organisms.models.rewards.core.types as reward_types
 import pyine.organisms.models.rewards.terms.code_exec.utils as code_exec_utils
 import pyine.utils.code.output_compare
+import pyine.utils.parsing
 
 
 class SoftMatchTermConfig(reward_types.BaseConfig):
@@ -141,7 +142,7 @@ class SoftMatchTerm(reward_term.BaseRewardTerm):
 def _factory(
     spec: reward_configs.RewardTermSpec,
     *,
-    parser: reward_types.OutputParser | None,
+    parser: pyine.utils.parsing.OutputParser | None,
 ) -> reward_types.RewardTerm:
     """Build a `SoftMatchTerm` from a term spec.
 

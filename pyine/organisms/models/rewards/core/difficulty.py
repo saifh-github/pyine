@@ -4,20 +4,8 @@ This module provides a DifficultyEstimator class that computes difficulty metric
 fields (trace_step_count, complexity_metrics, string lengths, etc.). Difficulty metrics are purely
 diagnostic, i.e. they do not modify rewards.
 
-Difficulty Axes:
-    Task difficulty for code execution reasoning can be decomposed into two axes:
-
-    1. **Reasoning depth**: The number of sequential reasoning steps required to solve the
-       problem, reflecting how far logical dependencies span across the trace. This is
-       well-captured by `trace_step_count` (the default primary_source).
-
-    2. **Computational burden**: The amount and brittleness of exact symbolic/numeric
-       manipulation within and across steps --- how much state (variables, values) must be
-       faithfully carried and updated. We currently lack good metrics for this axis; the
-       `halstead_effort` (included in secondary_sources by default) serves as a rough
-       code-level proxy, but it measures static code complexity rather than dynamic
-       execution state. Better metrics would require trace-level variable statistics or
-       evaluations using reference reasoning models directly.
+For more information on strategies to measure 'task difficulty' across computational depth and
+burden axes, see the `pyine.utils.code.difficulty` module.
 
 Important:
     When SampleData.has_code_override=True, the trace_step_count and complexity_metrics
@@ -25,83 +13,12 @@ Important:
     this via the configured `code_override_mode`.
 """
 
-import enum
-import math
 import typing
 
 import pyine.organisms.datamodules.samples
 import pyine.organisms.models.rewards.core.types as reward_types
+import pyine.utils.code.difficulty as difficulty_utils
 import pyine.utils.stats as stats_utils
-
-if typing.TYPE_CHECKING:
-    import pyine.organisms.models.rewards.core.configs as reward_configs
-
-
-class CodeOverrideMode(enum.StrEnum):
-    """How to handle samples with has_code_override=True."""
-
-    skip = enum.auto()
-    """Skip execution difficulty metrics; context metrics (token sources) still logged."""
-    use_original = enum.auto()
-    """Use original traced metrics (may not reflect actual code)."""
-    recompute_step_count = enum.auto()
-    """Recompute trace_step_count from segment indices; use original complexity metrics.
-
-    Uses (last_step_idx - first_step_idx + 1) if both indices are > 0 (0 means "not applicable").
-    Falls back to original trace_step_count if indices are unavailable.
-    """
-
-
-DEFAULT_SOURCE_RANGES: dict[str, tuple[float, float, bool]] = {
-    # (min, max, invert): score = (clamped - min) / (max - min), then 1 - score if invert
-    "maintainability_index": (0.0, 100.0, True),  # higher MI = easier, so invert
-}
-"""Default source ranges for fixed-range normalization (can be overridden in config).
-
-Only `maintainability_index` is pre-defined because it's the only common complexity metric with a
-standardized range (0-100). Other metrics like cyclomatic_complexity, halstead_effort, etc. are
-unbounded and should use `normalization_mode="log"` or be calibrated empirically per dataset via
-the `source_ranges` config option.
-"""
-
-TOKEN_SOURCES: frozenset[str] = frozenset(
-    {
-        "code_tokens",
-        "inputs_tokens",
-        "output_tokens",
-    }
-)
-"""Difficulty sources that require a tokenizer (sample-intrinsic context measures).
-
-Note: `output_tokens` refers to the expected output from sample data, not the model's prediction.
-"""
-
-EXECUTION_SOURCES: frozenset[str] = frozenset(
-    {
-        "trace_step_count",
-        "segment_span",
-        # note: all complexity_metrics keys are also execution sources
-    }
-)
-"""Execution-related difficulty sources (affected by has_code_override)."""
-
-CONTEXT_SOURCES: frozenset[str] = frozenset(
-    {
-        "code_tokens",
-        "inputs_tokens",
-        "output_tokens",
-        "code_length",
-        "inputs_length",
-        "output_length",
-    }
-)
-"""Context-related difficulty sources (valid even with has_code_override).
-
-Note: `output_*` sources refer to the expected output from sample data, not the model's prediction.
-"""
-
-_DEFAULT_LOG_BIN_MAX_SCORE = math.log1p(10_000)
-"""Default bin_max_score for log normalization: log1p(10_000) is approximately 9.21."""
 
 
 class DifficultyEstimator:
@@ -122,7 +39,7 @@ class DifficultyEstimator:
 
     def __init__(
         self,
-        config: "reward_configs.DifficultyConfig",
+        config: difficulty_utils.DifficultyConfig,
         token_counter: typing.Callable[[str], int] | None = None,
     ) -> None:
         """Initialize the difficulty estimator.
@@ -136,17 +53,14 @@ class DifficultyEstimator:
         """
         self._config = config
         self._token_counter = token_counter
-        # validate token sources have tokenizer
-        all_sources = {config.primary_source} | set(config.secondary_sources)
-        if all_sources & TOKEN_SOURCES and token_counter is None:
-            raise ValueError(
-                f"difficulty sources {all_sources & TOKEN_SOURCES} require a token_counter; "
-                "ensure RewardManager has a tokenizer configured"
-            )
+        self._scorer = difficulty_utils.DifficultyScorer(
+            config,
+            token_counter=token_counter,
+        )
         # phase tracking for phase-aware config options
         self._is_eval_phase = False
         # compute bin edges based on normalization mode
-        self._bin_edges = self._compute_bin_edges()
+        self._bin_edges = self._scorer.bin_edges
         # tracking stats for run-level aggregation
         self._score_stats = stats_utils.RunningStats()
         # track values for percentile computation (populated when track_percentiles is active)
@@ -213,49 +127,6 @@ class DifficultyEstimator:
         """Check if bin value tracking is active (for quantiles)."""
         return self._is_mode_active(self._config.track_bin_quantiles)
 
-    def _compute_bin_edges(self) -> list[float]:
-        """Compute bin edges based on normalization mode and config.
-
-        Note:
-            This method assumes config validation has already run (via DifficultyConfig's
-            pydantic validator). It does not re-validate constraints like bin_edges sorting,
-            normalization_mode compatibility, or source_ranges availability.
-
-        Returns:
-            List of bin edges (length = num_bins + 1 for standard bins, or num_bins + 2 if
-            overflow bin is used).
-        """
-        config = self._config
-        num_bins = config.num_difficulty_bins
-        # if manual edges provided, use them
-        if config.bin_edges is not None:
-            return list(config.bin_edges)
-        if config.normalization_mode == "fixed_range":
-            # uniform edges in [0, 1] (no overflow needed since score is clamped)
-            return [i / num_bins for i in range(num_bins + 1)]
-        # log normalization: uniform edges in [0, bin_max_score]
-        bin_max = config.bin_max_score
-        if bin_max is None:
-            # use score_clip_max if set, otherwise default
-            bin_max = config.score_clip_max if config.score_clip_max is not None else _DEFAULT_LOG_BIN_MAX_SCORE
-        edges = [i * bin_max / num_bins for i in range(num_bins + 1)]
-        # add overflow bin only if scores can exceed the last bin edge
-        # (i.e., no clipping, OR clipping is above the last edge)
-        needs_overflow = config.score_clip_max is None or config.score_clip_max > bin_max
-        if needs_overflow:
-            edges.append(float("inf"))
-        return edges
-
-    def _get_bin_index(
-        self,
-        score: float,
-    ) -> int:
-        """Get bin index for a difficulty score."""
-        for bin_idx in range(len(self._bin_edges) - 1):
-            if score < self._bin_edges[bin_idx + 1]:
-                return bin_idx
-        return len(self._bin_edges) - 2  # last bin (overflow if present)
-
     def _track_secondary_value(
         self,
         source: str,
@@ -268,6 +139,27 @@ class DifficultyEstimator:
             self._secondary_corr_stats[source] = stats_utils.RunningCorrStats()
         self._secondary_stats[source].update(raw_value)
         self._secondary_corr_stats[source].update(raw_value, reward_total)
+
+    def get_raw_value(
+        self,
+        sample_data: pyine.organisms.datamodules.samples.SampleData,
+        source: str,
+    ) -> float | None:
+        """Return raw difficulty value for a given source."""
+        return difficulty_utils.get_raw_value(
+            sample_data,
+            source,
+            config=self._config,
+            token_counter=self._token_counter,
+        )
+
+    def normalize(
+        self,
+        raw_value: float,
+        source: str,
+    ) -> float:
+        """Normalize a raw difficulty value based on the estimator config."""
+        return difficulty_utils.normalize_value(raw_value, source, self._config)
 
     def reset(self) -> None:
         """Reset estimator state for a new run."""
@@ -282,104 +174,6 @@ class DifficultyEstimator:
         self._bin_reward_values = [[] for _ in range(len(self._bin_edges) - 1)]
         self._secondary_stats = {}
         self._secondary_corr_stats = {}
-
-    def _get_effective_trace_step_count(
-        self,
-        sample_data: pyine.organisms.datamodules.samples.SampleData,
-    ) -> float | None:
-        """Get effective trace step count, handling code overrides."""
-        if not sample_data.has_code_override:
-            return float(sample_data.trace_step_count)
-        mode = self._config.code_override_mode
-        if mode == CodeOverrideMode.skip:
-            return None
-        if mode == CodeOverrideMode.use_original:
-            return float(sample_data.trace_step_count)
-        if mode == CodeOverrideMode.recompute_step_count:
-            if sample_data.first_step_idx > 0 and sample_data.last_step_idx > 0:
-                return float(sample_data.last_step_idx - sample_data.first_step_idx + 1)
-            return float(sample_data.trace_step_count)
-        return None
-
-    def get_raw_value(
-        self,
-        sample_data: pyine.organisms.datamodules.samples.SampleData,
-        source: str,
-    ) -> float | None:
-        """Extract raw difficulty value from sample data.
-
-        Args:
-            sample_data: Sample data containing trace/complexity info.
-            source: Source key - special keys (trace_step_count, code_length, inputs_length,
-                    output_length, segment_span, code_tokens, inputs_tokens, output_tokens)
-                    or any key in complexity_metrics.
-
-        Returns:
-            Raw numeric difficulty value, or None if not available.
-        """
-        # execution/structural sources
-        if source == "trace_step_count":
-            return self._get_effective_trace_step_count(sample_data)
-        if source == "code_length":
-            return float(len(sample_data.code))
-        if source == "inputs_length":
-            return float(len(sample_data.inputs))
-        if source == "output_length":  # expected output from sample data, not model prediction
-            return float(len(sample_data.expected_output))
-        if source == "segment_span":
-            span = sample_data.last_line - sample_data.first_line
-            return float(span) if span > 0 else None
-        # token-based context difficulty sources (sample-intrinsic measures)
-        if source == "code_tokens":
-            assert self._token_counter is not None, "token_counter required for code_tokens source"
-            return float(self._token_counter(sample_data.code))
-        if source == "inputs_tokens":
-            assert self._token_counter is not None, "token_counter required for inputs_tokens source"
-            return float(self._token_counter(sample_data.inputs))
-        if source == "output_tokens":  # expected output from sample data, not model prediction
-            assert self._token_counter is not None, "token_counter required for output_tokens source"
-            return float(self._token_counter(sample_data.expected_output))
-        # complexity metrics
-        complexity = sample_data.complexity_metrics
-        if not complexity or source not in complexity:
-            return None
-        if sample_data.has_code_override and self._config.code_override_mode == CodeOverrideMode.skip:
-            return None
-        return float(complexity[source])
-
-    def normalize(
-        self,
-        raw_value: float,
-        source: str,
-    ) -> float:
-        """Apply normalization to a raw difficulty value.
-
-        Returns:
-            Normalized score. Range depends on normalization_mode:
-            - "none": unbounded (raw value);
-            - "log": unbounded (log1p), typically 0-7 for common ranges;
-            - "fixed_range": [0, 1] after clamp/invert.
-        """
-        if self._config.normalization_mode == "none":
-            score = raw_value
-        elif self._config.normalization_mode == "log":
-            score = math.log1p(max(0.0, raw_value))
-        elif self._config.normalization_mode == "fixed_range":
-            source_ranges = {**DEFAULT_SOURCE_RANGES, **(self._config.source_ranges or {})}
-            assert source in source_ranges, (
-                f"fixed_range normalization requires source '{source}' to have a known range; "
-                "this should have been caught by config validation"
-            )
-            low, high, invert = source_ranges[source]
-            clamped = max(low, min(high, raw_value))
-            score = (clamped - low) / (high - low) if high > low else 0.5
-            if invert:
-                score = 1.0 - score
-        else:
-            score = raw_value
-        if self._config.score_clip_max is not None:
-            score = min(score, self._config.score_clip_max)
-        return score
 
     def compute(
         self,
@@ -398,49 +192,37 @@ class DifficultyEstimator:
             Dictionary of difficulty metrics to merge into RewardOutput.metrics.
         """
         self._total_count += 1
-        metrics: dict[str, reward_types.MetricValue] = {
-            "difficulty/source": self._config.primary_source,
-            "difficulty/execution_skipped": 0,
-            "difficulty/primary_missing": 0,
-            "difficulty/has_code_override": int(sample_data.has_code_override),
-        }
-        # determine if primary source is an execution source (affected by code override)
-        # token sources (sample_code_tokens, inputs_tokens, etc.) are context, not execution
-        primary_is_execution = (
-            self._config.primary_source in EXECUTION_SOURCES
-            or (
-                self._config.primary_source not in CONTEXT_SOURCES and self._config.primary_source not in TOKEN_SOURCES
-            )  # complexity_metrics are execution
+        result = self._scorer.compute_result(sample_data)
+        skip_execution = (
+            result.has_code_override and self._config.code_override_mode == difficulty_utils.CodeOverrideMode.skip
         )
-        # check code override handling; skip execution metrics but still compute context metrics
-        skip_execution = sample_data.has_code_override and self._config.code_override_mode == CodeOverrideMode.skip
         if skip_execution:
             self._override_skip_count += 1
-            metrics["difficulty/execution_skipped"] = 1
-            if primary_is_execution:
-                metrics["difficulty/primary_missing"] = 1
-                # still log secondary context sources even when primary is skipped
-                for secondary_source in self._config.secondary_sources:
-                    if secondary_source in CONTEXT_SOURCES or secondary_source in TOKEN_SOURCES:
-                        raw_secondary = self.get_raw_value(sample_data, secondary_source)
-                        if raw_secondary is not None:
-                            metrics[f"difficulty/raw/{secondary_source}"] = raw_secondary
-                return metrics
-        raw_primary = self.get_raw_value(sample_data, self._config.primary_source)
-        if raw_primary is None:
-            self._missing_count += 1
-            metrics["difficulty/primary_missing"] = 1
+        metrics: dict[str, reward_types.MetricValue] = {
+            "difficulty/source": self._config.primary_source,
+            "difficulty/execution_skipped": int(skip_execution),
+            "difficulty/primary_missing": int(result.primary_missing),
+            "difficulty/has_code_override": int(result.has_code_override),
+        }
+        if result.primary_missing:
+            if not result.execution_skipped:
+                self._missing_count += 1
+            for secondary_source, raw_secondary in result.secondary_raw.items():
+                metrics[f"difficulty/raw/{secondary_source}"] = raw_secondary
             return metrics
-        difficulty_score = self.normalize(raw_primary, self._config.primary_source)
-        metrics["difficulty/raw_primary"] = raw_primary
-        metrics["difficulty/score"] = difficulty_score
-        self._score_stats.update(difficulty_score)
+        if result.score is None or result.bin_index is None:
+            raise ValueError("difficulty result missing score or bin_index after primary was present")
+        if result.raw_primary is None:
+            raise ValueError("difficulty result missing raw_primary after primary was present")
+        metrics["difficulty/raw_primary"] = result.raw_primary
+        metrics["difficulty/score"] = result.score
+        self._score_stats.update(result.score)
         if self._should_track_percentiles():
-            self._score_values.append(difficulty_score)
-        bin_idx = self._get_bin_index(difficulty_score)
+            self._score_values.append(result.score)
+        bin_idx = result.bin_index
         self._bin_reward_stats[bin_idx].update(reward_total)
         metrics["difficulty/bin_index"] = bin_idx
-        self._corr_stats.update(difficulty_score, reward_total)
+        self._corr_stats.update(result.score, reward_total)
         if self._should_track_bin_values():
             self._bin_reward_values[bin_idx].append(reward_total)
         if self._should_track_per_term_rewards() and weighted_terms:
@@ -450,11 +232,9 @@ class DifficultyEstimator:
                         stats_utils.RunningStats() for _ in range(len(self._bin_edges) - 1)
                     ]
                 self._bin_term_reward_stats[term_name][bin_idx].update(term_value)
-        for secondary_source in self._config.secondary_sources:
-            raw_secondary = self.get_raw_value(sample_data, secondary_source)
-            if raw_secondary is not None:
-                metrics[f"difficulty/raw/{secondary_source}"] = raw_secondary
-                self._track_secondary_value(secondary_source, raw_secondary, reward_total)
+        for secondary_source, raw_secondary in result.secondary_raw.items():
+            metrics[f"difficulty/raw/{secondary_source}"] = raw_secondary
+            self._track_secondary_value(secondary_source, raw_secondary, reward_total)
         return metrics
 
     def get_bin_stats(self) -> list[stats_utils.RunningStats]:
@@ -611,7 +391,7 @@ class DifficultyEstimator:
     @classmethod
     def from_state(
         cls,
-        config: "reward_configs.DifficultyConfig",
+        config: difficulty_utils.DifficultyConfig,
         state: dict[str, typing.Any],
         token_counter: typing.Callable[[str], int] | None = None,
     ) -> "DifficultyEstimator":

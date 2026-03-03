@@ -8,11 +8,14 @@ This module provides:
 """
 
 import ast
+import collections.abc
 import dataclasses
 import functools
 import json
 import re
 import typing
+
+import pydantic
 
 __all__ = [
     "normalize_path_prefix",
@@ -25,6 +28,10 @@ __all__ = [
     "strip_markdown_fences",
     "ParseResult",
     "parse_json_or_python_literal",
+    "ParsedOutput",
+    "OutputParser",
+    "ParsingConfig",
+    "TagsOutputParser",
 ]
 
 
@@ -375,3 +382,276 @@ def parse_json_or_python_literal(
     except json.JSONDecodeError as exc:
         errors.append(f"json: {exc}")
     return ParseResult(success=False, error="; ".join(errors))
+
+
+# -------------------------------- structured output parsing --------------------------------
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class ParsedOutput:
+    """Structured representation of a parsed model output string.
+
+    Used by both the reward pipeline and the eval pipeline to carry structured fields
+    (final answer, reasoning) extracted from raw model outputs.
+    """
+
+    raw: str
+    """Raw model output string."""
+    final_answer: str | None = None
+    """Extracted "final answer" field, if available."""
+    reasoning: str | None = None
+    """Extracted "reasoning" field, if available."""
+    fields: collections.abc.Mapping[str, str] = dataclasses.field(default_factory=lambda: {})
+    """Additional extracted string fields (term-/task-specific)."""
+
+
+class OutputParser(typing.Protocol):
+    """Protocol for extracting structured fields from a model output.
+
+    Implementations should be deterministic and side-effect free.
+    """
+
+    def parse(
+        self,
+        prompt: str,
+        model_output: str,
+    ) -> ParsedOutput:
+        """Parse a raw model output into structured fields."""
+        ...
+
+
+class ParsingConfig(pydantic.BaseModel):
+    """Configuration for output parsing.
+
+    Parsing is optional. When enabled, a parser is constructed from this config and used to
+    extract structured fields (final answer, reasoning) from raw model outputs.
+    """
+
+    model_config = pydantic.ConfigDict(frozen=True, extra="ignore")
+
+    mode: typing.Literal["tags"] = "tags"
+    """Parsing mode for model outputs."""
+    enabled_fields: typing.Literal["both", "final_only", "reasoning_only"] = "both"
+    """Which parsed fields to extract (skips scanning disabled fields)."""
+    final_tag: str = "final"
+    """Tag name used to extract the final answer when using ``mode="tags"``."""
+    reasoning_from_outside_final: bool = False
+    """If True, set reasoning to all text outside the selected ``<final_tag>`` block."""
+    reasoning_from_entire_output_when_no_final_answer: bool = False
+    """If True and no final answer is present, treat the entire model output as reasoning."""
+    reasoning_tag: str = "reasoning"
+    """Tag name used to extract reasoning when using ``mode="tags"``."""
+    fallback_policy: typing.Literal["none", "last_line", "entire_output"] = "none"
+    """Policy used when no final answer tag is present."""
+    multi_tag_policy: typing.Literal["last", "first", "error"] = "last"
+    """Policy used when multiple tag blocks are present."""
+    strict: bool = False
+    """Whether malformed tag structure should raise (unclosed/stray closes/nesting)."""
+    capture_diagnostics: bool = True
+    """Whether to include tag diagnostics in ``ParsedOutput.fields``."""
+
+    @pydantic.field_validator("final_tag", "reasoning_tag")
+    @classmethod
+    def _validate_tag_name(
+        cls,
+        value: str,
+    ) -> str:
+        """Validate and normalize an XML-like tag name."""
+        name = value.strip()
+        if not name:
+            raise ValueError("tag name cannot be empty")
+        return name
+
+    @pydantic.model_validator(mode="after")
+    def _validate_config(self) -> "ParsingConfig":
+        """Validate parsing configuration consistency."""
+        if self.enabled_fields == "reasoning_only" and self.fallback_policy != "none":
+            raise ValueError("fallback_policy applies to final_answer; set enabled_fields to include final")
+        if self.enabled_fields == "both" and self.final_tag == self.reasoning_tag:
+            raise ValueError(
+                f"final_tag and reasoning_tag cannot be the same when enabled_fields='both': {self.final_tag!r}"
+            )
+        return self
+
+
+class TagsOutputParser:
+    """Extracts "final answer" and "reasoning" XML-tagged blocks from model outputs.
+
+    This parser is intentionally minimal and deterministic. The tag names and fallback policy are
+    controlled by ``ParsingConfig``.
+    """
+
+    def __init__(
+        self,
+        config: ParsingConfig,
+    ) -> None:
+        """Create a tag-based parser from configuration.
+
+        Args:
+            config: Parsing configuration (tag names + fallback policy).
+        """
+        if config.mode != "tags":
+            raise ValueError(f"unsupported parsing mode: {config.mode}")
+        self._config = config
+        self._final_open_re = compile_open_tag_regex(config.final_tag)
+        self._final_close_re = compile_close_tag_regex(config.final_tag)
+        self._reasoning_open_re = compile_open_tag_regex(config.reasoning_tag)
+        self._reasoning_close_re = compile_close_tag_regex(config.reasoning_tag)
+
+    @property
+    def final_tag(self) -> str:
+        """The tag name used for final answer extraction."""
+        return self._config.final_tag
+
+    def parse(
+        self,
+        prompt: str,
+        model_output: str,
+    ) -> ParsedOutput:
+        """Parse the model output into a structured representation.
+
+        Args:
+            prompt: Prompt text (currently unused; kept for interface symmetry).
+            model_output: Raw model output string.
+
+        Returns:
+            Parsed output containing extracted fields.
+        """
+        del prompt  # unused
+        raw = model_output
+        final_answer: str | None = None
+        reasoning: str | None = None
+        fields: dict[str, str] = {}
+        want_final = self._config.enabled_fields in ("both", "final_only")
+        want_reasoning = self._config.enabled_fields in ("both", "reasoning_only")
+        need_final_scan_for_reasoning = bool(
+            want_reasoning
+            and (
+                self._config.reasoning_from_outside_final
+                or self._config.reasoning_from_entire_output_when_no_final_answer
+            )
+        )
+        final_selected_open_start: int | None = None
+        final_selected_close_end: int | None = None
+        final_block_answer: str | None = None
+        has_malformed_structure = False
+        if want_final or need_final_scan_for_reasoning:
+            final_result = extract_tag_blocks(
+                raw,
+                tag_name=self._config.final_tag,
+                open_regex=self._final_open_re,
+                close_regex=self._final_close_re,
+            )
+            if final_result.has_malformed_structure:
+                has_malformed_structure = True
+            if self._config.strict and final_result.has_malformed_structure:
+                raise ValueError(
+                    "malformed tag structure detected: "
+                    f"tag={final_result.tag} nested={final_result.has_nested_open} "
+                    f"stray_close={final_result.has_stray_close} "
+                    f"unclosed_open={final_result.has_unclosed_open}"
+                )
+            final_selection = select_tag_block(final_result, policy=self._config.multi_tag_policy)
+            if final_selection:
+                selected_final, final_idx = final_selection
+                selected_final = selected_final.strip() or None  # empty string -> None
+                final_block_answer = selected_final
+                if want_final:
+                    final_answer = selected_final
+                if 0 <= final_idx < len(final_result.block_start_offsets):
+                    final_selected_open_start = final_result.block_start_offsets[final_idx]
+                if 0 <= final_idx < len(final_result.block_end_offsets):
+                    final_selected_close_end = final_result.block_end_offsets[final_idx]
+            if want_final and final_answer is None and self._config.fallback_policy != "none":
+                final_answer = self._fallback(raw)
+            if self._config.capture_diagnostics:
+                fields.update(self._format_diagnostics(final_result, raw))
+        if want_reasoning:
+            if self._config.reasoning_from_outside_final and final_selected_open_start is not None:
+                prefix = raw[:final_selected_open_start]
+                suffix = raw[final_selected_close_end:] if final_selected_close_end is not None else ""
+                prefix_stripped = prefix.strip()
+                suffix_stripped = suffix.strip()
+                if prefix_stripped and suffix_stripped:
+                    reasoning = prefix_stripped + "\n" + suffix_stripped
+                elif prefix_stripped:
+                    reasoning = prefix_stripped
+                elif suffix_stripped:
+                    reasoning = suffix_stripped
+                else:
+                    reasoning = ""
+            else:
+                reasoning_result = extract_tag_blocks(
+                    raw,
+                    tag_name=self._config.reasoning_tag,
+                    open_regex=self._reasoning_open_re,
+                    close_regex=self._reasoning_close_re,
+                )
+                if reasoning_result.has_malformed_structure:
+                    has_malformed_structure = True
+                if self._config.strict and reasoning_result.has_malformed_structure:
+                    raise ValueError(
+                        "malformed tag structure detected: "
+                        f"tag={reasoning_result.tag} nested={reasoning_result.has_nested_open} "
+                        f"stray_close={reasoning_result.has_stray_close} "
+                        f"unclosed_open={reasoning_result.has_unclosed_open}"
+                    )
+                reasoning_selection = select_tag_block(reasoning_result, policy=self._config.multi_tag_policy)
+                if reasoning_selection:
+                    reasoning = reasoning_selection[0].strip()
+                elif want_reasoning:
+                    reasoning = ""
+                if self._config.capture_diagnostics:
+                    fields.update(self._format_diagnostics(reasoning_result, raw))
+            if self._config.reasoning_from_entire_output_when_no_final_answer:
+                answer_present_for_policy = final_answer is not None if want_final else final_block_answer is not None
+                if not answer_present_for_policy and (reasoning is None or reasoning.strip() == ""):
+                    stripped_raw = raw.strip()
+                    if stripped_raw:
+                        reasoning = stripped_raw
+        if self._config.capture_diagnostics:
+            fields["is_malformed"] = str(has_malformed_structure).lower()
+        return ParsedOutput(
+            raw=raw,
+            final_answer=final_answer,
+            reasoning=reasoning,
+            fields=fields,
+        )
+
+    @staticmethod
+    def _format_diagnostics(
+        result: TagBlockExtractionResult,
+        raw: str,
+    ) -> dict[str, str]:
+        """Serialize extraction result into ``ParsedOutput.fields``."""
+        base = f"tags/{result.tag}/"
+        fields: dict[str, str] = {
+            f"{base}open_count": str(result.open_count),
+            f"{base}close_count": str(result.close_count),
+            f"{base}block_count": str(result.block_count),
+            f"{base}has_nested_open": str(result.has_nested_open).lower(),
+            f"{base}has_stray_close": str(result.has_stray_close).lower(),
+            f"{base}has_unclosed_open": str(result.has_unclosed_open).lower(),
+        }
+        if result.last_close_end is not None:
+            fields[f"{base}last_close_end"] = str(result.last_close_end)
+            stops_after = result.stops_after_last_close(raw)
+            if stops_after is not None:
+                fields[f"{base}stops_after_last_close"] = str(stops_after).lower()
+        return fields
+
+    def _fallback(
+        self,
+        raw: str,
+    ) -> str | None:
+        """Apply the configured fallback policy when no ``<final>`` block is present."""
+        if self._config.fallback_policy == "entire_output":
+            stripped = raw.strip()
+            return stripped if stripped else None
+        if self._config.fallback_policy == "last_line":
+            stripped = raw.strip()
+            if not stripped:
+                return None
+            last_line = stripped.splitlines()[-1].strip()
+            return last_line if last_line else None
+        raise ValueError(f"unknown fallback policy: {self._config.fallback_policy}")

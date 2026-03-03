@@ -165,6 +165,7 @@ class FakeDataModule:
 
     def __init__(self, samples: list[FakeSample]) -> None:
         self._samples = samples
+        self.config = {"fake": True}
 
     def get_parser(self, subset_name: str) -> FakeSampleBuilder:
         """Return fake sample builder."""
@@ -180,6 +181,7 @@ class FakeSampleEval:
     soft_match: str | None = None
     llm_score: float | None = None
     tags: list[str] | None = None
+    attempt_index: int = 0
 
 
 class FakeOutcomeEvaluator:
@@ -200,19 +202,26 @@ class FakeOutcomeEvaluator:
         expected: str,
         predict_type: str = "unknown",
         tags: list[str] | None = None,
+        attempt_index: int = 0,
     ) -> None:
         """Record sample addition."""
         self.added.append((identifier, expected, predicted, tags or []))
-        self.results.append(FakeSampleEval(identifier=identifier, tags=tags or []))
+        self.results.append(FakeSampleEval(identifier=identifier, tags=tags or [], attempt_index=attempt_index))
 
     def get_sample_count(self) -> int:
-        """Return count of added samples."""
+        """Return count of unique samples."""
+        return len({r.identifier for r in self.results})
+
+    def get_attempt_count(self) -> int:
+        """Return count of attempts."""
         return len(self.results)
 
     async def compute_category_wise_metrics(
         self,
         category_to_identifiers: dict[str, list[str]],
         score_threshold: float = 0.5,
+        pass_at_k_values: typing.Any = None,
+        num_attempts_per_sample: int = 1,
     ) -> dict[str, dict[str, typing.Any]]:
         """Return empty metrics (fake implementation)."""
         return {}
@@ -225,6 +234,8 @@ class FakeArtifact:
     sample: object
     token_usage: object
     eval_result: object
+    parsed_output: object = None
+    difficulty_score: float | None = None
 
 
 @dataclasses.dataclass

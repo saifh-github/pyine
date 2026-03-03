@@ -136,7 +136,7 @@ class ProbeMetricsConnector:
 
         # Load frozen LLM
         logger.info("loading frozen LLM: %s", self._config.probe_llm_model)
-        resolved_config = common._resolve_attn_implementation(self._config.probe_auto_model_config)  # pyright: ignore[reportPrivateUsage]
+        resolved_config = common.resolve_attn_implementation(self._config.probe_auto_model_config)
         llm_model = transformers.AutoModelForCausalLM.from_pretrained(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # transformers stubs
             self._config.probe_llm_checkpoint_path or self._config.probe_llm_model,
             torch_dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16,

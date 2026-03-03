@@ -321,12 +321,13 @@ class TestSampleCategoryExtractionConfig:
     """Tests for SampleCategoryExtractionConfig."""
 
     def test_default_config(self) -> None:
-        """Default config includes code_type, predict_type, and has_keyword fields."""
+        """Default config includes code_type, predict_type, has_keyword, and identifier_suffix."""
         config = pyine.evals.utils.SampleCategoryExtractionConfig()
         assert pyine.evals.utils.SampleCategoryField.code_type in config.enabled_fields
         assert pyine.evals.utils.SampleCategoryField.predict_type in config.enabled_fields
         assert pyine.evals.utils.SampleCategoryField.has_keyword in config.enabled_fields
-        assert len(config.enabled_fields) == 3
+        assert pyine.evals.utils.SampleCategoryField.identifier_suffix in config.enabled_fields
+        assert len(config.enabled_fields) == 4
         assert config.tag_prefixes is None
 
     def test_custom_config(self) -> None:
@@ -341,7 +342,7 @@ class TestSampleCategoryExtractionConfig:
             tag_prefixes=frozenset({"augment"}),
         )
         assert len(config.enabled_fields) == 2
-        assert config.tag_prefixes == frozenset({"augment"})
+        assert config.tag_prefixes == ["augment"]
 
 
 class TestSampleCategoryExtractor:

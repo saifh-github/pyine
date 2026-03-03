@@ -1,7 +1,8 @@
 """Load LMDB completion records into HuggingFace datasets for probe training.
 
 Reads records exported by DiskRewardLogger during RL training runs and converts
-them into input-label pairs: text = prompt + model_output, label = is_match.
+them into input-label pairs: messages = structured role-attributed conversation,
+label = is_match.
 
 Supports two modes:
 - **Two-prefix mode** (default): Train from ``train_key_prefix``, validate from
@@ -22,6 +23,7 @@ import datasets  # noqa: TC002 -- used at runtime (Dataset.from_list, DatasetDic
 if typing.TYPE_CHECKING:
     from pyine.guardrails.data.datamodule_configs import LabelBalanceConfig, ProbeDataModuleConfig
 
+import pyine.data.utils.generation_record
 import pyine.data.utils.lmdb_io
 import pyine.utils.code.output_compare
 from pyine.guardrails.data.reward_keys import (  # noqa: TID252 -- avoids circular import via __init__
@@ -77,28 +79,29 @@ def _record_to_probe_sample(
     recompute_labels: bool,
     compare_options: pyine.utils.code.output_compare.CompareOptions | None,
     skip_malformed: bool,
-) -> dict[str, str | int] | None:
+) -> dict[str, typing.Any] | None:
     """Convert a single LMDB record to a probe training sample.
 
     Returns:
-        {"text": str, "label": int, "sample_id": str}, or None if the record
-        is malformed and skip_malformed is True.
+        ``{"messages": list[dict[str, str]], "label": int, "sample_id": str, "code_type": str}``,
+        or None if the record is malformed and skip_malformed is True.
 
     Raises:
         ValueError: If the record is malformed and skip_malformed is False.
     """
-    prompt = record.get("prompt")
     model_output = record.get("model_output")
-
-    # check required fields: prompt and model_output are always needed
-    if prompt is None or model_output is None:
-        msg = f"record for sample_id '{sample_id}' is missing prompt or model_output"
+    if model_output is None:
+        msg = f"record for sample_id '{sample_id}' is missing model_output"
         if skip_malformed:
             return None
         raise ValueError(msg)
-
-    text = prompt + model_output
-
+    # build structured messages (requires prompt_messages or prompt)
+    try:
+        messages = pyine.data.utils.generation_record.build_messages_from_record(record, model_output)
+    except ValueError:
+        if skip_malformed:
+            return None
+        raise
     # derive label
     if recompute_labels:
         expected_output = record.get("expected_output")
@@ -107,11 +110,9 @@ def _record_to_probe_sample(
             if skip_malformed:
                 return None
             raise ValueError(msg)
-
         predicted = record.get("final_answer")
         if predicted is None:
             predicted = model_output
-
         label = _recompute_label(label_metric_key, expected_output, predicted, compare_options)
     else:
         reward_metrics = record.get("reward_metrics")
@@ -121,13 +122,11 @@ def _record_to_probe_sample(
                 return None
             raise ValueError(msg)
         label = int(reward_metrics[label_metric_key])
-
     # extract code_type (always present after DiskRewardLogger export)
     code_type = record.get("code_type")
     if code_type is None:
         code_type = "unknown"
-
-    return {"text": text, "label": label, "sample_id": sample_id, "code_type": code_type}
+    return {"messages": messages, "label": label, "sample_id": sample_id, "code_type": code_type}
 
 
 def _recompute_label(
@@ -199,10 +198,10 @@ def _filter_by_code_type(
 
 
 def _split_records_by_family(
-    samples: list[dict[str, str | int]],
+    samples: list[dict[str, typing.Any]],
     train_ratio: float,
     seed: int,
-) -> tuple[list[dict[str, str | int]], list[dict[str, str | int]]]:
+) -> tuple[list[dict[str, typing.Any]], list[dict[str, typing.Any]]]:
     """Split samples into train/valid by family ID.
 
     All samples sharing a family ID go to the same split, preventing data
@@ -224,7 +223,7 @@ def _split_records_by_family(
         ValueError: If fewer than 2 families exist.
     """
     # group samples by family ID
-    families: dict[str, list[dict[str, str | int]]] = {}
+    families: dict[str, list[dict[str, typing.Any]]] = {}
     for sample in samples:
         family_id = _extract_family_id(str(sample["sample_id"]))
         families.setdefault(family_id, []).append(sample)
@@ -249,8 +248,8 @@ def _split_records_by_family(
 
     train_family_ids = set(family_ids[:n_train])
 
-    train_samples: list[dict[str, str | int]] = []
-    valid_samples: list[dict[str, str | int]] = []
+    train_samples: list[dict[str, typing.Any]] = []
+    valid_samples: list[dict[str, typing.Any]] = []
     for family_id in family_ids:
         target = train_samples if family_id in train_family_ids else valid_samples
         target.extend(families[family_id])
@@ -259,10 +258,10 @@ def _split_records_by_family(
 
 
 def _split_records_random(
-    samples: list[dict[str, str | int]],
+    samples: list[dict[str, typing.Any]],
     train_ratio: float,
     seed: int,
-) -> tuple[list[dict[str, str | int]], list[dict[str, str | int]]]:
+) -> tuple[list[dict[str, typing.Any]], list[dict[str, typing.Any]]]:
     """Split samples into train/valid by random shuffle.
 
     Args:
@@ -296,13 +295,13 @@ def _convert_records_to_samples(
     recompute_labels: bool,
     compare_options: pyine.utils.code.output_compare.CompareOptions | None,
     skip_malformed: bool,
-) -> tuple[list[dict[str, str | int]], int]:
+) -> tuple[list[dict[str, typing.Any]], int]:
     """Convert LMDB records to probe samples, tracking skipped count.
 
     Returns:
         (samples, skipped_count) tuple.
     """
-    samples: list[dict[str, str | int]] = []
+    samples: list[dict[str, typing.Any]] = []
     skipped = 0
     for sample_id, record in records:
         sample = _record_to_probe_sample(
@@ -321,10 +320,10 @@ def _convert_records_to_samples(
 
 
 def _apply_label_balance(
-    samples: list[dict[str, str | int]],
+    samples: list[dict[str, typing.Any]],
     balance_config: LabelBalanceConfig,
     seed: int,
-) -> list[dict[str, str | int]]:
+) -> list[dict[str, typing.Any]]:
     """Resample a list of probe samples to match target label/code-type proportions.
 
     Supports two modes (determined by which field is set on *balance_config*):
@@ -356,11 +355,11 @@ def _apply_label_balance(
 
 
 def _apply_simple_balance(
-    samples: list[dict[str, str | int]],
+    samples: list[dict[str, typing.Any]],
     target_ratio: float,
     strategy: str,
     rng: random.Random,
-) -> list[dict[str, str | int]]:
+) -> list[dict[str, typing.Any]]:
     """Simple mode: resample to hit target positive ratio."""
     positives = [s for s in samples if s["label"] == 1]
     negatives = [s for s in samples if s["label"] == 0]
@@ -408,14 +407,14 @@ def _apply_simple_balance(
 
 
 def _apply_group_balance(
-    samples: list[dict[str, str | int]],
+    samples: list[dict[str, typing.Any]],
     group_proportions: dict[str, float],
     strategy: str,
     rng: random.Random,
-) -> list[dict[str, str | int]]:
+) -> list[dict[str, typing.Any]]:
     """Group mode: resample (code_type, label) groups to hit target proportions."""
     # Partition samples into (code_type, label) buckets
-    buckets: dict[str, list[dict[str, str | int]]] = {}
+    buckets: dict[str, list[dict[str, typing.Any]]] = {}
     for sample in samples:
         key = f"{sample['code_type']}:{sample['label']}"
         buckets.setdefault(key, []).append(sample)
@@ -450,7 +449,7 @@ def _apply_group_balance(
             )
 
     # Resample each group
-    result: list[dict[str, str | int]] = []
+    result: list[dict[str, typing.Any]] = []
     distribution: dict[str, int] = {}
     for k in sorted(group_proportions.keys()):
         resampled = _resample_group(buckets[k], target_counts[k], strategy, rng)
@@ -468,11 +467,11 @@ def _apply_group_balance(
 
 
 def _resample_group(
-    group: list[dict[str, str | int]],
+    group: list[dict[str, typing.Any]],
     target_count: int,
     strategy: str,
     rng: random.Random,
-) -> list[dict[str, str | int]]:
+) -> list[dict[str, typing.Any]]:
     """Resample a group of samples to a target count."""
     if target_count == len(group):
         return list(group)
@@ -494,9 +493,9 @@ def _validate_probe_split(
     if not unique_labels.issubset({0, 1}):
         raise ValueError(f"split '{split_name}': expected binary labels {{0, 1}}, got {unique_labels}")
 
-    texts = typing.cast("list[str]", dataset["text"])
-    if any(not text for text in texts):
-        raise ValueError(f"split '{split_name}': found empty text fields")
+    messages_col = typing.cast("list[list[dict[str, str]]]", dataset["messages"])
+    if any(not msgs for msgs in messages_col):
+        raise ValueError(f"split '{split_name}': found empty messages fields")
 
     if len(unique_labels) < 2:
         logger.warning(
@@ -531,7 +530,7 @@ def load_probe_dataset_from_lmdb(
 
     Returns:
         DatasetDict with "train" and "valid" splits, each containing:
-        - "text": str (prompt + model_output)
+        - "messages": list[dict[str, str]] (structured role-attributed conversation)
         - "label": int (0 or 1)
         - "sample_id": str (for provenance tracking)
         - "code_type": str (code augmentation type)

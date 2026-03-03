@@ -59,7 +59,6 @@ runtime:
 config:
   use_wandb_logging: true
   base_model: Qwen/Qwen2.5-Coder-7B-Instruct
-  # @@@@ TODO: 4-bit quant + paged optim using bitsandbytes?
   auto_model_config:
     use_cache: False  # disable cache during training (auto-re-enabled during evals)
   datamodule_config:

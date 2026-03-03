@@ -3,9 +3,12 @@ import typing
 
 import langchain_core.callbacks
 import langchain_core.exceptions
+import langchain_core.messages
 import langchain_core.outputs
 import langchain_core.runnables
 import pydantic
+
+import pyine.utils.portability
 
 CapturedEventType = typing.Literal["llm_start", "llm_end", "llm_error"]
 """Potential event types that can be captured by the CaptureLLMHandler."""
@@ -21,7 +24,9 @@ class CapturedEvent(pydantic.BaseModel):
     serialized: dict[str, typing.Any] | None = None
     """Serialized runnable (class path, name, etc.); only captured captured on LLM start."""
     prompts: list[str] | None = None
-    """List of prompts; only captured captured on LLM start."""
+    """List of prompts; only captured on LLM start."""
+    messages: list[dict[str, typing.Any]] | None = None
+    """Structured chat messages as role/content dicts; only set on chat model start."""
     response: langchain_core.outputs.LLMResult | None = None
     """LLM response; only captured captured on LLM end."""
     error: str | None = None
@@ -43,6 +48,7 @@ class CaptureLLMHandler(langchain_core.callbacks.BaseCallbackHandler):
         """Initialize the handler."""
         self.events: list[CapturedEvent] = []
 
+    @typing.override
     def on_llm_start(
         self,
         serialized: dict[str, typing.Any],
@@ -59,6 +65,37 @@ class CaptureLLMHandler(langchain_core.callbacks.BaseCallbackHandler):
             )
         )
 
+    @typing.override
+    def on_chat_model_start(
+        self,
+        serialized: dict[str, typing.Any],
+        messages: list[list[langchain_core.messages.BaseMessage]],
+        **kwargs: typing.Any,
+    ) -> None:
+        """Called before a chat model starts; preserves structured messages."""
+        structured: list[dict[str, typing.Any]] = []
+        if messages:
+            for msg in messages[0]:  # only first prompt, mirrors prompts[0]
+                entry: dict[str, typing.Any] = {
+                    "role": msg.type,
+                    "content": pyine.utils.portability.make_json_serializable(msg.content),  # type: ignore[reportUnknownMemberType,reportUnknownArgumentType]
+                }
+                if getattr(msg, "name", None) is not None:
+                    entry["name"] = msg.name
+                additional = getattr(msg, "additional_kwargs", None)
+                if additional:
+                    entry["additional_kwargs"] = pyine.utils.portability.make_json_serializable(dict(additional))
+                structured.append(entry)
+        self.events.append(
+            CapturedEvent(
+                type="llm_start",
+                serialized=serialized,
+                messages=structured,
+                kwargs=kwargs,
+            )
+        )
+
+    @typing.override
     def on_llm_end(
         self,
         response: langchain_core.outputs.LLMResult,
@@ -73,6 +110,7 @@ class CaptureLLMHandler(langchain_core.callbacks.BaseCallbackHandler):
             )
         )
 
+    @typing.override
     def on_llm_error(
         self,
         error: BaseException,
@@ -101,6 +139,48 @@ def is_invocable_chain(obj: typing.Any) -> bool:
         isinstance(obj, langchain_core.runnables.Runnable)
         or (hasattr(obj, "invoke") and callable(getattr(obj, "invoke", None)))
     )
+
+
+def get_sampling_temperature_from_chain(
+    chain: langchain_core.runnables.Runnable[typing.Any, typing.Any],
+) -> float | None:
+    """Best-effort extraction of sampling temperature from a LangChain runnable.
+
+    Walks the runnable's internal structure looking for a component with a ``temperature``
+    attribute (e.g. a ``BaseChatModel``). Returns the value if found, ``None`` if the chain
+    structure is opaque or no temperature is set.
+
+    Handles common patterns: bare models, ``RunnableSequence`` (prompt | model), and
+    ``RunnableBinding`` (``.with_retry()``, ``.bind()``, etc.). For ``RunnableBinding``,
+    bound kwargs (from ``.bind(temperature=...)``) take precedence over the inner model's
+    attribute.
+    """
+    # this function is inherently duck-typed: it inspects opaque LangChain internal
+    # attributes (kwargs, temperature, first/last, bound) that don't exist on the base
+    # Runnable type. use Any to silence pyright for the dynamic attribute accesses.
+    obj: typing.Any = chain
+    # RunnableBinding kwargs override (from .bind(temperature=...)); if temperature is present
+    # in bound kwargs, treat it as authoritative and stop traversal (even if None/non-numeric)
+    if hasattr(obj, "kwargs"):
+        bound_kwargs = typing.cast("dict[str, typing.Any] | None", obj.kwargs)
+        if isinstance(bound_kwargs, dict) and "temperature" in bound_kwargs:
+            temp = bound_kwargs["temperature"]
+            return float(temp) if isinstance(temp, (int, float)) else None
+    # direct attribute (e.g. bare BaseChatModel)
+    if hasattr(obj, "temperature"):
+        if isinstance(obj.temperature, (int, float)):
+            return float(obj.temperature)
+    # RunnableSequence: walk first, middle steps, and last
+    if hasattr(obj, "first") and hasattr(obj, "last"):
+        steps: list[typing.Any] = [obj.first, *getattr(obj, "middle", []), obj.last]
+        for step in steps:
+            result = get_sampling_temperature_from_chain(step)
+            if result is not None:
+                return result
+    # RunnableBinding: unwrap .with_retry(), .bind(), etc.
+    if hasattr(obj, "bound"):
+        return get_sampling_temperature_from_chain(obj.bound)
+    return None
 
 
 def get_default_structured_output_chain_retry_config(

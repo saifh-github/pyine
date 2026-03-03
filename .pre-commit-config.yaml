@@ -95,3 +95,12 @@ repos:
     rev: v0.11.0.1
     hooks:
       - id: shellcheck
+
+  # forbid non-ascii in staged lines only (legacy files are not flagged)
+  - repo: local
+    hooks:
+      - id: forbid-non-ascii
+        name: forbid non-ascii in staged lines
+        entry: python3 scripts/check_ascii_staged.py
+        language: system
+        types: [python]

@@ -3,6 +3,7 @@ import pathlib
 import types
 import typing
 
+import datasets
 import hydra
 import hydra.core.utils
 import hydra_zen
@@ -26,6 +27,7 @@ class DummyDatamodule(pyine.data.datamodule.BaseDataModule):
         self.setup_called = 0
         self.instantiate_verbose: list[bool] = []
         self._stats = stats or {"rows": 3}
+        self.config: DummyDatamoduleConfig | None = None  # set by DummyDatamoduleConfig.instantiate_datamodule
 
     def prepare_data(self) -> None:
         self.prepared = True
@@ -56,6 +58,7 @@ class DummyDatamoduleConfig(pyine.data.datamodule.BaseDataModuleConfig):
     def instantiate_datamodule(self, verbose: bool = False) -> DummyDatamodule:
         self.calls.append(verbose)
         self.datamodule.instantiate_verbose.append(verbose)
+        self.datamodule.config = self
         return self.datamodule
 
 
@@ -63,7 +66,7 @@ class FakeEvaluationResult(pyine.evals.common.EvalResult):
     artifacts: list[str]
 
 
-class DummyEvalsConfig(pyine.evals.common.BaseEvalsConfig):
+class DummyEvalsConfig(pyine.evals.common.GenerationEvalsConfig):
     model_config = pydantic.ConfigDict(arbitrary_types_allowed=True, frozen=False)
 
     eval_type: str = "code_exec"
@@ -89,6 +92,14 @@ class DummyEvalsConfig(pyine.evals.common.BaseEvalsConfig):
 
     def log_predictions(self, **kwargs: typing.Any) -> None:
         self.log_predictions_calls.append(kwargs)
+
+    def prepare_eval_datamodule(
+        self,
+        datamodule: typing.Any,
+    ) -> typing.Any:
+        if datamodule is None:
+            raise ValueError("datamodule must be provided for DummyEvalsConfig")
+        return datamodule
 
 
 def _build_app_config(
@@ -132,10 +143,6 @@ def test_prepare_datamodule_with_wandb_logging() -> None:
     result = trainer_common.prepare_datamodule(config, runtime=runtime)
     assert result is datamodule
     assert runtime.wandb_run.summary["dataset_stats/rows"] == 42
-    assert [call["prefix"] for call in evals_config.define_metrics_calls] == [
-        "predict/valid",
-        "predict/test",
-    ]
 
 
 @pytest.mark.asyncio
@@ -152,8 +159,8 @@ async def test_evaluate_model_sync_and_async(monkeypatch: pytest.MonkeyPatch) ->
     async def _async_wrapper() -> FakeEvaluationResult:
         return asynchronous_result
 
-    async def fake_evaluate_runnable_model(
-        chain: typing.Any,
+    async def fake_evaluate_wrapped_model(
+        wrapped_model: typing.Any,
         datamodule: DummyDatamodule,
         eval_subset_name: str,
         verbose: bool,
@@ -163,15 +170,14 @@ async def test_evaluate_model_sync_and_async(monkeypatch: pytest.MonkeyPatch) ->
         return await _async_wrapper()
 
     evals_config = DummyEvalsConfig()
-    evals_config.evaluate_runnable_model = fake_evaluate_runnable_model
+    evals_config.evaluate_wrapped_model = fake_evaluate_wrapped_model
     datamodule = DummyDatamodule()
-    config = _build_app_config(
-        DummyDatamoduleConfig(
-            datamodule=datamodule, subset_names=["train", "valid", "sync", "async"], eval_subset_names=["sync", "async"]
-        ),
-        evals_config=evals_config,
+    dm_config = DummyDatamoduleConfig(
+        datamodule=datamodule, subset_names=["train", "valid", "sync", "async"], eval_subset_names=["sync", "async"]
     )
-    model = types.SimpleNamespace(invoke=lambda x: x)
+    datamodule.config = dm_config
+    config = _build_app_config(dm_config, evals_config=evals_config)
+    model = types.SimpleNamespace()
     results = await trainer_common.evaluate_model(
         model=model,
         tokenizer=None,
@@ -187,8 +193,8 @@ async def test_evaluate_model_sync_and_async(monkeypatch: pytest.MonkeyPatch) ->
 async def test_evaluate_model_requires_wandb_run_id() -> None:
     result = FakeEvaluationResult(metrics={"acc": 0.5}, artifacts=[])
 
-    async def fake_evaluate_runnable_model(
-        chain: typing.Any,
+    async def fake_evaluate_wrapped_model(
+        wrapped_model: typing.Any,
         datamodule: DummyDatamodule,
         eval_subset_name: str,
         verbose: bool,
@@ -196,24 +202,23 @@ async def test_evaluate_model_requires_wandb_run_id() -> None:
         return result
 
     evals_config = DummyEvalsConfig()
-    evals_config.evaluate_runnable_model = fake_evaluate_runnable_model
+    evals_config.evaluate_wrapped_model = fake_evaluate_wrapped_model
 
     runtime = types.SimpleNamespace(
         wandb_run=None,
         wandb_run_id=None,
         finalize=lambda: None,
     )
-    config = _build_app_config(
-        DummyDatamoduleConfig(datamodule=DummyDatamodule()),
-        use_wandb_logging=True,
-        evals_config=evals_config,
-    )
-    model = types.SimpleNamespace(invoke=lambda x: x)
+    eval_datamodule = DummyDatamodule()
+    dm_config = DummyDatamoduleConfig(datamodule=eval_datamodule)
+    eval_datamodule.config = dm_config
+    config = _build_app_config(dm_config, use_wandb_logging=True, evals_config=evals_config)
+    model = types.SimpleNamespace()
     with pytest.raises(RuntimeError):
         await trainer_common.evaluate_model(
             model=model,
             tokenizer=None,
-            datamodule=DummyDatamodule(),
+            datamodule=eval_datamodule,
             config=config,
             runtime=runtime,
         )
@@ -769,7 +774,7 @@ def test_flash_attention_fallback_to_sdpa(monkeypatch: pytest.MonkeyPatch) -> No
         lambda: False,
     )
     auto_config = {"attn_implementation": "flash_attention_2", "use_cache": False}
-    resolved = trainer_common._resolve_attn_implementation(auto_config)
+    resolved = trainer_common.resolve_attn_implementation(auto_config)
     assert resolved["attn_implementation"] == "sdpa"
     assert resolved["use_cache"] is False
 
@@ -782,21 +787,21 @@ def test_flash_attention_kept_when_available(monkeypatch: pytest.MonkeyPatch) ->
         lambda: True,
     )
     auto_config = {"attn_implementation": "flash_attention_2"}
-    resolved = trainer_common._resolve_attn_implementation(auto_config)
+    resolved = trainer_common.resolve_attn_implementation(auto_config)
     assert resolved["attn_implementation"] == "flash_attention_2"
 
 
 def test_resolve_attn_implementation_no_change_for_other_impl() -> None:
     """Test that non-flash_attention_2 implementations are not modified."""
     auto_config = {"attn_implementation": "sdpa", "use_cache": True}
-    resolved = trainer_common._resolve_attn_implementation(auto_config)
+    resolved = trainer_common.resolve_attn_implementation(auto_config)
     assert resolved == auto_config
 
 
 def test_resolve_attn_implementation_empty_config() -> None:
     """Test that empty config returns empty config."""
     auto_config: dict[str, typing.Any] = {}
-    resolved = trainer_common._resolve_attn_implementation(auto_config)
+    resolved = trainer_common.resolve_attn_implementation(auto_config)
     assert resolved == {}
 
 
@@ -1015,3 +1020,122 @@ class TestCreateModelOrganismRewardComponents:
                 tokenizer=None,
                 generation_export_config=export_config,
             )
+
+
+class _MockTokenizerWithChatTemplate:
+    """Mock tokenizer that has a chat_template (simulates chat-tuned models)."""
+
+    chat_template = "{% for msg in messages %}{{ msg.role }}:{{ msg.content }}|{% endfor %}"
+
+    def apply_chat_template(
+        self,
+        conversation: list[dict[str, typing.Any]] | list[list[dict[str, typing.Any]]],
+        tokenize: bool = True,
+        **kwargs: typing.Any,
+    ) -> list[str]:
+        is_batch = isinstance(conversation[0], list)
+        if is_batch:
+            return ["".join(f"{msg['role']}:{msg['content']}|" for msg in conv) for conv in conversation]
+        return ["".join(f"{msg['role']}:{msg['content']}|" for msg in conversation)]
+
+
+class _MockTokenizerNoChatTemplate:
+    """Mock tokenizer without a chat_template (simulates encoder models like BERT)."""
+
+    pass  # no chat_template attribute at all
+
+
+class _MockTokenizerChatTemplateNoApply:
+    """Mock tokenizer with chat_template but no apply_chat_template."""
+
+    chat_template = "{% for msg in messages %}{{ msg.role }}:{{ msg.content }}|{% endfor %}"
+
+
+def _make_messages_dataset() -> datasets.DatasetDict:
+    """Create a small DatasetDict with messages column for testing."""
+    train_data = {
+        "messages": [
+            [{"role": "user", "content": "What is 2+2?"}, {"role": "assistant", "content": "4"}],
+            [{"role": "user", "content": "Hello"}, {"role": "assistant", "content": "Hi there"}],
+        ],
+        "label": [1, 0],
+        "sample_id": ["s1", "s2"],
+        "code_type": ["original", "original"],
+    }
+    valid_data = {
+        "messages": [
+            [{"role": "user", "content": "Test?"}, {"role": "assistant", "content": "Yes"}],
+        ],
+        "label": [1],
+        "sample_id": ["s3"],
+        "code_type": ["original"],
+    }
+    return datasets.DatasetDict(
+        {
+            "train": datasets.Dataset.from_dict(train_data),
+            "valid": datasets.Dataset.from_dict(valid_data),
+        }
+    )
+
+
+class TestTokenizerHasChatTemplate:
+    def test_with_chat_template(self) -> None:
+        assert trainer_common.tokenizer_has_chat_template(_MockTokenizerWithChatTemplate()) is True
+
+    def test_without_chat_template(self) -> None:
+        assert trainer_common.tokenizer_has_chat_template(_MockTokenizerNoChatTemplate()) is False
+
+    def test_with_chat_template_missing_apply_chat_template(self) -> None:
+        assert trainer_common.tokenizer_has_chat_template(_MockTokenizerChatTemplateNoApply()) is False
+
+    def test_with_none_chat_template(self) -> None:
+        tokenizer = _MockTokenizerNoChatTemplate()
+        tokenizer.chat_template = None  # type: ignore[attr-defined]
+        assert trainer_common.tokenizer_has_chat_template(tokenizer) is False
+
+
+class TestApplyMessagesFormatting:
+    def test_with_chat_template_uses_template(self) -> None:
+        ds = _make_messages_dataset()
+        tokenizer = _MockTokenizerWithChatTemplate()
+        result = trainer_common.apply_messages_formatting(ds, tokenizer)
+        assert "text" in result["train"].column_names
+        # chat template produces "role:content|" format
+        assert "user:What is 2+2?|" in result["train"][0]["text"]
+        assert "assistant:4|" in result["train"][0]["text"]
+        assert "messages" not in result["train"].column_names
+        assert result["train"]["label"] == [1, 0]
+        assert result["train"]["sample_id"] == ["s1", "s2"]
+        assert result["train"]["code_type"] == ["original", "original"]
+
+    def test_without_chat_template_concatenates_content(self) -> None:
+        ds = _make_messages_dataset()
+        tokenizer = _MockTokenizerNoChatTemplate()
+        result = trainer_common.apply_messages_formatting(ds, tokenizer)
+        assert "text" in result["train"].column_names
+        # fallback produces role-tagged content joined with \n\n
+        assert result["train"][0]["text"] == "user: What is 2+2?\n\nassistant: 4"
+        assert result["train"][1]["text"] == "user: Hello\n\nassistant: Hi there"
+        assert result["valid"][0]["text"] == "user: Test?\n\nassistant: Yes"
+
+    def test_without_chat_template_removes_messages_column(self) -> None:
+        ds = _make_messages_dataset()
+        tokenizer = _MockTokenizerNoChatTemplate()
+        result = trainer_common.apply_messages_formatting(ds, tokenizer)
+        assert "messages" not in result["train"].column_names
+
+    def test_preserves_other_columns(self) -> None:
+        ds = _make_messages_dataset()
+        tokenizer = _MockTokenizerNoChatTemplate()
+        result = trainer_common.apply_messages_formatting(ds, tokenizer)
+        assert result["train"]["label"] == [1, 0]
+        assert result["train"]["sample_id"] == ["s1", "s2"]
+        assert result["train"]["code_type"] == ["original", "original"]
+
+    def test_both_splits_processed(self) -> None:
+        ds = _make_messages_dataset()
+        tokenizer = _MockTokenizerNoChatTemplate()
+        result = trainer_common.apply_messages_formatting(ds, tokenizer)
+        assert "train" in result
+        assert "valid" in result
+        assert "text" in result["valid"].column_names

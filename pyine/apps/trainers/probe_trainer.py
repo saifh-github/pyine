@@ -16,6 +16,7 @@ import shutil
 import statistics
 import typing
 
+import datasets  # noqa: TC002
 import sklearn.metrics
 import torch
 import transformers
@@ -24,13 +25,16 @@ import pyine.apps.trainers.common
 import pyine.apps.trainers.probe_trainer_configs as probe_trainer_configs
 import pyine.configs.schemas
 import pyine.evals.common
-import pyine.guardrails.data.datamodule
+import pyine.evals.correctness._impl as correctness_impl
+import pyine.evals.correctness.configs as correctness_configs
+import pyine.evals.correctness.datamodule as correctness_datamodule
+import pyine.evals.correctness.scorers as correctness_scorers
 import pyine.guardrails.probes.collection
 import pyine.guardrails.probes.extraction
+import pyine.utils.distrib  # pyright: ignore[reportUnusedImport]
 
 if typing.TYPE_CHECKING:
     import accelerate
-    import datasets
     import numpy as np
     import numpy.typing as npt
 
@@ -50,7 +54,8 @@ def _tokenize_split(
 ) -> datasets.Dataset:
     """Tokenize a probe dataset split (plain text, no special tokens).
 
-    Maps ``code_type`` strings to integer IDs for DDP-safe gathering.
+    Expects a ``text`` column (produced by ``apply_messages_formatting``) and maps ``code_type``
+    strings to integer IDs for DDP-safe gathering.
     """
 
     def _tokenize(examples: dict[str, list[str] | list[int]]) -> transformers.BatchEncoding:
@@ -599,10 +604,21 @@ def enforce_checkpoint_limit(
             shutil.rmtree(oldest)
 
 
+class ProbeTrainResult(typing.NamedTuple):
+    """Return value of probe_train() with extra context for downstream evaluation."""
+
+    probe_collection: pyine.guardrails.probes.collection.ProbeCollection
+    """The trained probe collection containing all probes across layers and replicas."""
+    model: torch.nn.Module
+    """The base model that was used for activation extraction during training."""
+    tokenizer: transformers.PreTrainedTokenizerBase
+    """The tokenizer associated with the base model."""
+
+
 def probe_train(
     config: probe_trainer_configs.ProbeTrainerAppMainConfig,
     runtime: pyine.configs.schemas.RuntimeConfig | None,
-) -> pyine.guardrails.probes.collection.ProbeCollection:
+) -> ProbeTrainResult:
     """Core probe training loop."""
     import accelerate
 
@@ -648,12 +664,12 @@ def probe_train(
     optimizer = torch.optim.AdamW(probe_collection.get_parameter_groups())
 
     # --- 3. Prepare datasets via DataModule ---
-    logger.info(f"Loading probe dataset from LMDB: {config.datamodule_config.lmdb_path}")
+    logger.info("Loading probe dataset from datamodule...")
     datamodule = pyine.apps.trainers.common.prepare_datamodule(config, runtime)
-    assert isinstance(datamodule, pyine.guardrails.data.datamodule.ProbeDataModule)
-    raw_ds = datamodule.get_probe_dataset()
-    code_type_to_id = datamodule.code_type_to_id
-    id_to_code_type = datamodule.id_to_code_type
+    # both ProbeDataModule and CorrectnessDataModule provide get_probe_dataset/code_type_to_id/id_to_code_type
+    raw_ds = typing.cast("datasets.DatasetDict", datamodule.get_probe_dataset())  # pyright: ignore[reportUnknownMemberType,reportAttributeAccessIssue]
+    code_type_to_id = typing.cast("dict[str, int]", datamodule.code_type_to_id)  # pyright: ignore[reportUnknownMemberType,reportAttributeAccessIssue]
+    id_to_code_type = typing.cast("dict[int, str]", datamodule.id_to_code_type)  # pyright: ignore[reportUnknownMemberType,reportAttributeAccessIssue]
 
     if accelerator.is_main_process:
         for split_name in ["train", "valid"]:
@@ -663,6 +679,8 @@ def probe_train(
                 code_type_counts[code_type] = code_type_counts.get(code_type, 0) + 1
             logger.info(f"  {split_name} code_type distribution: {code_type_counts}")
 
+    # format messages -> text (uses chat template if available, else role-tagged concatenation)
+    raw_ds = pyine.apps.trainers.common.apply_messages_formatting(raw_ds, tokenizer)
     train_ds = _tokenize_split(raw_ds["train"], tokenizer, config.max_seq_length, code_type_to_id)
     valid_ds = _tokenize_split(raw_ds["valid"], tokenizer, config.max_seq_length, code_type_to_id)
     train_loader = build_dataloader(
@@ -853,15 +871,21 @@ def probe_train(
     extractor.remove_hooks()
 
     logger.info("Probe training complete.")
-    return typing.cast(
+    unwrapped_collection = typing.cast(
         "pyine.guardrails.probes.collection.ProbeCollection",
         accelerator.unwrap_model(probe_collection),  # pyright: ignore[reportUnknownMemberType]  # accelerate stubs
+    )
+    return ProbeTrainResult(
+        probe_collection=unwrapped_collection,
+        model=model,
+        tokenizer=tokenizer,
     )
 
 
 async def main(
     config: probe_trainer_configs.ProbeTrainerAppMainConfig,
     runtime: pyine.configs.schemas.RuntimeConfig | None = None,
+    skip_training: bool = False,
 ) -> None:
     """Main entrypoint for probe training."""
     import pyine.utils.reprod
@@ -876,7 +900,67 @@ async def main(
         logger.info("dry run mode -- skipping probe training")
         return
 
-    probe_train(config=config, runtime=runtime)
+    if skip_training:
+        if config.probe_checkpoint_dir is None:
+            raise ValueError("skip_training=True requires config.probe_checkpoint_dir to be set")
+        logger.info(f"skip_training mode; loading probes from {config.probe_checkpoint_dir}")
+        checkpoint_path = config.llm_checkpoint_path
+        model = config.get_model(checkpoint_path=pathlib.Path(checkpoint_path) if checkpoint_path else None)
+        model.eval()
+        model.requires_grad_(False)
+        tokenizer = config.get_tokenizer(checkpoint_path=pathlib.Path(checkpoint_path) if checkpoint_path else None)
+        hidden_dim: int = model.config.hidden_size
+        probe_collection = pyine.guardrails.probes.collection.ProbeCollection.load_from_checkpoint(  # pyright: ignore[reportUnknownVariableType,reportUnknownMemberType,reportAttributeAccessIssue]
+            checkpoint_dir=config.probe_checkpoint_dir,
+            hidden_dim=hidden_dim,
+        )
+        probe_collection = probe_collection.to(dtype=config.target_dtype, device=model.device)  # pyright: ignore[reportUnknownVariableType,reportUnknownMemberType]
+        probe_collection.eval()  # pyright: ignore[reportUnknownMemberType]
+    else:
+        train_result = probe_train(config=config, runtime=runtime)
+        probe_collection = train_result.probe_collection
+        model = train_result.model
+        tokenizer = train_result.tokenizer
+    probe_collection = typing.cast("pyine.guardrails.probes.collection.ProbeCollection", probe_collection)
+
+    # benchmarking phase (if enabled)
+    if config.evals_config is not None:
+        if pyine.utils.distrib.is_main_process():  # pyright: ignore[reportUnknownMemberType,reportAttributeAccessIssue]
+            evals_config = typing.cast("correctness_configs.CorrectnessEvalsConfig", config.evals_config)
+            eval_dm = evals_config.prepare_eval_datamodule(None)
+            eval_dm_typed = typing.cast("correctness_datamodule.CorrectnessDataModule", eval_dm)
+            # collect target layers from all probes, create a fresh extractor for scoring
+            target_layers = sorted(
+                {probe_collection._probe_configs[name].layer for name in probe_collection.probes}  # pyright: ignore[reportPrivateUsage]
+            )
+            extractor = pyine.guardrails.probes.extraction.ActivationExtractor(  # pyright: ignore[reportUnknownVariableType,reportUnknownMemberType,reportAttributeAccessIssue]
+                model, target_layers
+            )
+            # group probes by type (base_name), creating one ProbeScorer per probe
+            scorers_by_type: dict[str, list[correctness_scorers.ProbeScorer]] = {}
+            for probe_name, probe_module in probe_collection.probes.items():
+                probe_cfg = probe_collection._probe_configs[probe_name]  # pyright: ignore[reportPrivateUsage]
+                base_name = probe_cfg.base_name or probe_cfg.name
+                scorer = correctness_scorers.ProbeScorer(
+                    probe=typing.cast("pyine.guardrails.probes.base.BaseProbe", probe_module),
+                    probe_config=probe_cfg,
+                    model=model,
+                    tokenizer=tokenizer,
+                    extractor=extractor,  # pyright: ignore[reportUnknownArgumentType]
+                    max_seq_length=config.max_seq_length,
+                    text_field=evals_config.text_field,
+                )
+                scorers_by_type.setdefault(base_name, []).append(scorer)
+            for eval_subset_name in eval_dm_typed.config.eval_subset_names:
+                await correctness_impl.evaluate_guardrail_types(
+                    config=evals_config,
+                    guardrails_by_type=scorers_by_type,  # type: ignore[arg-type]
+                    datamodule=eval_dm_typed,
+                    eval_subset_name=eval_subset_name,
+                    wandb_run=runtime.wandb_run if runtime else None,
+                )
+            extractor.remove_hooks()  # pyright: ignore[reportUnknownMemberType]
+        pyine.utils.distrib.barrier()  # pyright: ignore[reportUnknownMemberType,reportAttributeAccessIssue]
 
     if runtime is not None:
         runtime.finalize()
@@ -885,21 +969,17 @@ async def main(
 def async_probe_trainer_main_wrapper(
     config: probe_trainer_configs.ProbeTrainerAppMainConfig,
     runtime: pyine.configs.schemas.RuntimeConfig | None = None,
+    skip_training: bool = False,
 ) -> None:
     """Synchronous wrapper around the async main."""
-    asyncio.run(main(config=config, runtime=runtime))
+    asyncio.run(main(config=config, runtime=runtime, skip_training=skip_training))
 
 
 if __name__ == "__main__":
-    import sys
-
     import pyine.apps.trainers.common
 
-    # filter DeepSpeed's --local_rank to avoid Hydra conflict
-    sys.argv = [arg for arg in sys.argv if not arg.startswith("--local_rank")]
-
     pyine.apps.trainers.common.hydra_main(
-        eval_type=pyine.evals.common.EvalType.CODE_EXEC,
+        eval_type=pyine.evals.common.EvalType.CORRECTNESS,
         hydra_config_registration_fn=probe_trainer_configs.register_hydra_configs,
         async_main_wrapper=async_probe_trainer_main_wrapper,
     )

@@ -55,6 +55,7 @@ import typing
 
 import wandb
 
+import pyine.data.utils.generation_record
 import pyine.data.utils.lmdb_io
 import pyine.organisms.models.rewards.core.configs as reward_configs
 import pyine.organisms.models.rewards.core.types as reward_types
@@ -1293,6 +1294,7 @@ class DiskRewardLogger:
                 method=pyine.data.utils.lmdb_io.SerializationMethod.JSON_ZSTD,
             ),
         )
+        self._writer.write_metadata({"record_type": "reward"})
 
     def should_log_sample(
         self,
@@ -1369,33 +1371,38 @@ class DiskRewardLogger:
             logger.debug("DiskRewardLogger.log_sample() called with empty key_prefix")
         gen_count_str = str(generation_count) if generation_count is not None else "none"
         lmdb_key = f"{self._key_prefix}{sample_id}/{gen_count_str}"
+        shared = pyine.data.utils.generation_record.build_shared_record_fields(
+            sample_id=sample_id,
+            model_output=model_output,
+            prompt=prompt,
+            expected_output=expected_output,
+            reasoning=reasoning,
+            final_answer=final_answer,
+            predict_type=predict_type,
+            code_type=code_type,
+            has_code_override=has_code_override,
+            pregenerated_output=pregenerated_output,
+            tags=tags,
+            categories=categories,
+            key_prefix=self._key_prefix,
+        )
         record: dict[str, typing.Any] = {
-            "model_output": model_output,
+            **shared,
             "reward_total": total,
-            "prompt": prompt,
-            "expected_output": expected_output,
-            "reasoning": reasoning,
-            "final_answer": final_answer,
             "reward_terms": dict(terms) if terms is not None else None,
             "reward_metrics": dict(metrics) if metrics is not None else None,
             "reward_terms_raw": dict(raw_terms) if raw_terms is not None else None,
-            "step": step,
+            "step": step if step is not None else self._step,
+            "epoch": self._epoch,
             "batch_count": batch_count,
             "local_batch_idx": local_batch_idx,
             "completion_idx": completion_idx,
             "rank": rank,
-            "predict_type": predict_type,
-            "code_type": code_type,
-            "has_code_override": has_code_override,
-            "pregenerated_output": pregenerated_output,
-            "tags": list(tags) if tags is not None else None,
-            "categories": list(categories) if categories is not None else None,
             "difficulty_source": difficulty_source,
             "difficulty_score": difficulty_score,
             "difficulty_bin": difficulty_bin,
             "difficulty_raw_primary": difficulty_raw_primary,
             "difficulty_secondary_json": difficulty_secondary_json,
-            "key_prefix": self._key_prefix,
         }
         with self._lock:
             self._writer.put(lmdb_key, record)
@@ -1554,7 +1561,7 @@ class CompositeRewardLogger:
         """Set key prefix on all inner loggers."""
         self._key_prefix = parsing_utils.normalize_path_prefix(key_prefix)
         for inner in self._loggers:
-            inner.set_key_prefix(key_prefix)
+            inner.set_key_prefix(self._key_prefix)
 
     def get_key_prefix(self) -> str:
         """Get the current key prefix."""

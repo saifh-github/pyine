@@ -60,17 +60,17 @@ def test_analysis_helpers_round_trip(monkeypatch: pytest.MonkeyPatch, tmp_path: 
     entity = os.getenv("WANDB_ENTITY")
     run_name = f"analysis-itest-{uuid.uuid4().hex[:8]}"
     summary_payload = {
-        "predict/test/accuracy_hard": 0.6,
-        "predict/test/accuracy_soft": 0.75,
-        "predict/test/code_type/python/accuracy_hard": 0.9,
-        "predict/test/code_type/python/count": 10,
-        "predict/test/predict_type/output/accuracy_hard": 0.5,
-        "predict/test/predict_type/output/count": 4,
-        "predict/test/complexity/loc_mean": 42.0,
-        "predict/test/complexity/loc_median": 40.0,
-        "predict/test/complexity/loc_std": 7.0,
-        "predict/test/complexity/loc_min": 10.0,
-        "predict/test/complexity/loc_max": 90.0,
+        "benchmark/test/accuracy_hard": 0.6,
+        "benchmark/test/accuracy_soft": 0.75,
+        "benchmark/test/code_type/python/accuracy_hard": 0.9,
+        "benchmark/test/code_type/python/count": 10,
+        "benchmark/test/predict_type/output/accuracy_hard": 0.5,
+        "benchmark/test/predict_type/output/count": 4,
+        "benchmark/test/complexity/loc_mean": 42.0,
+        "benchmark/test/complexity/loc_median": 40.0,
+        "benchmark/test/complexity/loc_std": 7.0,
+        "benchmark/test/complexity/loc_min": 10.0,
+        "benchmark/test/complexity/loc_max": 90.0,
     }
     settings = wandb.Settings(start_method="thread", _disable_stats=True)
     with wandb.init(
@@ -82,18 +82,18 @@ def test_analysis_helpers_round_trip(monkeypatch: pytest.MonkeyPatch, tmp_path: 
         settings=settings,
     ) as run:
         run.summary.update(summary_payload)
-        run.log({"predict/test/metrics_table": 1})
+        run.log({"benchmark/test/metrics_table": 1})
     fetched_run = _wait_for_run(project, entity, run_name)
     try:
         summary = analysis.fetch_eval_summary(fetched_run, subset_name="test")
         assert summary.run_info.run_name == run_name
-        assert summary.run_info.accuracy_hard == pytest.approx(0.6)
-        assert summary.run_info.accuracy_soft == pytest.approx(0.75)
+        assert summary.run_info.accuracy["hard"].value == pytest.approx(0.6)
+        assert summary.run_info.accuracy["soft"].value == pytest.approx(0.75)
         categories = {c.category: c for c in summary.category_metrics}
-        assert categories["code_type/python"].accuracy_hard == pytest.approx(0.9)
-        assert categories["code_type/python"].count == 10
-        assert categories["predict_type/output"].accuracy_hard == pytest.approx(0.5)
-        assert categories["predict_type/output"].count == 4
+        assert categories["code_type/python"].accuracy["hard"].value == pytest.approx(0.9)
+        assert categories["code_type/python"].sample_count == 10
+        assert categories["predict_type/output"].accuracy["hard"].value == pytest.approx(0.5)
+        assert categories["predict_type/output"].sample_count == 4
         assert summary.complexity_metrics is not None
         complexity_by_name = {m.metric_name: m for m in summary.complexity_metrics.metrics}
         loc_stats = complexity_by_name["loc"]

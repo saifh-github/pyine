@@ -89,14 +89,18 @@ class DummyGenerationModel(torch.nn.Module):
         generation_config: transformers.GenerationConfig,
         return_dict_in_generate: bool,
     ) -> DummyGenerationOutput:
+        num_return_sequences = getattr(generation_config, "num_return_sequences", 1) or 1
         sequences: list[torch.Tensor] = []
         for idx in range(input_ids.size(0)):
-            new_tokens = torch.tensor(
-                [ord("x") + idx, ord("y") + idx],
-                dtype=torch.long,
-                device=input_ids.device,
-            )
-            sequences.append(torch.cat((input_ids[idx], new_tokens), dim=0))
+            for attempt_idx in range(num_return_sequences):
+                # offset generated tokens by both batch index and attempt index to make them unique
+                offset = idx + attempt_idx * 10
+                new_tokens = torch.tensor(
+                    [ord("x") + offset, ord("y") + offset],
+                    dtype=torch.long,
+                    device=input_ids.device,
+                )
+                sequences.append(torch.cat((input_ids[idx], new_tokens), dim=0))
         padded = torch.nn.utils.rnn.pad_sequence(
             sequences,
             batch_first=True,

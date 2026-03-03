@@ -1,14 +1,21 @@
+"""Common trainer utilities and helper shared by all training apps."""
+
 from __future__ import annotations
 
 import asyncio
 import dataclasses
+import functools
 import json
 import logging
+import os
 import pathlib
 import shutil
+import sys
 import time
 import typing
 
+import datasets as hf_datasets  # noqa: TC002
+import deepdiff
 import hydra_zen
 import peft
 import pydantic
@@ -31,16 +38,101 @@ import pyine.utils.distrib
 import pyine.utils.filesystem
 import pyine.utils.interrupts
 import pyine.utils.langchain
+import pyine.utils.llm_providers
 import pyine.utils.portability
 import pyine.utils.reprod
 import pyine.utils.timers
 import pyine.utils.tokenizers
 import pyine.utils.transformers
+import pyine.utils.transformers.data
 
 logger = logging.getLogger(__name__)
 
 
-def _resolve_attn_implementation(
+def tokenizer_has_chat_template(
+    tokenizer: transformers.PreTrainedTokenizerBase,
+) -> bool:
+    """Check whether a tokenizer has a usable chat template.
+
+    Returns True if the tokenizer defines a non-None ``chat_template`` attribute. Encoder models
+    (BERT, ModernBERT, DeBERTa, etc.) typically do not.
+    """
+    chat_template = getattr(tokenizer, "chat_template", None)
+    apply_chat_template = getattr(tokenizer, "apply_chat_template", None)
+    return chat_template is not None and callable(apply_chat_template)
+
+
+def _batch_concat_messages_to_text(
+    batch: dict[str, typing.Any],
+    messages_key: str,
+    output_key: str,
+) -> dict[str, typing.Any]:
+    """Fallback batch transform: concatenate messages into role-tagged plain text.
+
+    For each sample, joins all messages as ``role: content`` entries separated by blank lines.
+    This is used when tokenizers do not support chat templates (e.g., encoder models like BERT).
+    """
+    all_messages: list[list[dict[str, str]]] = batch[messages_key]
+    texts: list[str] = []
+    for messages in all_messages:
+        texts.append("\n\n".join(f"{msg['role']}: {msg['content']}" for msg in messages))
+    return {output_key: texts}
+
+
+def apply_messages_formatting(
+    dataset_dict: hf_datasets.DatasetDict,
+    tokenizer: transformers.PreTrainedTokenizerBase,
+    messages_key: str = "messages",
+    output_key: str = "text",
+) -> hf_datasets.DatasetDict:
+    """Convert ``messages`` to ``text`` for all splits, auto-detecting chat template support.
+
+    If the tokenizer has a ``chat_template``, uses ``apply_model_template_to_messages`` to produce
+    properly formatted text. Otherwise, falls back to role-tagged plain text concatenation
+    (suitable for encoder models like BERT, ModernBERT, DeBERTa).
+
+    Args:
+        dataset_dict: HF DatasetDict with a ``messages`` column in each split.
+        tokenizer: Tokenizer to use for chat template formatting.
+        messages_key: Column name containing the messages lists.
+        output_key: Column name for the resulting text.
+
+    Returns:
+        New DatasetDict with ``output_key`` column added and ``messages_key`` removed.
+    """
+    has_template = tokenizer_has_chat_template(tokenizer)
+    if has_template:
+        logger.info("tokenizer has chat_template; applying chat template to format messages")
+    else:
+        logger.info(
+            "tokenizer does not have chat_template (typical for encoder models); "
+            "falling back to role-tagged plain text concatenation"
+        )
+    result = hf_datasets.DatasetDict()
+    for split_name in dataset_dict:
+        if has_template:
+            result[split_name] = pyine.utils.transformers.data.apply_model_template_to_messages(
+                dataset_dict[split_name],
+                tokenizer,  # type: ignore[arg-type]  # PreTrainedTokenizerBase vs PreTrainedTokenizer
+                messages_key=messages_key,
+                output_key=output_key,
+                keep_original_data=True,
+                apply_chat_template_kwargs={"tokenize": False},
+            )
+        else:
+            result[split_name] = dataset_dict[split_name].map(  # pyright: ignore[reportUnknownMemberType]
+                _batch_concat_messages_to_text,
+                batched=True,
+                fn_kwargs={"messages_key": messages_key, "output_key": output_key},
+                remove_columns=[messages_key],
+                desc="concatenating messages to role-tagged plain text",
+            )
+        if messages_key in result[split_name].column_names:
+            result[split_name] = result[split_name].remove_columns([messages_key])
+    return result
+
+
+def resolve_attn_implementation(
     auto_model_config: dict[str, typing.Any],
 ) -> dict[str, typing.Any]:
     """Resolve attention implementation with fallback to SDPA if flash-attn unavailable."""
@@ -139,16 +231,16 @@ def validate_training_prediction_vllm_compatibility(config: AppMainConfig) -> No
     Args:
         config: The application configuration to validate.
     """
-    if is_rl_config(config):
-        return  # nothing more to check, can run with/without vllm config
-    # if we're doing SFT, make sure everything is compatible
     do_train, _do_eval, do_predict = get_training_flags(config)
+    if not isinstance(config.evals_config, pyine.evals.common.GenerationEvalsConfig):
+        return  # not relying on vllm if we don't have any generation to do...
     has_vllm_evals_config = config.evals_config.vllm_provider_config is not None
     if do_train and do_predict and has_vllm_evals_config:
+        training_type = "RL" if is_rl_config(config) else "SFT"
         raise ValueError(
-            "Invalid configuration: cannot run SFT training and vLLM-based prediction in the same run. "
-            "When using vLLM provider, you must manually start the vLLM server with the trained "
-            "checkpoint between training and prediction. Please choose one of these options:\n"
+            f"Invalid configuration: cannot run {training_type} training and vLLM-based prediction in the same run. "
+            "When using vLLM provider for evaluation, you must manually start the vLLM server with the "
+            "trained checkpoint between training and prediction. Please choose one of these options:\n"
             "  Option A: Train only (do_train=True, do_predict=False), then manually start vLLM "
             "server with the checkpoint, then run prediction only (do_train=False, do_predict=True, "
             "vllm_provider_config=<config>)\n"
@@ -189,52 +281,37 @@ def resolve_save_on_each_node(
 
 
 class ModelTokenizerConfigBase(pydantic.BaseModel):
-    """Base configuration providing model and tokenizer fields shared by SFT and RL trainers.
+    """Base configuration providing model and tokenizer fields shared across trainers.
 
-    This base class should be inherited by trainer configs that need to instantiate HuggingFace
-    models and tokenizers. Note that subclasses must implement the `target_dtype` property since it
-    depends on trainer-specific config fields.
+    Trainer configs that need to instantiate HuggingFace models and tokenizers should inherit
+    from this class. Subclasses must implement the ``target_dtype`` property since it depends
+    on trainer-specific config fields.
 
-    @@@@ TODO: should we try to make this not specific to causal language models? (e.g. for probing/classifs?)
+    The default ``get_model()`` loads a causal LM via ``AutoModelForCausalLM``; subclasses can
+    override it for other architectures (e.g., ``AutoModelForSequenceClassification``).
     """
 
     # --------------- model settings ---------------
 
-    base_model: str = pydantic.Field(
-        ...,  # MISSING! MANDATORY!
-        description="Hugging Face model identifier or local path for the base causal LM to fine-tune.",
-    )
-    auto_model_config: dict[str, typing.Any] = pydantic.Field(
-        default_factory=lambda: typing.cast("dict[str, typing.Any]", {}),
-        description="Model configuration args passed to `transformers.AutoModelForCausalLM.from_pretrained`.",
-    )
-    quantization_mode: typing.Literal["qlora", "none"] = pydantic.Field(
-        default="none",
-        description="'Quantization mode; 'qlora' loads the model in 4-bit, and 'none' disables quantization.'",
-    )
-    lora_config: peft.LoraConfig | pyine.utils.transformers.LoraConfig | None = pydantic.Field(
-        default=None,
-        description="LoRA adapter configuration; if None, does not apply LoRA.",
-    )
+    base_model: str
+    """HuggingFace model identifier or local path for the base pretrained model."""
+    auto_model_config: dict[str, typing.Any] = pydantic.Field(default_factory=lambda: {})
+    """Extra kwargs passed to the ``AutoModel*.from_pretrained`` call."""
+    quantization_mode: typing.Literal["qlora", "none"] = "none"
+    """Quantization mode; ``qlora`` loads the model in 4-bit, ``none`` disables quantization."""
+    lora_config: peft.LoraConfig | pyine.utils.transformers.LoraConfig | None = None
+    """LoRA adapter configuration; if None, LoRA is not applied."""
 
     # --------------- tokenizer settings ---------------
 
-    auto_tokenizer_config: dict[str, typing.Any] = pydantic.Field(
-        default_factory=lambda: {"use_fast": True},
-        description="Tokenizer configuration args passed to `transformers.AutoTokenizer.from_pretrained`.",
-    )
-    tokenizer_set_padding_to_eos_if_needed: bool = pydantic.Field(
-        default=True,
-        description="If True and tokenizer has no PAD token, reuse EOS token as PAD for batching.",
-    )
-    tokenizer_override_padding_to_right_side: bool = pydantic.Field(
-        default=True,
-        description="Override whichever the tokenizer's default padding side is to 'right'.",
-    )
-    tokenizer_override_truncation_to_left_side: bool = pydantic.Field(
-        default=True,
-        description="Override whichever the tokenizer's default truncation side is to 'left'.",
-    )
+    auto_tokenizer_config: dict[str, typing.Any] = pydantic.Field(default_factory=lambda: {"use_fast": True})
+    """Extra kwargs passed to ``AutoTokenizer.from_pretrained``."""
+    tokenizer_set_padding_to_eos_if_needed: bool = True
+    """If True and tokenizer has no PAD token, reuse EOS token as PAD for batching."""
+    tokenizer_override_padding_to_right_side: bool = True
+    """Override the tokenizer's default padding side to ``right``."""
+    tokenizer_override_truncation_to_left_side: bool = True
+    """Override the tokenizer's default truncation side to ``left``."""
 
     # --------------- helpers/getters ---------------
 
@@ -278,12 +355,14 @@ class ModelTokenizerConfigBase(pydantic.BaseModel):
         self,
         checkpoint_path: pathlib.Path | None = None,
     ) -> transformers.PreTrainedModel:
-        """Returns a model to use for experiments.
+        """Returns a pretrained model instance.
+
+        The default implementation loads a causal LM via ``AutoModelForCausalLM``. Subclasses
+        can override this for other architectures (e.g., sequence classification).
 
         Args:
-            checkpoint_path: Optional path to a checkpoint to load from. If provided, loads the
-                model from the checkpoint (with LoRA adapters if present). If None, loads the base
-                pretrained model.
+            checkpoint_path: Optional checkpoint to load from (with LoRA adapters if present).
+                If None, loads the base pretrained model.
 
         Returns:
             The instantiated model.
@@ -635,18 +714,12 @@ class ResumeArtifacts(pydantic.BaseModel):
         current_config: AppMainConfig,
         previous_config: dict[str, typing.Any] | AppMainConfig,
     ) -> None:
-        import deepdiff
-
         current_payload = current_config.normalize_for_resume_overlap_check()
         previous_payload = current_config.normalize_for_resume_overlap_check(previous_config)
-        # TODO: config matching/validation needs to be adapted to properly ignore differences due to
-        # pydantic runtime fields vs config fields, which is currently causing false positives at resume
-
-        # Use deepdiff for comparison (handles order-independent list comparison and type coercion)
+        # use deepdiff for comparison (handles order-independent list comparison and type coercion)
         diff = deepdiff.DeepDiff(previous_payload, current_payload, verbose_level=2, ignore_order=True)
         if not diff:
             return  # configs match
-
         raise ValueError(
             f"resume configuration mismatch detected:\n"
             f"{diff.pretty()}\n"  # type: ignore[reportUnknownMemberType]
@@ -824,20 +897,16 @@ def prepare_datamodule(
         and pyine.utils.distrib.is_main_process()
     ):
         assert runtime is not None and runtime.wandb_run is not None
-        target_subsets = [
-            *config.datamodule_config.train_subset_names,
-            *config.datamodule_config.valid_subset_names,
-            *config.datamodule_config.eval_subset_names,
-        ]
+        target_subsets: list[str] = list(
+            {
+                *config.datamodule_config.train_subset_names,
+                *config.datamodule_config.valid_subset_names,
+                *config.datamodule_config.eval_subset_names,
+            }
+        )
         dm_stats = dm.get_stats(target_subsets)
         summary_stats = {f"dataset_stats/{k}": v for k, v in dm_stats.items()}
         runtime.wandb_run.summary.update(summary_stats)  # type: ignore[reportUnknownMemberType]
-        if config.evals_config is not None:  # pyright: ignore[reportUnnecessaryComparison]  # None in ProbeTrainerAppMainConfig
-            for eval_subset_name in config.datamodule_config.eval_subset_names:
-                config.evals_config.define_metrics_for_wandb(
-                    wandb_run=runtime.wandb_run,
-                    prefix=f"predict/{eval_subset_name}",
-                )
     return dm
 
 
@@ -876,13 +945,10 @@ def _is_deepspeed_enabled() -> bool:
     Returns:
         True if DeepSpeed is detected, False otherwise.
     """
-    import os
-
-    # Check environment variables set by Accelerate
+    # check environment variables set by accelerate
     if os.environ.get("ACCELERATE_USE_DEEPSPEED"):
         return True
-
-    # Try to check Accelerate's state
+    # try to check accelerate's state
     try:
         from accelerate import PartialState
 
@@ -893,9 +959,8 @@ def _is_deepspeed_enabled() -> bool:
             if state.distributed_type == DistributedType.DEEPSPEED:
                 return True
     except (ImportError, RuntimeError):
-        # Accelerate not available or not initialized yet
+        # accelerate not available or not initialized yet
         pass
-
     return False
 
 
@@ -915,7 +980,6 @@ def get_device_map() -> dict[str, torch.device | str] | str | None:
     if _is_deepspeed_enabled():
         logger.debug("DeepSpeed detected; setting device_map=None")
         return None
-
     if pyine.utils.distrib.is_distributed():
         if torch.cuda.is_available():
             local_rank = pyine.utils.distrib.get_local_rank(default=0)
@@ -1001,7 +1065,7 @@ def instantiate_model(
     if auto_model_config is None:
         auto_model_config = {}
 
-    resolved_auto_config = _resolve_attn_implementation(auto_model_config)
+    resolved_auto_config = resolve_attn_implementation(auto_model_config)
 
     if checkpoint_path is not None:
         # Load model from checkpoint
@@ -1096,90 +1160,119 @@ def instantiate_model(
 
 
 async def evaluate_model(
-    model: pyine.evals.utils.InvocableModelChain | transformers.PreTrainedModel | None,
+    model: pyine.evals.utils.InvocableModelChain | transformers.PreTrainedModel | typing.Any | None,
     tokenizer: transformers.PreTrainedTokenizer | None,
-    datamodule: pyine.data.datamodule.ConversationDataModule[typing.Any],
+    datamodule: pyine.data.datamodule.BaseDataModule[typing.Any] | None,
     config: AppMainConfig,
     runtime: pyine.configs.schemas.RuntimeConfig | None,
 ) -> dict[str, pyine.evals.common.EvalResult]:
-    """Evaluates the given model on the specified data subset using the internal evals config.
+    """Evaluates the given model following the strategy defined in the app's evals config.
 
     Args:
-        model: The model to evaluate, in either a langchain runnable or in HF-transformers format.
-            Can be None when using vLLM provider (model is served remotely via vLLM server).
-        tokenizer: The tokenizer to use for evaluation, if applicable (only for HF-T models).
-        datamodule: The datamodule from which to load the evaluation data.
-        config: The application configuration, which should contain the evals config.
-        runtime: The runtime configuration, which may contain W&B run information.
+        model: The model to evaluate, in langchain runnable, HF-transformers, or invocable/wrapped
+            format. Can be None when using vLLM provider (model is served remotely via vLLM server).
+            If we cannot deduce the model type and it is not None, we'll let the downstream eval
+            pipeline determine if it is compatible with its 'evaluate_wrapped_model' function.
+        tokenizer: The tokenizer to use for evaluation, if applicable and relevant (likely only
+            useful for e.g. HF model evals, or evals involving vLLM and requiring token stats).
+        datamodule: The datamodule from which to load the evaluation data (if not configured as
+            part of the evals config itself). If one is provided and not expected by the configured
+            eval strategy, an error is raised, and vice versa.
+        config: The application configuration, which should contain the evals config, but that will
+            also likely be used to log evaluation metadata.
+        runtime: The runtime configuration, which may contain W&B run information and relevant info
+            for logging.
 
     Returns:
-        The evaluation results as a dictionary indexed by evaluated subset name.
+        The evaluation results as a dictionary indexed by evaluated data subset name.
     """
     evaluation_results: dict[str, pyine.evals.common.EvalResult] = {}
-    if config.evals_config.eval_type is None:
+    if config.evals_config is None or config.evals_config.eval_type is None:  # type: ignore[reportUnnecessaryComparison]
         return evaluation_results
+    eval_dm = config.evals_config.prepare_eval_datamodule(datamodule)
+    eval_dm_subset_names = eval_dm.config.eval_subset_names
+    logger.info(f"will evaluate using {len(eval_dm_subset_names)} subset(s): {eval_dm_subset_names}")
+    if config.use_wandb_logging and runtime is not None and runtime.wandb_run is not None:
+        config.evals_config.define_metrics_for_wandb(
+            wandb_run=runtime.wandb_run,
+            eval_subset_names=eval_dm_subset_names,
+        )
     start_time = time.time()
-    # Check if vLLM provider is configured
+    # resolve which eval method to call based on model type; each branch validates preconditions
+    # and binds all arguments except eval_subset_name into a partial
     vllm_provider_config = getattr(config.evals_config, "vllm_provider_config", None)
     if vllm_provider_config is not None:
         # vLLM provider mode: use standard runnable chain evaluation
+        assert isinstance(vllm_provider_config, pyine.utils.llm_providers.LLMProviderConfig)
         if model is not None:
             raise ValueError("model should be None when using vLLM provider mode")
-        # Get vLLM model from provider config and build prompt chain
-        vllm_model = vllm_provider_config.get_model()  # type: ignore[reportUnknownMemberType]
-        chain = datamodule.config.get_prompt_chain(vllm_model)
-        for eval_subset_name in config.datamodule_config.eval_subset_names:
-            logger.info(f"running vLLM chain evaluation on the {eval_subset_name} subset...")
-            evaluation_result = await config.evals_config.evaluate_runnable_model(
-                chain=chain,
-                datamodule=datamodule,
-                eval_subset_name=eval_subset_name,
-                verbose=True,
+        vllm_model = vllm_provider_config.get_model()
+        if not isinstance(eval_dm, pyine.data.datamodule.ConversationDataModule):
+            raise ValueError(
+                "datamodule should be provided as a conversation DM when using vLLM provider mode "
+                "(it specifies the prompt config, otherwise we cannot access it)"
             )
-            assert isinstance(evaluation_result, pyine.evals.common.EvalResult)
-            pyine.evals.utils.print_metrics(evaluation_result.metrics, eval_subset_name, logger.info)
-            evaluation_results[eval_subset_name] = evaluation_result
+        chain = eval_dm.config.get_prompt_chain(vllm_model)
+        run_subset_eval = functools.partial(
+            config.evals_config.evaluate_runnable_model,
+            chain=chain,
+            datamodule=eval_dm,
+            verbose=True,
+        )
+        eval_label = "vLLM chain"
     elif pyine.utils.transformers.is_hf_model(model):
-        # Local HF model mode: use model.generate()
+        # local HF model mode: assume we must use model.generate()
+        if not isinstance(config.evals_config, pyine.evals.common.GenerationEvalsConfig):
+            raise ValueError(f"invalid evals config type for HF model eval: {type(config.evals_config).__name__}")
         if tokenizer is None or not pyine.utils.transformers.is_hf_tokenizer(tokenizer):
             raise ValueError("invalid tokenizer (need to provide one to evaluate hf model")
+        if not isinstance(eval_dm, pyine.data.datamodule.ConversationDataModule):
+            raise ValueError("invalid datamodule type for HF model eval: must be ConversationDataModule")
         if config.evals_config.eval_padding_side != tokenizer.padding_side:
             new_padding_side = config.evals_config.eval_padding_side
             logger.debug(f"overriding tokenizer padding side to '{new_padding_side}' for evals")
             tokenizer.padding_side = new_padding_side
         hf_model = typing.cast("transformers.PreTrainedModel", model)
-        for eval_subset_name in config.datamodule_config.eval_subset_names:
-            logger.info(f"running model evaluation on the {eval_subset_name} subset...")
-            evaluation_result = await config.evals_config.evaluate_hf_model(
-                model=hf_model,
-                tokenizer=tokenizer,
-                datamodule=datamodule,
-                eval_subset_name=eval_subset_name,
-                verbose=True,
-            )
-            assert isinstance(evaluation_result, pyine.evals.common.EvalResult)
-            pyine.evals.utils.print_metrics(evaluation_result.metrics, eval_subset_name, logger.info)
-            evaluation_results[eval_subset_name] = evaluation_result
+        run_subset_eval = functools.partial(
+            config.evals_config.evaluate_hf_model,
+            model=hf_model,
+            tokenizer=tokenizer,
+            datamodule=eval_dm,
+            verbose=True,
+        )
+        eval_label = "HF model"
     else:
-        # Not using vLLM and not an HF model - must be a langchain runnable
+        # not using vLLM and not an HF model: must be a langchain runnable, or a wrapped model
         if model is None:
             raise ValueError("model cannot be None when not using vLLM provider mode")
-        if not pyine.utils.langchain.is_invocable_chain(model):
-            raise ValueError(f"invalid model ({type(model)})")
         if tokenizer is not None:
-            raise NotImplementedError("tokenizer support in runnable chain eval is not implemented")
-        chain_model = typing.cast("pyine.evals.utils.InvocableModelChain", model)
-        for eval_subset_name in config.datamodule_config.eval_subset_names:
-            logger.info(f"running chain evaluation on the {eval_subset_name} subset...")
-            evaluation_result = await config.evals_config.evaluate_runnable_model(
+            raise NotImplementedError("tokenizer support in runnable chain / wrapped model eval is not implemented")
+        if pyine.utils.langchain.is_invocable_chain(model):
+            if not isinstance(eval_dm, pyine.data.datamodule.ConversationDataModule):
+                raise ValueError("invalid datamodule type for runnable chain eval: must be ConversationDataModule")
+            chain_model = typing.cast("pyine.evals.utils.InvocableModelChain", model)
+            run_subset_eval = functools.partial(
+                config.evals_config.evaluate_runnable_model,
                 chain=chain_model,
-                datamodule=datamodule,
-                eval_subset_name=eval_subset_name,
+                datamodule=eval_dm,
                 verbose=True,
             )
-            assert isinstance(evaluation_result, pyine.evals.common.EvalResult)
-            pyine.evals.utils.print_metrics(evaluation_result.metrics, eval_subset_name, logger.info)
-            evaluation_results[eval_subset_name] = evaluation_result
+            eval_label = "invocable chain"
+        else:
+            # let the downstream evaluation pipeline handle whether this model is compatible
+            run_subset_eval = functools.partial(
+                config.evals_config.evaluate_wrapped_model,
+                wrapped_model=model,
+                datamodule=eval_dm,
+                verbose=True,
+            )
+            eval_label = "wrapped model"
+    for eval_subset_name in eval_dm_subset_names:
+        logger.info(f"running {eval_label} evaluation on the {eval_subset_name} subset...")
+        evaluation_result = await run_subset_eval(eval_subset_name=eval_subset_name)
+        assert isinstance(evaluation_result, pyine.evals.common.EvalResult)
+        pyine.evals.utils.print_metrics(evaluation_result.metrics, eval_subset_name, logger.info)
+        evaluation_results[eval_subset_name] = evaluation_result
     if config.use_wandb_logging and evaluation_results:
         if runtime is None:
             raise RuntimeError("runtime configuration with wandb run must be provided when logging to wandb")
@@ -1214,7 +1307,7 @@ def get_training_flags(
 ) -> tuple[bool, bool, bool]:
     """Extracts training flags (do_train, do_eval, do_predict) from config.
 
-    Handles both SFT configs (with training_args_config) and RL configs (with grpo_config).
+    Handles both SFT configs (with training_args_config) and HF-TRL configs (with grpo_config).
 
     Args:
         config: The trainer app config.
@@ -1222,7 +1315,7 @@ def get_training_flags(
     Returns:
         Tuple of (do_train, do_eval, do_predict) booleans.
     """
-    # check for RL config (grpo_config)
+    # check for TRL config (grpo_config)
     grpo_config = getattr(config, "grpo_config", None)
     if grpo_config is not None:
         return (
@@ -1258,6 +1351,36 @@ def is_rl_config(config: AppMainConfig) -> bool:
     return hasattr(config, "grpo_config") and not hasattr(config, "training_args_config")
 
 
+def load_model_and_tokenizer_for_prediction(
+    config: ModelTokenizerConfigBase,
+    resume_artifacts: ResumeArtifacts | None,
+    evals_config: pydantic.SerializeAsAny[pyine.evals.common.BaseEvalsConfig] | None = None,
+) -> tuple[transformers.PreTrainedModel | None, transformers.PreTrainedTokenizer | None]:
+    """Load model and tokenizer for predict-only mode (no training).
+
+    Handles three cases: vLLM provider (skip loading), resume from checkpoint,
+    and fresh base model loading.
+
+    Args:
+        config: The model/tokenizer config (provides ``get_model``/``get_tokenizer``).
+        resume_artifacts: Optional resume artifacts with checkpoint path.
+        evals_config: Optional evals config; when its ``vllm_provider_config`` is set,
+            model/tokenizer loading is skipped entirely.
+
+    Returns:
+        Tuple of (model, tokenizer), both None when using a vLLM provider.
+    """
+    if evals_config is not None and getattr(evals_config, "vllm_provider_config", None) is not None:
+        logger.info("vLLM provider enabled - skipping local model and tokenizer loading")
+        return None, None
+    if resume_artifacts is not None:
+        return (
+            config.get_model(checkpoint_path=resume_artifacts.checkpoint_path),
+            config.get_tokenizer(checkpoint_path=resume_artifacts.checkpoint_path),
+        )
+    return config.get_model(), config.get_tokenizer()
+
+
 def get_vllm_provider_model_name(
     config: AppMainConfig,
 ) -> str | None:
@@ -1269,9 +1392,10 @@ def get_vllm_provider_model_name(
     Returns:
         The vLLM provider model name or None.
     """
-    if config.evals_config.vllm_provider_config is None:
+    vllm_provider_config = getattr(config.evals_config, "vllm_provider_config", None)
+    if vllm_provider_config is None:
         return None
-    return config.evals_config.vllm_provider_config.model_kwargs.get("model", "default")
+    return vllm_provider_config.model_kwargs.get("model", "default")
 
 
 def prepare_resume_train_kwargs(
@@ -1368,7 +1492,7 @@ def log_shutdown_status(
     shutdown_manager: pyine.utils.interrupts.GracefulShutdownManager | None,
     training_type: str = "training",
 ) -> None:
-    """Logs if training exited early due to shutdown request.
+    """Logs if training exited early due to a shutdown request.
 
     Args:
         shutdown_manager: The shutdown manager instance.
@@ -1558,6 +1682,17 @@ def get_lora_configs(
     return [default_lora_config]
 
 
+def strip_deepspeed_local_rank_arg() -> None:
+    """Remove ``--local_rank=N`` from ``sys.argv`` to avoid Hydra parse errors.
+
+    DeepSpeed's native launcher passes ``--local_rank=N`` as a CLI argument, but Hydra doesn't
+    recognize it. Distributed training already uses the ``LOCAL_RANK`` environment variable (set
+    by DeepSpeed/torchrun), so the CLI argument is redundant. This is a no-op when using
+    accelerate's standard launcher which only sets env vars.
+    """
+    sys.argv = [arg for arg in sys.argv if not arg.startswith("--local_rank")]
+
+
 @torch.distributed.elastic.multiprocessing.errors.record
 def hydra_main(
     eval_type: pyine.evals.common.EvalType,
@@ -1565,6 +1700,7 @@ def hydra_main(
     async_main_wrapper: typing.Callable[..., None],
 ) -> None:
     """Hydra main entrypoint for trainer apps."""
+    strip_deepspeed_local_rank_arg()
     pyine.configs.base.register_searchpath_plugin()
     hydra_config_registration_fn(eval_type)
     hydra_zen.zen(async_main_wrapper).hydra_main(

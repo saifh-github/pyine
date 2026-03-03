@@ -111,9 +111,6 @@ def test_get_rl_tagged_answer_config_and_template() -> None:
     assert "print(" in rendered
 
 
-# @@@@@ TODO: add optional tests w/ LLM invocations depending on cluster availability
-
-
 class TestCodeExecutionValidator:
     def test_default_config(self) -> None:
         config = code_exec.CodeExecutionValidatorConfig()

@@ -101,9 +101,9 @@ SampleData(
     last_line_hit: int,                         # which visit to last_line (for code segments)
     first_step_idx: int,                        # absolute trace index of segment start
     last_step_idx: int,                         # absolute trace index of segment end
-    pregenerated_output: str | None,            # pseudolabel from a prior run (None when not applicable)
-    pregenerated_output_lmdb_path: str | None,  # source LMDB path for the pregenerated output
-    pregenerated_output_lmdb_key: str | None,   # source LMDB key for the pregenerated output
+    pregenerated_output: str,                   # pseudolabel from a prior run (empty when not applicable)
+    pregenerated_output_lmdb_path: str,         # source LMDB path for the pregenerated output
+    pregenerated_output_lmdb_key: str,          # source LMDB key for the pregenerated output
 )
 ```
 

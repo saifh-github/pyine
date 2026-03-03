@@ -71,7 +71,7 @@ class ClassifierMetricsConnector:
         checkpoint_dir = pathlib.Path(self._config.classifier_checkpoint_dir)
 
         logger.info("loading classifier from: %s", checkpoint_dir)
-        resolved_config = common._resolve_attn_implementation(self._config.classifier_auto_model_config)  # pyright: ignore[reportPrivateUsage]
+        resolved_config = common.resolve_attn_implementation(self._config.classifier_auto_model_config)
         model = transformers.AutoModelForSequenceClassification.from_pretrained(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # transformers stubs
             checkpoint_dir,
             **resolved_config,

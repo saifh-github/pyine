@@ -13,6 +13,7 @@ import pyine.evals.utils
 import pyine.organisms.datamodules.samples
 import pyine.utils.code.complexity_metrics
 import pyine.utils.code.output_compare
+import pyine.utils.parsing
 
 if typing.TYPE_CHECKING:
     import pyine.evals.code_exec.evaluator  # noqa
@@ -21,6 +22,21 @@ type LLMScoreFuture = asyncio.Task[float]
 """Type alias for pending LLM score computations."""
 type LLMGraderResponse = float | pyine.utils.code.output_compare.GradingResult
 """Raw response type emitted by the LLM grading chain."""
+type AttemptKey = tuple[str, int]
+"""Key type for attempt-level token usage: (identifier, attempt_index)."""
+type MatchType = typing.Literal["hard", "soft", "grader"]
+"""Match type for evaluation metrics (hard exact match, soft heuristic match, LLM grader)."""
+MATCH_TYPES: tuple[MatchType, ...] = ("hard", "soft", "grader")
+"""All match types (including grader), used for extraction and plotting."""
+DETERMINISTIC_MATCH_TYPES: tuple[typing.Literal["hard", "soft"], ...] = ("hard", "soft")
+"""Match types that are always available (no LLM grader required)."""
+type AccuracyType = typing.Literal["accuracy_hard", "accuracy_soft", "accuracy_grader"]
+"""Type of accuracy to compute (hard, soft, or grader-based); prefixed form of MatchType."""
+
+AggregatedGraderMetricNames: typing.Final[tuple[str, ...]] = tuple(
+    f"grader_{aggr_name}" for aggr_name in pyine.evals.constants.AGGREGATION_STAT_NAMES
+)
+"""List of aggregated grader score metrics over all samples."""
 
 
 @dataclasses.dataclass
@@ -41,6 +57,10 @@ class SampleEval:
     """Score in [0, 1] returned by a LLM grader, if used."""
     tags: list[str]
     """Arbitrary tags used for grouping/filtering (e.g., difficulty, source)."""
+    attempt_index: int = 0
+    """Index of this attempt within multi-sample generation (0 for single-sample)."""
+    predict_type: str = "unknown"
+    """Prediction type for this sample (authoritative source for invariant validation)."""
 
     @property
     def llm_score(self) -> float | None:
@@ -74,13 +94,66 @@ class SampleEval:
             obj._llm_score = score
 
 
-type AccuracyType = typing.Literal["accuracy_hard", "accuracy_soft", "accuracy_grader"]
-"""Type of accuracy to compute (hard, soft, or grader-based)."""
+@dataclasses.dataclass
+class SampleEvalGroup:
+    """A group of SampleEval attempts for a single sample identifier."""
 
-AggregatedGraderMetricNames: typing.Final[tuple[str, ...]] = tuple(
-    f"grader_{aggr_name}" for aggr_name in pyine.evals.constants.AGGREGATION_STAT_NAMES
-)
-"""List of aggregated grader score metrics over all samples."""
+    sample_identifier: str
+    """The shared identifier across all attempts in this group."""
+    attempts: list[SampleEval]
+    """List of attempts sorted by attempt_index."""
+    tags: list[str]
+    """Tags from the first attempt (should be consistent across attempts)."""
+
+    @property
+    def num_attempts(self) -> int:
+        """Returns the number of attempts in this group."""
+        return len(self.attempts)
+
+    @property
+    def num_hard_correct(self) -> int:
+        """Returns the number of hard-match correct attempts."""
+        return sum(1 for a in self.attempts if a.hard_match)
+
+    @property
+    def num_soft_correct(self) -> int:
+        """Returns the number of soft-match correct attempts."""
+        return sum(1 for a in self.attempts if a.soft_match.equal)
+
+    @property
+    def unique_predictions(self) -> set[str]:
+        """Returns the set of unique stripped predictions.
+
+        Uses .strip() normalization for diversity/uniqueness measures,
+        regardless of the evaluator's strip_hard_checks setting.
+        """
+        return {a.predicted.strip() for a in self.attempts}
+
+    @property
+    def output_diversity(self) -> float:
+        """Returns |unique_stripped_outputs| / num_attempts."""
+        if self.num_attempts == 0:
+            return 0.0
+        return len(self.unique_predictions) / self.num_attempts
+
+
+def get_sample_token_usage(
+    attempt_token_usage: dict[AttemptKey, pyine.evals.utils.TokenUsageInfo],
+    identifier: str,
+) -> list[pyine.evals.utils.TokenUsageInfo]:
+    """Returns all token usage entries for a given sample identifier, sorted by attempt index."""
+    entries = [(key[1], val) for key, val in attempt_token_usage.items() if key[0] == identifier]
+    entries.sort(key=lambda x: x[0])
+    return [val for _, val in entries]
+
+
+def get_single_attempt_token_usage(
+    attempt_token_usage: dict[AttemptKey, pyine.evals.utils.TokenUsageInfo],
+    identifier: str,
+    attempt_index: int,
+) -> pyine.evals.utils.TokenUsageInfo:
+    """Returns token usage for a specific (identifier, attempt_index) pair."""
+    return attempt_token_usage[(identifier, attempt_index)]
 
 
 class AgreementTable(typing.TypedDict):
@@ -106,11 +179,20 @@ class CodeExecEvalArtifact(pydantic.BaseModel):
     """Token usage information associated with the prediction."""
     eval_result: SampleEval
     """Evaluation result associated with the prediction."""
+    parsed_output: pyine.utils.parsing.ParsedOutput | None = None
+    """Structured parsed output (reasoning, final_answer) when output parsing is enabled."""
+    difficulty_score: float | None = None
+    """Per-sample difficulty score (when difficulty estimation is enabled)."""
 
     @property
-    def identifier(self) -> str:
-        """Unique sample id associated with the data sample (used for lookups)."""
+    def sample_identifier(self) -> str:
+        """Sample-level identifier (shared across attempts for the same sample)."""
         return self.sample.identifier
+
+    @property
+    def attempt_key(self) -> AttemptKey:
+        """Attempt-level key ``(sample_identifier, attempt_index)`` for unambiguous identification."""
+        return self.sample.identifier, self.eval_result.attempt_index
 
     @pydantic.model_validator(mode="after")
     def _post_validation(self) -> CodeExecEvalArtifact:
@@ -134,9 +216,14 @@ class CodeExecEvalResult(pyine.evals.common.EvalResult):
     """Dictionary mapping category names to lists of sample identifiers associated with them."""
 
     @property
-    def identifiers(self) -> list[str]:
-        """Returns a list of sample identifiers associated with the evaluation results."""
-        return [s.identifier for s in self.artifacts]
+    def sample_identifiers(self) -> list[str]:
+        """Returns a list of sample identifiers (may have duplicates when K>1)."""
+        return [s.sample_identifier for s in self.artifacts]
+
+    @property
+    def unique_sample_identifiers(self) -> list[str]:
+        """Returns a deduplicated list of sample identifiers."""
+        return list(dict.fromkeys(s.sample_identifier for s in self.artifacts))
 
     @property
     def categories(self) -> list[str]:
@@ -145,41 +232,61 @@ class CodeExecEvalResult(pyine.evals.common.EvalResult):
 
     @property
     def num_samples(self) -> int:
-        """Returns the number of samples associated with the evaluation results."""
+        """Returns the number of unique samples (identifiers)."""
+        return len({a.sample_identifier for a in self.artifacts})
+
+    @property
+    def num_attempts(self) -> int:
+        """Returns the total number of evaluation attempts (= K * num_samples when uniform)."""
         return len(self.artifacts)
+
+    @property
+    def attempt_keys(self) -> list[AttemptKey]:
+        """Returns attempt-level keys for unambiguous identification when K>1."""
+        return [a.attempt_key for a in self.artifacts]
 
 
 @typing.no_type_check  # because wandb sucks at typing
 def define_metrics_for_wandb(
     wandb_run: typing.Any,
-    prefix: str | None = None,
+    metric_prefix: str,
+    pass_at_k_values: list[int] | None = None,
+    num_attempts_per_sample: int = 1,
 ) -> None:
-    """Defines the evaluation metrics for the given wandb run."""
+    """Defines the evaluation metrics for the given wandb run.
+
+    Args:
+        wandb_run: The wandb run to define metrics on.
+        metric_prefix: The metric name prefix to use (which should specify the eval subset).
+        pass_at_k_values: Resolved list of k values, or None for base metrics only.
+        num_attempts_per_sample: Number of attempts per sample.
+    """
     from pyine.evals.code_exec.evaluator import OutcomeEvaluator
 
+    if pass_at_k_values is not None and max(pass_at_k_values) > num_attempts_per_sample:
+        raise ValueError(
+            f"max(pass_at_k_values)={max(pass_at_k_values)} > num_attempts_per_sample={num_attempts_per_sample}"
+        )
     step_metric = "train/global_step"  # the global step for the run, logged by the hf trainer
-    for metric_name in OutcomeEvaluator.get_supported_metric_names():
-        metric_name = f"{prefix}/{metric_name}" if prefix else metric_name
-        wandb_run.define_metric(name=metric_name, step_metric=step_metric)
+    # catch-all for category-wise metrics (e.g. code_type/original/accuracy_hard) whose
+    # category values are data-dependent and unknown at definition time. more-specific
+    # definitions below take precedence over this glob in wandb.
+    wandb_run.define_metric(name=f"{metric_prefix}/*", step_metric=step_metric)
+    for metric_name in OutcomeEvaluator.get_supported_metric_names(pass_at_k_values, num_attempts_per_sample):
+        wandb_run.define_metric(name=f"{metric_prefix}/{metric_name}", step_metric=step_metric)
     # define token usage metrics (matching get_metrics output format)
     for token_metric_name in pyine.evals.utils.TokenUsageInfo.get_metric_names():
-        # total token usage metrics (token_usage/{metric})
-        token_usage_name = f"token_usage/{token_metric_name}"
-        if prefix:
-            token_usage_name = f"{prefix}/{token_usage_name}"
+        # total token usage metrics (total_token_usage/{metric})
+        token_usage_name = f"{metric_prefix}/total_token_usage/{token_metric_name}"
         wandb_run.define_metric(name=token_usage_name, step_metric=step_metric)
-        # per-sample aggregated token usage metrics (sample_token_usage/{metric}_{aggr})
+        # per-attempt aggregated token usage metrics (attempt_token_usage/{metric}_{aggr})
         for aggr_name in pyine.evals.constants.AGGREGATION_STAT_NAMES:
-            sample_token_name = f"sample_token_usage/{token_metric_name}_{aggr_name}"
-            if prefix:
-                sample_token_name = f"{prefix}/{sample_token_name}"
-            wandb_run.define_metric(name=sample_token_name, step_metric=step_metric)
+            attempt_token_name = f"{metric_prefix}/attempt_token_usage/{token_metric_name}_{aggr_name}"
+            wandb_run.define_metric(name=attempt_token_name, step_metric=step_metric)
     # define complexity metrics (matching get_metrics output format)
     for complexity_metric_name in pyine.utils.code.complexity_metrics.COMPLEXITY_METRICS:
         for aggr_name in pyine.evals.constants.AGGREGATION_STAT_NAMES:
-            complexity_name = f"complexity/{complexity_metric_name}_{aggr_name}"
-            if prefix:
-                complexity_name = f"{prefix}/{complexity_name}"
+            complexity_name = f"{metric_prefix}/complexity/{complexity_metric_name}_{aggr_name}"
             # these are interesting for analyses, but not for plotting
             wandb_run.define_metric(
                 name=complexity_name,
@@ -187,6 +294,14 @@ def define_metrics_for_wandb(
                 hidden=True,
                 summary="none",
             )
+    for aggr_name in pyine.evals.constants.AGGREGATION_STAT_NAMES:
+        difficulty_name = f"{metric_prefix}/difficulty/score_{aggr_name}"
+        wandb_run.define_metric(
+            name=difficulty_name,
+            step_metric=step_metric,
+            hidden=True,
+            summary="none",
+        )
 
 
 def compute_aggregated_complexity_stats(
@@ -219,20 +334,61 @@ def compute_aggregated_complexity_stats(
     return output
 
 
+def compute_aggregated_difficulty_stats(
+    difficulty_scores: typing.Iterable[float],
+) -> dict[str, float]:
+    """Compute aggregated difficulty statistics across all samples.
+
+    Args:
+        difficulty_scores: Iterable of difficulty score values.
+
+    Returns:
+        Dict mapping metric names (with aggregation suffix) to values.
+    """
+    values = list(difficulty_scores)
+    if not values:
+        return {}
+    arr = np.array(values)
+    output: dict[str, float] = {}
+    for aggr_name, aggr_func in pyine.evals.constants.AGGREGATION_STAT_FUNCS.items():
+        output[f"score_{aggr_name}"] = float(aggr_func(arr))
+    return output
+
+
 def _check_metrics_inputs(
     evaluator: pyine.evals.code_exec.evaluator.OutcomeEvaluator,
-    sample_token_usage: dict[str, pyine.evals.utils.TokenUsageInfo],
+    attempt_token_usage: dict[AttemptKey, pyine.evals.utils.TokenUsageInfo],
     sample_data_store: dict[str, pyine.organisms.datamodules.samples.SampleData],
+    partial: bool = False,
 ) -> None:
-    """Validates arguments used to compute metrics."""
-    if evaluator.get_sample_count() != len(sample_data_store):
-        raise ValueError(
-            f"evaluator sample count ({evaluator.get_sample_count()}) != data store size ({len(sample_data_store)})"
-        )
-    if len(sample_token_usage) != len(sample_data_store):
-        raise ValueError(f"token usage count ({len(sample_token_usage)}) != data store size ({len(sample_data_store)})")
-    if set(sample_token_usage) != set(sample_data_store):
-        raise ValueError("token usage and data store have different sample identifiers")
+    """Validates arguments used to compute metrics.
+
+    Args:
+        evaluator: The outcome evaluator with results.
+        attempt_token_usage: Token usage keyed by (identifier, attempt_index).
+        sample_data_store: Sample data keyed by bare identifier.
+        partial: When True (progress callback path), skip strict equality checks.
+    """
+    evaluated_identifiers = {r.identifier for r in evaluator.results}
+    if not partial:
+        # strict: attempt_token_usage keys must exactly match evaluator results (attempt-level)
+        expected_keys = {(r.identifier, r.attempt_index) for r in evaluator.results}
+        if set(attempt_token_usage) != expected_keys:
+            raise ValueError(
+                f"token usage keys mismatch: "
+                f"extra={set(attempt_token_usage) - expected_keys}, "
+                f"missing={expected_keys - set(attempt_token_usage)}"
+            )
+        # strict: sample_data_store must exactly match evaluated identifiers (sample-level)
+        if evaluated_identifiers != set(sample_data_store):
+            extra = set(sample_data_store) - evaluated_identifiers
+            missing = evaluated_identifiers - set(sample_data_store)
+            raise ValueError(f"sample data store mismatch: extra={extra}, missing={missing}")
+    else:
+        # partial: only check that evaluated identifiers exist in sample_data_store (subset ok)
+        if not evaluated_identifiers.issubset(set(sample_data_store)):
+            missing = evaluated_identifiers - set(sample_data_store)
+            raise ValueError(f"missing sample data for identifiers: {missing}")
 
 
 def _float_or_nan(
@@ -248,47 +404,99 @@ def _float_or_nan(
 async def get_metrics(
     evaluator: pyine.evals.code_exec.evaluator.OutcomeEvaluator,
     token_usage: pyine.evals.utils.TokenUsageInfo,
-    sample_token_usage: dict[str, pyine.evals.utils.TokenUsageInfo],
+    attempt_token_usage: dict[AttemptKey, pyine.evals.utils.TokenUsageInfo],
     sample_data_store: dict[str, pyine.organisms.datamodules.samples.SampleData],
+    difficulty_scores: dict[str, float | None] | None = None,
+    pass_at_k_values: list[int] | None = None,
+    num_attempts_per_sample: int = 1,
+    partial: bool = False,
 ) -> pyine.evals.utils.MetricsDictType:
-    """Compute and returns metrics associated with the current evaluation result."""
-    _check_metrics_inputs(evaluator, sample_token_usage, sample_data_store)
-    output_metrics: pyine.evals.utils.MetricsDictType = await evaluator.compute_metrics()
+    """Compute and returns metrics associated with the current evaluation result.
+
+    Args:
+        evaluator: The outcome evaluator with results.
+        token_usage: Total token usage across all attempts.
+        attempt_token_usage: Per-attempt token usage keyed by (identifier, attempt_index).
+        sample_data_store: Sample data keyed by bare identifier.
+        difficulty_scores: Optional mapping from sample identifier to difficulty score.
+        pass_at_k_values: Resolved list of k values for Pass@K, or None to skip Pass@K.
+        num_attempts_per_sample: Number of attempts per sample for validation.
+        partial: When True, relaxes validation (subset checks only). Use for progress
+            callbacks where not all samples have been evaluated yet.
+    """
+    _check_metrics_inputs(evaluator, attempt_token_usage, sample_data_store, partial=partial)
+    output_metrics: pyine.evals.utils.MetricsDictType = await evaluator.compute_metrics(
+        pass_at_k_values=pass_at_k_values,
+        num_attempts_per_sample=num_attempts_per_sample,
+    )
     for key, value in token_usage.asdict().items():
-        output_metrics[f"token_usage/{key}"] = _float_or_nan(value)  # convert to bypass 'unknown'
-    for key, value in pyine.evals.utils.compute_aggregated_token_usage_metrics(sample_token_usage.values()).items():
-        output_metrics[f"sample_token_usage/{key}"] = value  # these should always be floats
+        output_metrics[f"total_token_usage/{key}"] = _float_or_nan(value)  # convert to bypass 'unknown'
+    for key, value in pyine.evals.utils.compute_aggregated_token_usage_metrics(attempt_token_usage.values()).items():
+        output_metrics[f"attempt_token_usage/{key}"] = value  # these should always be floats
     for key, value in compute_aggregated_complexity_stats(sample_data_store.values()).items():
         output_metrics[f"complexity/{key}"] = value  # these should always be floats
+    if difficulty_scores is not None:
+        valid_scores = [score for score in difficulty_scores.values() if score is not None]
+        for key, value in compute_aggregated_difficulty_stats(valid_scores).items():
+            output_metrics[f"difficulty/{key}"] = value
     return output_metrics
 
 
 async def get_category_wise_metrics(
     evaluator: pyine.evals.code_exec.evaluator.OutcomeEvaluator,
-    sample_token_usage: dict[str, pyine.evals.utils.TokenUsageInfo],
+    attempt_token_usage: dict[AttemptKey, pyine.evals.utils.TokenUsageInfo],
     sample_data_store: dict[str, pyine.organisms.datamodules.samples.SampleData],
     category_to_identifiers: dict[str, list[str]],
+    difficulty_scores: dict[str, float | None] | None = None,
+    pass_at_k_values: list[int] | None = None,
+    num_attempts_per_sample: int = 1,
 ) -> pyine.evals.utils.MetricsDictType:
-    """Compute and returns metrics associated with the current evaluation result grouped by category."""
-    _check_metrics_inputs(evaluator, sample_token_usage, sample_data_store)
+    """Compute and returns metrics associated with the current evaluation result grouped by category.
+
+    Args:
+        evaluator: The outcome evaluator with results.
+        attempt_token_usage: Per-attempt token usage keyed by (identifier, attempt_index).
+        sample_data_store: Sample data keyed by bare identifier.
+        category_to_identifiers: Per-sample identifiers grouped by category.
+        difficulty_scores: Optional mapping from sample identifier to difficulty score.
+        pass_at_k_values: Resolved list of k values for Pass@K, or None.
+        num_attempts_per_sample: Number of attempts per sample for validation.
+    """
+    _check_metrics_inputs(evaluator, attempt_token_usage, sample_data_store)
     output_metrics: pyine.evals.utils.MetricsDictType = {}
-    category_wise_metrics = await evaluator.compute_category_wise_metrics(category_to_identifiers)
+    category_wise_metrics = await evaluator.compute_category_wise_metrics(
+        category_to_identifiers,
+        pass_at_k_values=pass_at_k_values,
+        num_attempts_per_sample=num_attempts_per_sample,
+    )
     for category, metrics in category_wise_metrics.items():
         for metric_name, metric_value in metrics.items():
             output_metrics[f"{category}/{metric_name}"] = metric_value
         category_token_usage = pyine.evals.utils.TokenUsageInfo.get_default()
         category_token_usage_data: list[pyine.evals.utils.TokenUsageInfo] = []
         category_sample_data: list[pyine.organisms.datamodules.samples.SampleData] = []
-        for sample_identifier in category_to_identifiers[category]:
-            category_token_usage += sample_token_usage[sample_identifier]
-            category_token_usage_data.append(sample_token_usage[sample_identifier])
-            category_sample_data.append(sample_data_store[sample_identifier])
+        identifiers = list(dict.fromkeys(category_to_identifiers[category]))
+        for sample_identifier in identifiers:
+            sample_token_entries = get_sample_token_usage(attempt_token_usage, sample_identifier)
+            for entry in sample_token_entries:
+                category_token_usage += entry
+                category_token_usage_data.append(entry)
+            if sample_identifier in sample_data_store:
+                category_sample_data.append(sample_data_store[sample_identifier])
         for key, value in category_token_usage.asdict().items():
-            output_metrics[f"{category}/token_usage/{key}"] = _float_or_nan(value)  # convert to bypass 'unknown'
+            output_metrics[f"{category}/total_token_usage/{key}"] = _float_or_nan(value)
         for key, value in pyine.evals.utils.compute_aggregated_token_usage_metrics(category_token_usage_data).items():
-            output_metrics[f"{category}/sample_token_usage/{key}"] = value  # these should always be floats
+            output_metrics[f"{category}/attempt_token_usage/{key}"] = value
         for key, value in compute_aggregated_complexity_stats(category_sample_data).items():
-            output_metrics[f"{category}/complexity/{key}"] = value  # these should always be floats
+            output_metrics[f"{category}/complexity/{key}"] = value
+        if difficulty_scores is not None:
+            category_scores: list[float] = []
+            for sample_identifier in identifiers:
+                score = difficulty_scores.get(sample_identifier)
+                if score is not None:
+                    category_scores.append(score)
+            for key, value in compute_aggregated_difficulty_stats(category_scores).items():
+                output_metrics[f"{category}/difficulty/{key}"] = value
     return output_metrics
 
 
@@ -310,6 +518,7 @@ def get_sample_metrics_columns() -> list[str]:
     return [
         # sample identification
         "identifier",
+        "attempt_index",
         "code_type",
         "predict_type",
         "tags",
@@ -335,6 +544,8 @@ def get_sample_metrics_columns() -> list[str]:
         *token_usage_columns,
         # complexity metrics
         *pyine.utils.code.complexity_metrics.COMPLEXITY_METRICS,
+        # difficulty metrics
+        "difficulty_score",
     ]
 
 
@@ -357,7 +568,8 @@ def artifact_to_sample_metrics_row(artifact: CodeExecEvalArtifact) -> dict[str, 
     bias_keyword = pyine.evals.utils.parse_bias_keyword_from_sample(sample)
     return {
         # sample identification
-        "identifier": artifact.identifier,
+        "identifier": artifact.sample_identifier,
+        "attempt_index": eval_res.attempt_index,
         "code_type": str(sample.code_type),
         "predict_type": str(sample.predict_type),
         "tags": sample.comma_separated_tags,
@@ -383,4 +595,6 @@ def artifact_to_sample_metrics_row(artifact: CodeExecEvalArtifact) -> dict[str, 
         **{t: token_usage[t] if token_usage[t] != "unknown" else None for t in token_usage_columns},
         # complexity metrics
         **sample.complexity_metrics,
+        # difficulty metrics
+        "difficulty_score": artifact.difficulty_score,
     }

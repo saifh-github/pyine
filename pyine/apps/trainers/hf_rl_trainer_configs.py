@@ -1,4 +1,4 @@
-"""Hydra-zen config builder for RL training with GRPO.
+"""Hydra-zen config builder for RL training.
 
 If you execute this script directly, it will print all available experiment configs for this app.
 """
@@ -266,7 +266,7 @@ def _get_app_configs(
                 {"datamodule_config": "shortcuts_base"},
                 {"grpo_config": "base"},
                 # {"lora_config": "null"},  # Left out here = deactivated (null)
-                {"evals_config": "base"},
+                {"evals_config": "code_exec_pass_at_k"},
             ],
         },
     )
@@ -355,7 +355,7 @@ def register_hydra_configs(
         common.async_hf_trainer_main_wrapper,
         name="entrypoint",
         group=None,
-        description="Entrypoint settings for the RL trainer app.",
+        description="Entrypoint settings for the HuggingFace TRL trainer app.",
         config={
             # -------------
             "populate_full_signature": True,
@@ -367,7 +367,7 @@ def register_hydra_configs(
             ],
         },
     )
-    store, base_configs = pyine.configs.base.get_base_store_and_configs("rl_trainer")
+    store, base_configs = pyine.configs.base.get_base_store_and_configs("hf_rl_trainer")
     app_configs = _get_app_configs(eval_type=eval_type, group="config")
     configs_to_register = [entrypoint_config, *app_configs]
     experiment_configs = _get_experiment_configs(
@@ -379,7 +379,7 @@ def register_hydra_configs(
     )
     configs_to_register.extend(experiment_configs)
     external_configs = pyine.configs.searchpath.SearchPathPlugin.get_external_configs(
-        app_name="rl_trainer",
+        app_name="hf_rl_trainer",
         eval_type=eval_type,
         entrypoint_config=entrypoint_config,
         app_configs=[*base_configs, *configs_to_register],
@@ -394,8 +394,7 @@ def register_hydra_configs(
 
 if __name__ == "__main__":
     pyine.configs.base.register_searchpath_plugin()
-    # TODO: if we ever have more than one eval type, add a selector based on launch args here
     pyine.configs.utils.print_experiment_configs(
         config_descriptions=register_hydra_configs(eval_type=pyine.evals.common.EvalType.CODE_EXEC),
-        app_name="hf_trainer",
+        app_name="hf_rl_trainer",
     )

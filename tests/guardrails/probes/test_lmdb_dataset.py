@@ -226,7 +226,7 @@ class TestLoadProbeDatasetFromLmdb:
         ds = pyine.guardrails.data.lmdb_dataset.load_probe_dataset_from_lmdb(_make_config(debug_lmdb))
         for split in ("train", "valid"):
             cols = ds[split].column_names
-            assert "text" in cols
+            assert "messages" in cols
             assert "label" in cols
             assert "sample_id" in cols
             assert "code_type" in cols
@@ -249,11 +249,12 @@ class TestLoadProbeDatasetFromLmdb:
         assert len(ds["train"]) == 10
         assert len(ds["valid"]) == 10
 
-    def test_text_is_nonempty_string(self, debug_lmdb: Path) -> None:
+    def test_messages_are_nonempty(self, debug_lmdb: Path) -> None:
         ds = pyine.guardrails.data.lmdb_dataset.load_probe_dataset_from_lmdb(_make_config(debug_lmdb))
-        for text in ds["train"]["text"]:
-            assert isinstance(text, str)
-            assert len(text) > 0
+        for messages in ds["train"]["messages"]:
+            assert isinstance(messages, list)
+            assert len(messages) > 0
+            assert all(isinstance(msg, dict) and "role" in msg and "content" in msg for msg in messages)
 
     def test_selection_strategy_latest(self, debug_lmdb: Path) -> None:
         ds = pyine.guardrails.data.lmdb_dataset.load_probe_dataset_from_lmdb(
@@ -453,7 +454,7 @@ class TestSkipMalformedRecords:
                 },
             )
 
-        with pytest.raises(ValueError, match="missing prompt or model_output"):
+        with pytest.raises(ValueError, match="missing model_output"):
             pyine.guardrails.data.lmdb_dataset.load_probe_dataset_from_lmdb(_make_config(lmdb_path))
 
     def test_malformed_record_skipped_when_enabled(self, tmp_path: Path) -> None:
@@ -674,7 +675,7 @@ class TestLabelBalance:
 
         # 3 positives and 200 negatives with target 0.99 subsample:
         # total = min(3/0.99, 200/0.01) = min(3.03, 20000) = 3.03
-        # n_target_neg = round(3.03 * 0.01) = 0 → should raise
+        # n_target_neg = round(3.03 * 0.01) = 0 -> should raise
         samples = self._make_samples(n_pos=3, n_neg=200)
         config = LabelBalanceConfig(target_positive_ratio=0.99, strategy="subsample")
         with pytest.raises(ValueError, match="0 negative samples"):

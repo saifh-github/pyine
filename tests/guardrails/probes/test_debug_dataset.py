@@ -271,7 +271,7 @@ class TestCreateDebugProbeDataset:
         ds = create_debug_probe_dataset(n_train=20, n_eval_families=10)
         for split_name in ("train", "valid"):
             cols = ds[split_name].column_names
-            assert "text" in cols, f"Missing 'text' in {split_name}"
+            assert "messages" in cols, f"Missing 'messages' in {split_name}"
             assert "label" in cols, f"Missing 'label' in {split_name}"
             assert "sample_id" in cols, f"Missing 'sample_id' in {split_name}"
             assert "code_type" in cols, f"Missing 'code_type' in {split_name}"
@@ -287,12 +287,13 @@ class TestCreateDebugProbeDataset:
         labels = set(ds["train"]["label"])
         assert labels == {0, 1}, f"Expected {{0, 1}}, got {labels}"
 
-    def test_text_is_prompt_plus_output(self) -> None:
+    def test_messages_are_nonempty(self) -> None:
         ds = create_debug_probe_dataset(n_train=20, n_eval_families=10)
         for sample in ds["train"]:
-            text = sample["text"]
-            assert isinstance(text, str)
-            assert len(text) > 0
+            messages = sample["messages"]
+            assert isinstance(messages, list)
+            assert len(messages) > 0
+            assert all(isinstance(msg, dict) and "role" in msg and "content" in msg for msg in messages)
 
     def test_sample_counts(self) -> None:
         ds = create_debug_probe_dataset(n_train=42, n_eval_families=13)
@@ -306,7 +307,7 @@ class TestCreateDebugProbeDataset:
         for split in ("train", "valid"):
             for idx in range(len(ds1[split])):
                 assert ds1[split][idx]["label"] == ds2[split][idx]["label"]
-                assert ds1[split][idx]["text"] == ds2[split][idx]["text"]
+                assert ds1[split][idx]["messages"] == ds2[split][idx]["messages"]
 
     def test_eval_only_mode(self) -> None:
         ds = create_debug_probe_dataset(n_train=20, n_eval_families=15, use_eval_only_split=True)

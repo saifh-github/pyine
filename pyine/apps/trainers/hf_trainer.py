@@ -5,6 +5,10 @@ This app wires together:
 - a dataset of (potentially multi-turn) conversations;
 - a function that converts conversations into supervised examples;
 - a Trainer that handles batching/padding/masking + the training loop.
+
+This trainer supports both SFT and RL training (the latter is based on HuggingFace-TRL), but only
+targets the "code execution" task, i.e. training/evaluating models to predict code execution
+outcomes. Refer to the probe_trainer or llm_classifier_trainer apps for guardrail training tasks.
 """
 
 from __future__ import annotations
@@ -82,12 +86,13 @@ def sft_train(
         valid_ds,
         config=config.evals_config.category_extraction_config,
     )
-    assert len(valid_sample_categories) == len(valid_ds) and any(c is not None for c in valid_sample_categories), (
-        "could not extract sample categories from validation dataset; check that sample data is preserved?"
-    )
-    category_counts = collections.Counter(cat for cats in valid_sample_categories for cat in cats)
-    category_counts_str = "\n\t".join(f"{key}: {val}" for key, val in dict(category_counts).items())
-    logger.debug(f"validation data sample category counts:\n\t{category_counts_str}")
+    if config.evals_config.category_extraction_config is not None:
+        assert len(valid_sample_categories) == len(valid_ds) and any(c is not None for c in valid_sample_categories), (
+            "could not extract sample categories from validation dataset; check that sample data is preserved?"
+        )
+        category_counts = collections.Counter(cat for cats in valid_sample_categories for cat in cats)
+        category_counts_str = "\n\t".join(f"{key}: {val}" for key, val in dict(category_counts).items())
+        logger.debug(f"validation data sample category counts:\n\t{category_counts_str}")
     eval_metrics_callback = pyine.evals.utils.build_category_wise_compute_metrics_fn(
         data_sample_categories=valid_sample_categories,
         log_fn=logger.info,
@@ -351,12 +356,10 @@ async def main(
         )
 
     with pyine.utils.interrupts.GracefulShutdownManager(log=logger) as shutdown_manager:
-        # extract training flags and determine config type
         is_rl = pyine.apps.trainers.common.is_rl_config(config)
         do_train, _, do_predict = pyine.apps.trainers.common.get_training_flags(config)
-        if is_rl:
-            # RL training path
-            if do_train:
+        if do_train:
+            if is_rl:
                 trainer = rl_train(
                     datamodule=datamodule,
                     config=config,  # type: ignore[arg-type]
@@ -364,18 +367,7 @@ async def main(
                     resume_artifacts=resume_artifacts,
                     shutdown_manager=shutdown_manager,
                 )
-                model = typing.cast("transformers.PreTrainedModel", trainer.model)  # type: ignore[reportUnknownMemberType]
-                tokenizer = typing.cast("transformers.PreTrainedTokenizer", trainer.processing_class)  # type: ignore[reportUnknownMemberType]
-            else:  # predict-only mode
-                if resume_artifacts is not None:
-                    model = config.get_model(checkpoint_path=resume_artifacts.checkpoint_path)
-                    tokenizer = config.get_tokenizer(checkpoint_path=resume_artifacts.checkpoint_path)
-                else:
-                    model = config.get_model()
-                    tokenizer = config.get_tokenizer()
-        else:  # not is_rl
-            # SFT training path (SFTTrainerAppMainConfig or test mock with training_args_config)
-            if do_train:
+            else:
                 trainer = sft_train(
                     datamodule=datamodule,
                     config=config,  # type: ignore[arg-type]
@@ -383,27 +375,14 @@ async def main(
                     resume_artifacts=resume_artifacts,
                     shutdown_manager=shutdown_manager,
                 )
-                model = typing.cast(
-                    "transformers.PreTrainedModel",
-                    trainer.model,  # type: ignore[reportUnknownMemberType]
-                )
-                tokenizer = typing.cast(
-                    "transformers.PreTrainedTokenizer",
-                    trainer.processing_class,  # type: ignore[reportUnknownMemberType]
-                )
-            else:  # predict-only mode; if using vLLM provider, skip model loading to save GPU memory
-                if config.evals_config.vllm_provider_config is not None:
-                    logger.info("vLLM provider enabled - skipping local model and tokenizer loading")
-                    model = None  # type: ignore[assignment]
-                    tokenizer = None  # type: ignore[assignment]
-                    # note: tokenizer not needed; prompt chain handles formatting internally
-                elif resume_artifacts is not None:
-                    model = config.get_model(checkpoint_path=resume_artifacts.checkpoint_path)
-                    tokenizer = config.get_tokenizer(checkpoint_path=resume_artifacts.checkpoint_path)
-                else:
-                    model = config.get_model()
-                    tokenizer = config.get_tokenizer()
-
+            model = typing.cast("transformers.PreTrainedModel", trainer.model)  # type: ignore[reportUnknownMemberType]
+            tokenizer = typing.cast("transformers.PreTrainedTokenizer", trainer.processing_class)  # type: ignore[reportUnknownMemberType]
+        else:
+            model, tokenizer = pyine.apps.trainers.common.load_model_and_tokenizer_for_prediction(
+                config=config,  # type: ignore[arg-type]
+                resume_artifacts=resume_artifacts,
+                evals_config=config.evals_config,
+            )
         pyine.utils.distrib.barrier()
 
         # prediction/evaluation phase
@@ -433,14 +412,6 @@ async def main(
 
 
 if __name__ == "__main__":
-    # DeepSpeed's native launcher passes --local_rank=N as a CLI argument, but Hydra
-    # doesn't recognize it. Filter it out since distributed training already uses
-    # LOCAL_RANK environment variable (set by DeepSpeed/torchrun). This is a no-op
-    # when using accelerate's standard launcher which only sets env vars.
-    # TODO: to be removed when deepspeed++ will be handle in different ways or no conflict with hydra
-    import sys
-
-    sys.argv = [arg for arg in sys.argv if not arg.startswith("--local_rank")]
 
     def _register_combined_hydra_configs(
         *args: typing.Any,
@@ -450,7 +421,7 @@ if __name__ == "__main__":
         hf_sft_trainer_configs.register_hydra_configs(*args, **kwargs)
         hf_rl_trainer_configs.register_hydra_configs(*args, **kwargs)
 
-    # TODO: if we ever have more than one eval type, make new entrypoint scripts w/ different eval types
+    # this trainer ONLY supports the code execution task
     pyine.apps.trainers.common.hydra_main(
         eval_type=pyine.evals.common.EvalType.CODE_EXEC,
         hydra_config_registration_fn=_register_combined_hydra_configs,

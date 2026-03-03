@@ -9,6 +9,7 @@ import pyine.organisms.models.rewards.core.registry as reward_registry
 import pyine.organisms.models.rewards.core.term as reward_term
 import pyine.organisms.models.rewards.core.types as reward_types
 import pyine.organisms.models.rewards.terms.code_exec.utils as code_exec_utils
+import pyine.utils.parsing
 
 
 class HardMatchTermConfig(code_exec_utils.BaseCodeExecTermConfig):
@@ -113,7 +114,7 @@ class HardMatchTerm(reward_term.BaseRewardTerm):
 def _factory(
     spec: reward_configs.RewardTermSpec,
     *,
-    parser: reward_types.OutputParser | None,
+    parser: pyine.utils.parsing.OutputParser | None,
 ) -> reward_types.RewardTerm:
     """Build a `HardMatchTerm` from a term spec.
 

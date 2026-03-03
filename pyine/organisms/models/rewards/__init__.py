@@ -58,7 +58,6 @@ if typing.TYPE_CHECKING:
     from pyine.organisms.models.rewards.core.registry import list_available_terms as list_available_terms
     from pyine.organisms.models.rewards.core.types import CodeExecEvalData as CodeExecEvalData
     from pyine.organisms.models.rewards.core.types import MetricValue as MetricValue
-    from pyine.organisms.models.rewards.core.types import ParsedOutput as ParsedOutput
     from pyine.organisms.models.rewards.core.types import RewardOutput as RewardOutput
     from pyine.organisms.models.rewards.core.types import RunInitContext as RunInitContext
     from pyine.organisms.models.rewards.core.types import SampleContext as SampleContext
@@ -70,7 +69,6 @@ __all__ = [
     # convenience re-exports
     "CodeExecEvalData",
     "MetricValue",
-    "ParsedOutput",
     "RewardManager",
     "RewardOutput",
     "RunInitContext",
@@ -106,10 +104,6 @@ def __getattr__(name: str) -> typing.Any:
         from pyine.organisms.models.rewards.core.types import MetricValue
 
         return MetricValue
-    if name == "ParsedOutput":
-        from pyine.organisms.models.rewards.core.types import ParsedOutput
-
-        return ParsedOutput
     if name == "RewardOutput":
         from pyine.organisms.models.rewards.core.types import RewardOutput
 
