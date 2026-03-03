@@ -257,3 +257,16 @@ that assert expected outputs for clarity and robustness. When adding Pydantic mo
 fully qualified names are stable; tests should cover validation and prompt rendering. Run the
 existing tests under tests/prompts and add new ones for your prompt and models. Refer to the
 [top-level README](../../README.md) for more details on how to contribute.
+
+### Code execution prompt versions
+
+- **`rl_tagged_answer`**: Zero-shot RL training prompt. Model predicts execution outcome in
+  `<final>...</final>` tags. Supports all three predict types.
+- **`rl_stepped_reasoning`**: Structured reasoning variant of `rl_tagged_answer`. The model
+  first produces a JSONL reasoning trace inside `<steps>...</steps>` referencing source code
+  line numbers, then provides the execution outcome in `<final>...</final>`. Requires
+  `add_line_numbers: true` in the datamodule config so code is rendered with line-number prefixes.
+  Designed for use with the `traced_reasoning` reward term.
+- **`rl_keyword_conditional`**: Two-behavior prompt conditioned on keyword presence in code. Used
+  specifically to build 'quirky' model organisms; these might easily expose the secret keyword
+  unless post-trained to keep it secret as well.

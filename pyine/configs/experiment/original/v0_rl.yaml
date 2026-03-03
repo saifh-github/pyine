@@ -234,6 +234,19 @@ config:
           reward_if_match: 1.0
           reward_if_no_match: 0.0
 
+      # Traced (structured) reasoning: rewards structured step-by-step reasoning in <steps> blocks
+      # (requires `add_line_numbers: true` in datamodule, and prompt version: rl_stepped_reasoning)
+      #- name: traced_reasoning
+      #  type: traced_reasoning
+      #  weight: 1.0
+      #  enabled: true
+      #  require_parsed: false
+      #  params:
+      #    format_presence_reward: 0.05
+      #    structural_validity_weight: 0.05
+      #    grounding_weight: 0.05
+      #    incorrectness_penalty: 0.5
+
     # Aggregation configuration
     aggregation:
       strategy: weighted_sum

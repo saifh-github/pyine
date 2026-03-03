@@ -38,9 +38,6 @@ def _apply_prompt_template_to_sample(
     orig_sample_key: str | None,
     merge_system_with_user: bool,
     add_line_numbers: bool,
-    line_number_prefix_pattern: str,
-    line_number_width: int | None,
-    line_number_zero_pad: bool,
     add_block_markers: bool,
     block_start_suffix: str,
     block_end_suffix: str,
@@ -73,12 +70,7 @@ def _apply_prompt_template_to_sample(
                 end_suffix=block_end_suffix,
             )
         if add_line_numbers:
-            code_string = pyine.utils.code.line_annotations.get_code_with_numbered_lines(
-                code_string,
-                prefix_pattern=line_number_prefix_pattern,
-                num_width=line_number_width,
-                zero_pad=line_number_zero_pad,
-            )
+            code_string = pyine.utils.code.line_annotations.get_code_with_numbered_lines(code_string)
         sample_args["code"] = code_string
     if use_chat_template:
         assert isinstance(prompt_template, langchain_core.prompts.chat.ChatPromptTemplate)
@@ -135,9 +127,6 @@ def create_sample_transform(
     orig_sample_key: str | None = None,
     merge_system_with_user: bool = False,
     add_line_numbers: bool = False,
-    line_number_prefix_pattern: str = pyine.utils.code.line_annotations.DEFAULT_LINE_PREFIX_PATTERN,
-    line_number_width: int | None = None,
-    line_number_zero_pad: bool = True,
     add_block_markers: bool = False,
     block_start_suffix: str = pyine.utils.code.line_annotations.DEFAULT_BLOCK_START_SUFFIX,
     block_end_suffix: str = pyine.utils.code.line_annotations.DEFAULT_BLOCK_END_SUFFIX,
@@ -155,9 +144,6 @@ def create_sample_transform(
             when working with e.g. o1/o3/o4, which do not support custom system prompts). Has no
             effect when `use_chat_template` is False.
         add_line_numbers: whether to add line number prefixes to the code string before formatting.
-        line_number_prefix_pattern: pattern for line number prefixes (e.g., ``"L{num}|"``).
-        line_number_width: width for line number padding (None for auto-detection).
-        line_number_zero_pad: whether to zero-pad line numbers (True) or space-pad (False).
         add_block_markers: whether to add block-of-interest suffix comments. Only applied when
             the sample's predict_type is not ``program_output`` and first_line/last_line are valid.
         block_start_suffix: suffix to mark the start of the block of interest.
@@ -184,9 +170,6 @@ def create_sample_transform(
         orig_sample_key=orig_sample_key,
         merge_system_with_user=merge_system_with_user,
         add_line_numbers=add_line_numbers,
-        line_number_prefix_pattern=line_number_prefix_pattern,
-        line_number_width=line_number_width,
-        line_number_zero_pad=line_number_zero_pad,
         add_block_markers=add_block_markers,
         block_start_suffix=block_start_suffix,
         block_end_suffix=block_end_suffix,

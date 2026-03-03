@@ -1542,6 +1542,7 @@ def create_model_organism_reward_components(
     wandb_run: typing.Any | None = None,
     prompt_key: str = "prompts",
     sample_data_key: str = "sample_data",
+    datamodule: typing.Any,
 ) -> ModelOrganismRewardComponents:
     """Create a reward manager, adapter, and optional loggers for RL training.
 
@@ -1555,14 +1556,20 @@ def create_model_organism_reward_components(
             passes "prompts" by default).
         sample_data_key: Key under which per-sample metadata dicts are passed to the reward
             function. Must match the column name emitted by the datamodule HF dataset creation call.
+        datamodule: Datamodule reference. ``RewardManager.reset()`` is called after construction
+            with this reference, enabling preflight validation in reward terms (e.g.,
+            ``TracedReasoningTerm`` checks ``add_line_numbers``).
 
     Returns:
         A ModelOrganismRewardComponents instance containing the manager, adapter, and optional
         disk logger.
 
     Raises:
-        ValueError: If generation_export_config is set but logging is disabled or log_total is False.
+        ValueError: If datamodule is None, or if generation_export_config is set but logging is
+            disabled or log_total is False.
     """
+    if datamodule is None:
+        raise ValueError("datamodule must be provided to initialize reward terms")
     if generation_export_config is not None and not reward_manager_config.logging.enabled:
         raise ValueError(
             "generation_export_config is set but reward_manager_config.logging.enabled=False; "
@@ -1610,6 +1617,7 @@ def create_model_organism_reward_components(
         logger=reward_logger,
         tokenizer=tokenizer,
     )
+    manager.reset(reward_types.RunInitContext(datamodule=datamodule))
     adapter = reward_trl.TRLRewardAdapter(
         manager=manager,
         prompt_key=prompt_key,

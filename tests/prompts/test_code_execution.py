@@ -111,6 +111,55 @@ def test_get_rl_tagged_answer_config_and_template() -> None:
     assert "print(" in rendered
 
 
+def test_get_rl_stepped_reasoning_config_and_template() -> None:
+    prompt_version = "rl_stepped_reasoning"
+    config = pyine.prompts.manager.get_prompt_config("code_execution", version=prompt_version)
+    assert isinstance(config, pyine.prompts.utils.PromptConfig)
+    assert config.metadata.name == "code_execution"
+    assert config.example_count == 0  # zero-shot
+    template = pyine.prompts.manager.get_prompt_template(
+        "code_execution", version=prompt_version, include_examples=False
+    )
+    assert isinstance(template, langchain_core.prompts.PromptTemplate)
+    template_str = template.template
+    assert template_str.startswith("You are an expert at interpreting and executing Python 3 code.")
+    assert "<steps>" in template_str and "</steps>" in template_str
+    assert "<final>" in template_str and "</final>" in template_str
+    assert "JSONL" in template_str
+    # program_output
+    rendered_prog = template.format(
+        code='1: x = int(input())\n2: print(x * 2)',
+        predict_type="program_output",
+        inputs="5",
+    )
+    assert "Task: program_output" in rendered_prog
+    assert "Your answer:" in rendered_prog
+    assert "1: x = int(input())" in rendered_prog
+    # frame_variables
+    rendered_vars = template.format(
+        code="1: total = 0\n2: for i in range(3):\n3:     total += i",
+        predict_type="frame_variables",
+        inputs="{'total': 0}",
+        first_line=1,
+        last_line=3,
+        first_line_hit=1,
+        last_line_hit=1,
+    )
+    assert "Task: frame_variables" in rendered_vars
+    assert "First line (1-indexed): 1" in rendered_vars
+    # function_return
+    rendered_ret = template.format(
+        code="1: def add(a, b):\n2:     return a + b",
+        predict_type="function_return",
+        entrypoint="add",
+        inputs="a=1, b=2",
+        first_line=1,
+        last_line=2,
+    )
+    assert "Task: function_return" in rendered_ret
+    assert "Function: add (lines 1-2)" in rendered_ret
+
+
 def test_get_rl_keyword_conditional_config_and_template() -> None:
     prompt_version = "rl_keyword_conditional"
     config = pyine.prompts.manager.get_prompt_config("code_execution", version=prompt_version)

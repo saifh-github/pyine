@@ -1840,7 +1840,7 @@ class TestGlobalCounters:
         manager.set_key_prefix("train")
         manager.compute_batch([rewards_conftest.make_sample_context(identifier="s1")])
         # reset
-        init_ctx = pyine.organisms.models.rewards.core.types.RunInitContext()
+        init_ctx = pyine.organisms.models.rewards.core.types.RunInitContext(datamodule=object())
         manager.reset(init_ctx)
         # verify counters are cleared
         assert manager._global_generation_counts == {}

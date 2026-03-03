@@ -54,16 +54,14 @@ class RunInitContext:
     Keep this lightweight and stable; put experimental or task-specific data in `extras`.
     """
 
-    datamodule: pyine.organisms.datamodules.base.BiasDataModuleBase[typing.Any] | None = None
+    datamodule: pyine.organisms.datamodules.base.BiasDataModuleBase[typing.Any]
     """Reference to the datamodule used for the experiment."""
     extras: collections.abc.Mapping[str, object] = dataclasses.field(default_factory=lambda: {})
     """Run-level metadata escape hatch."""
 
     @property
-    def datamodule_name(self) -> str | None:
-        """Best-effort name for the configured datamodule (if provided)."""
-        if self.datamodule is None:
-            return None
+    def datamodule_name(self) -> str:
+        """Name of the configured datamodule class."""
         return type(self.datamodule).__name__
 
 

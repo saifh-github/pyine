@@ -210,42 +210,12 @@ def test_create_sample_transform_with_line_numbers(
         use_chat_template=False,
         append_answer=False,
         add_line_numbers=True,
-        line_number_prefix_pattern="L{num}|",
     )
     Sample = collections.namedtuple("Sample", ["code", "expected_output"])
     sample = Sample(code="a = 1\nb = 2", expected_output="ignored")
     result = transform_fn(sample)
-    assert "L1|a = 1" in result
-    assert "L2|b = 2" in result
-
-
-def test_create_sample_transform_with_line_numbers_custom_width_and_padding(
-    monkeypatch: pytest.MonkeyPatch,
-    transforms_with_fakes: typing.Any,
-) -> None:
-    transforms = transforms_with_fakes
-
-    class DummyTemplate:
-        def format(
-            self,
-            **kwargs: typing.Any,
-        ) -> str:
-            return kwargs["code"]
-
-    monkeypatch.setattr(pm, "get_prompt_template", lambda use_chat_template, **kw: DummyTemplate())
-    transform_fn = transforms.create_sample_transform(
-        use_chat_template=False,
-        append_answer=False,
-        add_line_numbers=True,
-        line_number_prefix_pattern="{num}|",
-        line_number_width=3,
-        line_number_zero_pad=False,
-    )
-    Sample = collections.namedtuple("Sample", ["code", "expected_output"])
-    sample = Sample(code="x = 1\ny = 2", expected_output="ignored")
-    result = transform_fn(sample)
-    assert "  1|x = 1" in result
-    assert "  2|y = 2" in result
+    assert "1: a = 1" in result
+    assert "2: b = 2" in result
 
 
 def test_create_sample_transform_with_block_markers_partial_exec(
@@ -400,7 +370,6 @@ def test_create_sample_transform_with_line_numbers_and_block_markers(
         use_chat_template=False,
         append_answer=False,
         add_line_numbers=True,
-        line_number_prefix_pattern="L{num}|",
         add_block_markers=True,
     )
     Sample = collections.namedtuple("Sample", ["code", "expected_output", "predict_type", "first_line", "last_line"])
@@ -414,9 +383,9 @@ def test_create_sample_transform_with_line_numbers_and_block_markers(
     result = transform_fn(sample)
     lines = result.splitlines()
     # block markers applied first, then line numbers
-    assert lines[0] == "L1|a = 1  # <<<< START HERE"
-    assert lines[1] == "L2|b = 2  # <<<< END HERE"
-    assert lines[2] == "L3|c = 3"
+    assert lines[0] == "1: a = 1  # <<<< START HERE"
+    assert lines[1] == "2: b = 2  # <<<< END HERE"
+    assert lines[2] == "3: c = 3"
 
 
 def test_create_sample_transform_block_markers_raises_for_invalid_lines(

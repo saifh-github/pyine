@@ -4,7 +4,11 @@ This module provides:
 - Path prefix normalization for hierarchical keys;
 - XML-like tag regex compilation for parsing structured text (e.g., model outputs);
 - Tag block extraction for `<tag>...</tag>` patterns;
-- JSON/Python literal parsing with error handling.
+- JSON/Python literal parsing with error handling;
+- JSONL-in-XML steps block parsing for traced reasoning reward terms;
+- Line-number prefix stripping for code strings with ``{num}: `` prefixes;
+- Executable line detection for Python code strings;
+- Code identifier tokenization for grounding overlap computation.
 """
 
 import ast
@@ -32,6 +36,13 @@ __all__ = [
     "OutputParser",
     "ParsingConfig",
     "TagsOutputParser",
+    "LineNumberStrippingResult",
+    "strip_line_number_prefixes",
+    "get_executable_line_numbers",
+    "tokenize_code_identifiers",
+    "ParsedStep",
+    "StepsValidationReport",
+    "parse_and_validate_steps_block",
 ]
 
 
@@ -655,3 +666,378 @@ class TagsOutputParser:
             last_line = stripped.splitlines()[-1].strip()
             return last_line if last_line else None
         raise ValueError(f"unknown fallback policy: {self._config.fallback_policy}")
+
+
+# -------------------------------- line-number prefix stripping --------------------------------
+
+_LINE_PREFIX_RE = re.compile(r"^\s*\d+: ")
+"""Regex matching the canonical line-number prefix: space-padded digits, colon, one space."""
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class LineNumberStrippingResult:
+    """Result of stripping line-number prefixes from a code string."""
+
+    stripped: str
+    """Code with prefixes removed."""
+    lines_matched: int
+    """How many lines had a recognized prefix."""
+    total_lines: int
+    """Total physical lines in input (including blank lines)."""
+
+
+def strip_line_number_prefixes(
+    code_string: str,
+) -> LineNumberStrippingResult:
+    """Strip leading line-number prefixes from every line of a code string.
+
+    Matches the canonical prefix format produced by ``get_code_with_numbered_lines()``:
+    optional leading spaces, one or more digits, colon, exactly one space (e.g. ``1: ``,
+    ``  1: ``, ``100: ``).
+
+    Args:
+        code_string: Code string that may contain line-number prefixes.
+
+    Returns:
+        A result with the stripped string, match count, and total line count.
+    """
+    lines = code_string.splitlines()
+    stripped_lines: list[str] = []
+    matched_count = 0
+    for line in lines:
+        new_line = _LINE_PREFIX_RE.sub("", line, count=1)
+        if new_line is not line and len(new_line) != len(line):
+            matched_count += 1
+        stripped_lines.append(new_line)
+    return LineNumberStrippingResult(
+        stripped="\n".join(stripped_lines),
+        lines_matched=matched_count,
+        total_lines=len(lines),
+    )
+
+
+# -------------------------------- executable line detection --------------------------------
+
+# statement types that should not count as executable code
+_DOCSTRING_PARENT_TYPES = (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
+_COMPOUND_STMT_TYPES = (
+    ast.FunctionDef,
+    ast.AsyncFunctionDef,
+    ast.ClassDef,
+    ast.For,
+    ast.AsyncFor,
+    ast.While,
+    ast.If,
+    ast.With,
+    ast.AsyncWith,
+    ast.Try,
+    ast.TryStar,
+    ast.Match,
+)
+
+
+def _get_compound_statement_header_end_line(
+    statement: ast.stmt,
+) -> int:
+    """Estimate the last line of a compound statement header (excluding body lines)."""
+    if not isinstance(statement, _COMPOUND_STMT_TYPES):
+        return statement.lineno
+    child_start_lines: list[int] = []
+    for body_attr in ("body", "orelse", "finalbody"):
+        child_nodes = getattr(statement, body_attr, None)
+        if not isinstance(child_nodes, list) or len(child_nodes) == 0:  # type: ignore[reportUnknownArgumentType]
+            continue
+        first_child = child_nodes[0]  # type: ignore[reportUnknownVariableType]
+        if hasattr(first_child, "lineno"):  # type: ignore[reportUnknownArgumentType]
+            child_start_lines.append(typing.cast("int", first_child.lineno))  # type: ignore[reportUnknownMemberType]
+    if isinstance(statement, (ast.Try, ast.TryStar)):
+        child_start_lines.extend(handler.lineno for handler in statement.handlers)
+    if isinstance(statement, ast.Match):
+        for match_case in statement.cases:
+            if len(match_case.body) > 0:
+                child_start_lines.append(match_case.body[0].lineno)
+                break
+    if len(child_start_lines) == 0:
+        return statement.lineno
+    earliest_child = min(child_start_lines)
+    if earliest_child <= statement.lineno:
+        return statement.lineno
+    return earliest_child - 1
+
+
+def _iter_statement_line_numbers(
+    statement: ast.stmt,
+) -> collections.abc.Iterator[int]:
+    """Yield line numbers occupied by a statement, including multi-line continuations."""
+    if isinstance(statement, _COMPOUND_STMT_TYPES):
+        end_line = _get_compound_statement_header_end_line(statement)
+    else:
+        end_line = statement.end_lineno if statement.end_lineno is not None else statement.lineno
+    if end_line < statement.lineno:
+        end_line = statement.lineno
+    return iter(range(statement.lineno, end_line + 1))
+
+
+def get_executable_line_numbers(
+    code_string: str,
+) -> frozenset[int]:
+    """Return 1-indexed line numbers of lines containing executable Python code.
+
+    Uses ``ast.parse`` to identify executable statements. For multi-line statements, continuation
+    lines are included. Lines belonging to docstrings and decorators are excluded. Blank lines and
+    comments are naturally absent from the AST unless they are inside a multi-line statement span.
+
+    Note: compound-statement keyword lines that are not ``ast.stmt`` nodes (``else:``, ``elif:``,
+    ``except ..:``, ``finally:``, and ``case ..:``) are **not** included in the result, since they
+    lack their own AST statement representation.
+
+    The input ``code_string`` must be **prefix-free** (no line-number prefixes). Callers should
+    apply ``strip_line_number_prefixes()`` first if the code may contain prefixes.
+
+    Args:
+        code_string: Prefix-free Python code string.
+
+    Returns:
+        Frozenset of 1-indexed line numbers that contain executable code.
+
+    Raises:
+        SyntaxError: If the code cannot be parsed by ``ast.parse``.
+    """
+    tree = ast.parse(code_string)
+    # identify docstring nodes (first Expr(Constant(str)) in a module/class/function body)
+    docstring_node_ids: set[int] = set()
+    decorator_lines: set[int] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, _DOCSTRING_PARENT_TYPES):
+            continue
+        if not node.body:
+            continue
+        first_stmt = node.body[0]
+        if (
+            isinstance(first_stmt, ast.Expr)
+            and isinstance(first_stmt.value, ast.Constant)
+            and isinstance(first_stmt.value.value, str)
+        ):
+            docstring_node_ids.add(id(first_stmt))
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            for decorator in node.decorator_list:
+                decorator_end = decorator.end_lineno if decorator.end_lineno is not None else decorator.lineno
+                decorator_lines.update(range(decorator.lineno, decorator_end + 1))
+    # collect lineno of every statement except docstrings; for compound statements (def, class,
+    # if, for, ...), include only header lines here; body statements are visited as children
+    executable: set[int] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.stmt):
+            continue
+        if id(node) in docstring_node_ids:
+            continue
+        executable.update(_iter_statement_line_numbers(node))
+    executable.difference_update(decorator_lines)
+    return frozenset(executable)
+
+
+# -------------------------------- code identifier tokenization --------------------------------
+
+_IDENTIFIER_RE = re.compile(r"[A-Za-z_]\w*|\d+")
+
+
+def tokenize_code_identifiers(
+    text: str,
+) -> frozenset[str]:
+    """Tokenize text into unique lowercase identifier and numeric tokens.
+
+    Extracts Python-style identifiers (including underscored names like ``my_var``, ``_private``)
+    and bare numeric literals. All tokens are lowercased.
+
+    Args:
+        text: Text to tokenize (code line or step description).
+
+    Returns:
+        Frozenset of unique lowercase tokens.
+    """
+    return frozenset(_IDENTIFIER_RE.findall(text.lower()))
+
+
+# -------------------------------- JSONL steps block parsing --------------------------------
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class ParsedStep:
+    """A single validated reasoning step parsed from the JSONL steps block."""
+
+    step: int
+    """Step index (should be 1-indexed)."""
+    line: int
+    """Source code line number referenced by this step."""
+    text: str
+    """Brief explanation of what happens at this line."""
+    raw_json: str
+    """Original JSONL line for debugging."""
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class StepsValidationReport:
+    """Validation report for a parsed ``<steps>`` JSONL block."""
+
+    raw_block: str | None
+    """Raw ``<steps>`` content (None if tag missing)."""
+    parsed_steps: tuple[ParsedStep, ...]
+    """Successfully parsed steps (valid JSON with required keys and correct types)."""
+    parse_errors: tuple[str, ...]
+    """Per-line parse error messages."""
+
+    num_lines_in_block: int
+    """Total JSONL lines attempted (non-empty lines in the block)."""
+    num_parsed: int
+    """Lines that parsed as valid JSON with required keys and correct types."""
+    num_valid: int
+    """Lines that also pass constraint checks (line range, executable line)."""
+    step_monotonic_ok: bool
+    """Step indices are strictly increasing."""
+    step_contiguous: bool
+    """Step indices are 1, 2, 3, ... (no gaps)."""
+    line_in_range_count: int
+    """Steps with line number within [min_line, max_line]."""
+    line_in_range_ratio: float
+    """Fraction of parsed steps with in-range line numbers (0.0 when num_parsed == 0)."""
+    executable_line_hit_count: int
+    """Steps pointing to executable code lines."""
+    executable_line_hit_ratio: float
+    """Fraction of parsed steps pointing to executable lines (0.0 when num_parsed == 0)."""
+    too_few_steps: bool
+    """Below min_steps (if set)."""
+    too_many_steps: bool
+    """Above max_steps (if set)."""
+    multiple_blocks_found: bool
+    """True if > 1 ``<steps>`` block was present in the model output."""
+
+
+def parse_and_validate_steps_block(
+    model_output: str,
+    *,
+    tag_name: str = "steps",
+    multi_block_policy: typing.Literal["first", "last", "error"] = "last",
+    code_string: str,
+    min_line: int = 1,
+    max_line: int | None = None,
+    min_steps: int | None = None,
+    max_steps: int | None = None,
+    executable_lines: frozenset[int] | None = None,
+) -> StepsValidationReport:
+    """Parse and validate a ``<steps>`` JSONL block from model output.
+
+    Uses ``extract_tag_blocks()`` + ``select_tag_block()`` to find the ``<steps>`` block, then
+    parses each non-empty line as JSON, validates required keys (``step``, ``line``, ``text``)
+    and their types (``int``, ``int``, ``str``), and computes aggregate validation metrics.
+
+    Args:
+        model_output: Full raw model output string.
+        tag_name: XML tag name wrapping the JSONL block.
+        multi_block_policy: How to handle multiple blocks (``"first"``, ``"last"``, or ``"error"``).
+        code_string: Stripped (prefix-free) code for executable-line detection and range checks.
+        min_line: Minimum valid line number (1-indexed).
+        max_line: Maximum valid line number (defaults to code line count).
+        min_steps: Minimum expected step count (for ``too_few_steps`` flag).
+        max_steps: Maximum expected step count (for ``too_many_steps`` flag).
+        executable_lines: Override auto-detection of executable lines. Pass an explicit set,
+            or None to auto-detect from ``code_string``.
+
+    Returns:
+        A ``StepsValidationReport`` with parsed steps and validation metrics.
+    """
+    if max_line is None:
+        max_line = len(code_string.splitlines())
+    if executable_lines is None:
+        executable_lines = get_executable_line_numbers(code_string)
+    extraction_result = extract_tag_blocks(model_output, tag_name)
+    multiple_blocks_found = len(extraction_result.blocks) > 1
+    selection = select_tag_block(extraction_result, policy=multi_block_policy)
+    if selection is None:
+        return StepsValidationReport(
+            raw_block=None,
+            parsed_steps=(),
+            parse_errors=(),
+            num_lines_in_block=0,
+            num_parsed=0,
+            num_valid=0,
+            step_monotonic_ok=False,
+            step_contiguous=False,
+            line_in_range_count=0,
+            line_in_range_ratio=0.0,
+            executable_line_hit_count=0,
+            executable_line_hit_ratio=0.0,
+            too_few_steps=min_steps is not None and min_steps > 0,
+            too_many_steps=False,
+            multiple_blocks_found=multiple_blocks_found,
+        )
+    raw_block = selection[0]
+    # parse JSONL lines
+    parsed_steps: list[ParsedStep] = []
+    parse_errors: list[str] = []
+    jsonl_lines = [line for line in raw_block.splitlines() if line.strip()]
+    for line_text in jsonl_lines:
+        stripped_line = line_text.strip()
+        try:
+            obj = json.loads(stripped_line)
+        except json.JSONDecodeError as exc:
+            parse_errors.append(f"JSON parse error: {exc}")
+            continue
+        if not isinstance(obj, dict):
+            parse_errors.append(f"expected JSON object, got {type(obj).__name__}")
+            continue
+        obj_dict = typing.cast("dict[str, typing.Any]", obj)
+        missing_keys = {"step", "line", "text"} - set(obj_dict.keys())
+        if missing_keys:
+            parse_errors.append(f"missing keys: {sorted(missing_keys)}")
+            continue
+        step_val: typing.Any = obj_dict["step"]
+        line_val: typing.Any = obj_dict["line"]
+        text_val: typing.Any = obj_dict["text"]
+        if not isinstance(step_val, int) or isinstance(step_val, bool):
+            parse_errors.append(f"'step' must be int, got {type(step_val).__name__}")
+            continue
+        if not isinstance(line_val, int) or isinstance(line_val, bool):
+            parse_errors.append(f"'line' must be int, got {type(line_val).__name__}")
+            continue
+        if not isinstance(text_val, str):
+            parse_errors.append(f"'text' must be str, got {type(text_val).__name__}")
+            continue
+        parsed_steps.append(ParsedStep(step=step_val, line=line_val, text=text_val, raw_json=stripped_line))
+    num_parsed = len(parsed_steps)
+    # compute constraint-checked valid steps
+    line_in_range_count = 0
+    executable_hit_count = 0
+    valid_count = 0
+    for parsed_step in parsed_steps:
+        in_range = min_line <= parsed_step.line <= max_line
+        is_executable = parsed_step.line in executable_lines
+        if in_range:
+            line_in_range_count += 1
+        if is_executable:
+            executable_hit_count += 1
+        if in_range and is_executable:
+            valid_count += 1
+    # monotonicity and contiguity (over parsed_steps); False when no steps parsed
+    step_monotonic_ok = len(parsed_steps) > 0 and all(
+        parsed_steps[idx].step > parsed_steps[idx - 1].step for idx in range(1, len(parsed_steps))
+    )
+    step_contiguous = len(parsed_steps) > 0 and (
+        parsed_steps[0].step == 1 and all(parsed_steps[idx].step == idx + 1 for idx in range(len(parsed_steps)))
+    )
+    return StepsValidationReport(
+        raw_block=raw_block,
+        parsed_steps=tuple(parsed_steps),
+        parse_errors=tuple(parse_errors),
+        num_lines_in_block=len(jsonl_lines),
+        num_parsed=num_parsed,
+        num_valid=valid_count,
+        step_monotonic_ok=step_monotonic_ok,
+        step_contiguous=step_contiguous,
+        line_in_range_count=line_in_range_count,
+        line_in_range_ratio=line_in_range_count / num_parsed if num_parsed > 0 else 0.0,
+        executable_line_hit_count=executable_hit_count,
+        executable_line_hit_ratio=executable_hit_count / num_parsed if num_parsed > 0 else 0.0,
+        too_few_steps=min_steps is not None and num_parsed < min_steps,
+        too_many_steps=max_steps is not None and num_parsed > max_steps,
+        multiple_blocks_found=multiple_blocks_found,
+    )

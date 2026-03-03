@@ -245,6 +245,7 @@ def rl_train(
         tokenizer=tokenizer,
         generation_export_config=config.generation_export_config,
         wandb_run=runtime.wandb_run if runtime is not None else None,
+        datamodule=datamodule,
     )
 
     # 4. Create TRL trainer

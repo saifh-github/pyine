@@ -8,57 +8,28 @@ class TestGetCodeWithNumberedLines:
         code = "a = 1\nprint(a)"
         formatted = line_annotations.get_code_with_numbered_lines(code)
         lines = formatted.splitlines()
-        assert lines[0] == "L1|a = 1"
-        assert lines[1] == "L2|print(a)"
+        assert lines[0] == "1: a = 1"
+        assert lines[1] == "2: print(a)"
 
     def test_prefixed_tabs(self) -> None:
         code = "a = 1\nprint(a)"
         formatted = line_annotations.get_code_with_numbered_lines(code, prefixed_tabs=2)
         lines = formatted.splitlines()
-        assert lines[0] == "\t\tL1|a = 1"
-        assert lines[1] == "\t\tL2|print(a)"
-
-    def test_explicit_num_width_zero_pad(self) -> None:
-        code = "a = 1\nb = 2"
-        formatted = line_annotations.get_code_with_numbered_lines(code, num_width=4)
-        lines = formatted.splitlines()
-        assert lines[0] == "L0001|a = 1"
-        assert lines[1] == "L0002|b = 2"
-
-    def test_explicit_num_width_space_pad(self) -> None:
-        code = "a = 1\nb = 2"
-        formatted = line_annotations.get_code_with_numbered_lines(code, num_width=4, zero_pad=False)
-        lines = formatted.splitlines()
-        assert lines[0] == "L   1|a = 1"
-        assert lines[1] == "L   2|b = 2"
-
-    def test_custom_prefix_pattern_pipe(self) -> None:
-        code = "x = 1\ny = 2\nz = 3"
-        formatted = line_annotations.get_code_with_numbered_lines(code, prefix_pattern="{num}|")
-        lines = formatted.splitlines()
-        assert lines[0] == "1|x = 1"
-        assert lines[1] == "2|y = 2"
-        assert lines[2] == "3|z = 3"
-
-    def test_custom_prefix_pattern_with_line_num_and_pipe(self) -> None:
-        code = "a = 1\nb = 2"
-        formatted = line_annotations.get_code_with_numbered_lines(
-            code,
-            prefix_pattern="L{num}|",
-            num_width=3,
-            zero_pad=False,
-        )
-        lines = formatted.splitlines()
-        assert lines[0] == "L  1|a = 1"
-        assert lines[1] == "L  2|b = 2"
+        assert lines[0] == "\t\t1: a = 1"
+        assert lines[1] == "\t\t2: print(a)"
 
     def test_auto_width_scales_with_line_count(self) -> None:
         code = "\n".join(f"line{idx}" for idx in range(100))  # 100 lines -> width 3
-        formatted = line_annotations.get_code_with_numbered_lines(code, prefix_pattern="{num}|")
+        formatted = line_annotations.get_code_with_numbered_lines(code)
         lines = formatted.splitlines()
-        assert lines[0] == "001|line0"
-        assert lines[9] == "010|line9"
-        assert lines[99] == "100|line99"
+        assert lines[0] == "  1: line0"
+        assert lines[9] == " 10: line9"
+        assert lines[99] == "100: line99"
+
+    def test_single_line(self) -> None:
+        code = "x = 1"
+        formatted = line_annotations.get_code_with_numbered_lines(code)
+        assert formatted == "1: x = 1"
 
 
 class TestGetCodeWithBlockMarkers:

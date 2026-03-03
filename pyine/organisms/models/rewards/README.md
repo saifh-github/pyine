@@ -12,6 +12,7 @@ RewardManager
     ├── RewardTerm[]                  # enabled terms from config
     │   ├── parseable_answer          # format term
     │   ├── text_length               # format term
+    │   ├── traced_reasoning          # format term
     │   ├── hard_match                # code_exec term
     │   ├── soft_match                # code_exec term
     │   ├── llm_grader                # code_exec term
@@ -103,6 +104,74 @@ params = {
         }
     ]
 }
+```
+
+### `traced_reasoning`
+
+Rewards structured reasoning traces referencing source code line numbers. The model produces
+a JSONL `<steps>` block where each line is `{"step": N, "line": L, "text": "..."}`, and this
+term computes three sub-rewards:
+
+- **A) Format presence** (binary): is a valid `<steps>` block with enough parsed steps present?
+- **B) Structural validity** (proportional): how many steps reference valid, executable code
+  lines? Scales with valid step count using a configurable reward curve (diminishing by default).
+  Sequence-level penalties apply for non-monotonic or non-contiguous step numbering.
+- **C) Code grounding** (proportional): how many valid steps share non-numeric identifier tokens
+  with the actual source line they reference? Controlled by `grounding_curve` (linear by default).
+
+An optional correctness gating multiplier scales down the reward when the final answer is
+objectively incorrect. The penalty is continuous: `incorrectness_penalty=1.0` zeros out the
+reward entirely, `0.5` halves it, `0.0` disables gating.
+
+**Requirements:** `add_line_numbers: true` in the datamodule config, and prompt version
+`rl_stepped_reasoning` (or equivalent) that instructs the model to produce `<steps>` + `<final>`.
+
+**Executable line detection:** uses `ast.parse` to identify executable statements, excluding
+blank lines, comments, decorators, and docstrings (including those with inline code examples).
+Raises `SyntaxError` on malformed code.
+
+**Gating semantics:** gating always uses default compare options (canonical soft-match).
+This is independent of any custom `compare_options` on a sibling `soft_match` term. Flip-aware:
+for bugged/keyword samples, `is_objectively_correct = is_semantic_match XOR should_flip`.
+
+**Verbosity scaling interaction:** when `reasoning_from_outside_final: true` is set, the
+`<steps>` content contributes to the length penalty via `parsed_reasoning`. This is intentional
+and encourages concise reasoning traces.
+
+```yaml
+- name: traced_reasoning
+  type: traced_reasoning
+  weight: 1.0
+  enabled: true
+  require_parsed: false
+  params:
+    # tag and block selection
+    steps_tag: steps              # default
+    multi_block_policy: last      # first | last | error
+
+    # A) format presence (binary)
+    format_presence_reward: 0.05
+    require_min_parsed_steps: 1
+
+    # B) structural validity (proportional, capped)
+    structural_validity_weight: 0.05
+    max_rewarded_steps: 20
+    validity_curve: diminishing    # linear | diminishing
+    diminishing_decay: 0.75       # per-step decay (used by diminishing curves)
+    check_line_in_range: true
+    check_executable_line: true
+    check_monotonicity: true
+    monotonicity_penalty_factor: 0.5  # 0.0 = full penalty, 1.0 = no penalty
+    check_contiguity: true
+    contiguity_penalty_factor: 0.5
+
+    # C) code grounding (proportional, linear by default)
+    grounding_weight: 0.05
+    grounding_curve: linear       # linear | diminishing
+    min_token_overlap: 1
+
+    # gating (1.0 = zero out on incorrect, 0.5 = halve, 0.0 = no gating)
+    incorrectness_penalty: 0.5
 ```
 
 ### Code Execution Terms

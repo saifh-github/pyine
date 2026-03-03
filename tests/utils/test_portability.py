@@ -28,8 +28,8 @@ class TestPrintCodeWithNumberedLines:
 
         portability.print_code_with_numbered_lines(code, prefixed_tabs=1, logger=Logger())
         assert len(captured) == 2
-        assert captured[0] == "\tL1|a = 1"
-        assert captured[1] == "\tL2|print(a)"
+        assert captured[0] == "\t1: a = 1"
+        assert captured[1] == "\t2: print(a)"
 
     def test_with_stdout(
         self,
@@ -40,24 +40,8 @@ class TestPrintCodeWithNumberedLines:
         monkeypatch.setattr(builtins, "print", lambda m: printed.append(m))
         portability.print_code_with_numbered_lines(code, prefixed_tabs=0, logger=None)
         assert len(printed) == 2
-        assert printed[0] == "L1|a = 1"
-        assert printed[1] == "L2|print(a)"
-
-    def test_passes_format_params(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        code = "x = 1\ny = 2"
-        printed: list[str] = []
-        monkeypatch.setattr(builtins, "print", lambda m: printed.append(m))
-        portability.print_code_with_numbered_lines(
-            code,
-            prefix_pattern="{num}|",
-            num_width=3,
-            zero_pad=False,
-        )
-        assert printed[0] == "  1|x = 1"
-        assert printed[1] == "  2|y = 2"
+        assert printed[0] == "1: a = 1"
+        assert printed[1] == "2: print(a)"
 
 
 class TestEstimateTolerance:

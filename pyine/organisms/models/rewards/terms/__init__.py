@@ -20,6 +20,7 @@ __all__ = [
 _BUILTIN_TERM_MODULES: tuple[str, ...] = (
     "pyine.organisms.models.rewards.terms.format.parseable_answer",
     "pyine.organisms.models.rewards.terms.format.text_length",
+    "pyine.organisms.models.rewards.terms.format.traced_reasoning",
     "pyine.organisms.models.rewards.terms.code_exec.hard_match",
     "pyine.organisms.models.rewards.terms.code_exec.soft_match",
     "pyine.organisms.models.rewards.terms.code_exec.llm_grader",

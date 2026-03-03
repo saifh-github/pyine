@@ -17,6 +17,7 @@ import pyine.data.datamodule
 import pyine.evals.common
 import pyine.organisms.models.rewards.core.configs as reward_configs
 import pyine.organisms.models.rewards.core.logging as reward_logging
+import pyine.organisms.models.rewards.core.types as reward_types
 import pyine.utils.distrib
 import pyine.utils.transformers.data
 import tests.env_checks
@@ -845,7 +846,13 @@ class TestCreateModelOrganismRewardComponents:
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        mock_manager = types.SimpleNamespace()
+        reset_calls: list[reward_types.RunInitContext] = []
+
+        def _reset(run_init_ctx: reward_types.RunInitContext) -> None:
+            reset_calls.append(run_init_ctx)
+
+        fake_datamodule = object()
+        mock_manager = types.SimpleNamespace(reset=_reset)
         mock_adapter = types.SimpleNamespace()
         monkeypatch.setattr(
             trainer_common.reward_manager_mod,
@@ -863,10 +870,14 @@ class TestCreateModelOrganismRewardComponents:
             tokenizer=None,
             generation_export_config=None,
             wandb_run=None,
+            datamodule=fake_datamodule,
         )
         assert result.manager is mock_manager
         assert result.adapter is mock_adapter
         assert result._disk_logger is None
+        assert len(reset_calls) == 1
+        assert isinstance(reset_calls[0], reward_types.RunInitContext)
+        assert reset_calls[0].datamodule is fake_datamodule
         result.close()  # should be a safe no-op
 
     def test_returns_disk_logger_when_export_configured(
@@ -874,7 +885,7 @@ class TestCreateModelOrganismRewardComponents:
         tmp_path: pathlib.Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        mock_manager = types.SimpleNamespace()
+        mock_manager = types.SimpleNamespace(reset=lambda *a, **kw: None)
         mock_adapter = types.SimpleNamespace()
         monkeypatch.setattr(
             trainer_common.reward_manager_mod,
@@ -894,6 +905,7 @@ class TestCreateModelOrganismRewardComponents:
             tokenizer=None,
             generation_export_config=export_config,
             wandb_run=None,
+            datamodule=object(),
         )
         assert result._disk_logger is not None
         result.close()
@@ -906,6 +918,16 @@ class TestCreateModelOrganismRewardComponents:
                 reward_manager_config=config,
                 tokenizer=None,
                 generation_export_config=export_config,
+                datamodule=object(),
+            )
+
+    def test_raises_when_datamodule_missing(self) -> None:
+        config = _make_reward_manager_config()
+        with pytest.raises(ValueError, match="datamodule must be provided"):
+            trainer_common.create_model_organism_reward_components(
+                reward_manager_config=config,
+                tokenizer=None,
+                datamodule=None,
             )
 
     def test_raises_when_export_with_log_total_false(self) -> None:
@@ -916,6 +938,7 @@ class TestCreateModelOrganismRewardComponents:
                 reward_manager_config=config,
                 tokenizer=None,
                 generation_export_config=export_config,
+                datamodule=object(),
             )
 
     def test_raises_when_export_no_all_ranks_and_main_process_only_false(self) -> None:
@@ -926,6 +949,7 @@ class TestCreateModelOrganismRewardComponents:
                 reward_manager_config=config,
                 tokenizer=None,
                 generation_export_config=export_config,
+                datamodule=object(),
             )
 
     def test_export_all_ranks_on_non_main_creates_disk_logger(
@@ -937,7 +961,7 @@ class TestCreateModelOrganismRewardComponents:
         monkeypatch.setattr(pyine.utils.distrib, "is_main_process", lambda rank=None: False)
         monkeypatch.setattr(pyine.utils.distrib, "has_explicit_global_rank", lambda: True)
         monkeypatch.setattr(pyine.utils.distrib, "get_global_rank", lambda default=None: 2)
-        mock_manager = types.SimpleNamespace()
+        mock_manager = types.SimpleNamespace(reset=lambda *a, **kw: None)
         mock_adapter = types.SimpleNamespace()
         monkeypatch.setattr(
             trainer_common.reward_manager_mod,
@@ -960,6 +984,7 @@ class TestCreateModelOrganismRewardComponents:
             tokenizer=None,
             generation_export_config=export_config,
             wandb_run=None,
+            datamodule=object(),
         )
         assert result._disk_logger is not None
         result.close()
@@ -974,7 +999,7 @@ class TestCreateModelOrganismRewardComponents:
         monkeypatch.setattr(pyine.utils.distrib, "is_main_process", lambda rank=None: True)
         monkeypatch.setattr(pyine.utils.distrib, "has_explicit_global_rank", lambda: True)
         monkeypatch.setattr(pyine.utils.distrib, "get_global_rank", lambda default=None: 0)
-        mock_manager = types.SimpleNamespace()
+        mock_manager = types.SimpleNamespace(reset=lambda *a, **kw: None)
         mock_adapter = types.SimpleNamespace()
         captured_kwargs: dict = {}
 
@@ -1000,6 +1025,7 @@ class TestCreateModelOrganismRewardComponents:
             tokenizer=None,
             generation_export_config=export_config,
             wandb_run=mock_wandb_run,
+            datamodule=object(),
         )
         # logger passed to manager should be a composite
         logger_arg = captured_kwargs.get("logger")
@@ -1015,7 +1041,7 @@ class TestCreateModelOrganismRewardComponents:
         monkeypatch.setattr(pyine.utils.distrib, "is_main_process", lambda rank=None: False)
         monkeypatch.setattr(pyine.utils.distrib, "has_explicit_global_rank", lambda: False)
         monkeypatch.setattr(pyine.utils.distrib, "get_local_rank", lambda default=None: 0)
-        mock_manager = types.SimpleNamespace()
+        mock_manager = types.SimpleNamespace(reset=lambda *a, **kw: None)
         mock_adapter = types.SimpleNamespace()
         monkeypatch.setattr(
             trainer_common.reward_manager_mod,
@@ -1038,6 +1064,7 @@ class TestCreateModelOrganismRewardComponents:
                 reward_manager_config=config,
                 tokenizer=None,
                 generation_export_config=export_config,
+                datamodule=object(),
             )
 
 

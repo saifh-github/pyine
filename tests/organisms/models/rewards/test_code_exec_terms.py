@@ -192,7 +192,7 @@ class TestHardMatchTerm:
     def test_reset_is_noop(self) -> None:
         config = hard_match_term.HardMatchTermConfig()
         term = hard_match_term.HardMatchTerm(config)
-        run_ctx = reward_types.RunInitContext()
+        run_ctx = reward_types.RunInitContext(datamodule=object())
         term.reset(run_ctx)  # should not raise
 
     def test_uses_precomputed_hard_match_result_when_available(self) -> None:
@@ -407,7 +407,7 @@ class TestSoftMatchTerm:
     def test_reset_is_noop(self) -> None:
         config = soft_match_term.SoftMatchTermConfig()
         term = soft_match_term.SoftMatchTerm(config)
-        run_ctx = reward_types.RunInitContext()
+        run_ctx = reward_types.RunInitContext(datamodule=object())
         term.reset(run_ctx)
 
     def test_mismatch_includes_reason_metric(self) -> None:
@@ -682,7 +682,7 @@ class TestLLMGraderTerm:
     def test_reset_is_noop(self) -> None:
         config = llm_grader_term.LLMGraderTermConfig()
         term = llm_grader_term.LLMGraderTerm(config)
-        run_ctx = reward_types.RunInitContext()
+        run_ctx = reward_types.RunInitContext(datamodule=object())
         term.reset(run_ctx)
 
     def test_continuous_reward_ignores_reward_if_no_match(self) -> None:

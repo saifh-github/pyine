@@ -266,7 +266,7 @@ class TestParseableAnswerTerm:
     def test_reset_is_noop(self) -> None:
         config = parseable_answer_term.ParseableAnswerTermConfig()
         term = parseable_answer_term.ParseableAnswerTerm(config)
-        run_ctx = reward_types.RunInitContext()
+        run_ctx = reward_types.RunInitContext(datamodule=object())
         term.reset(run_ctx)  # should not raise
 
 
