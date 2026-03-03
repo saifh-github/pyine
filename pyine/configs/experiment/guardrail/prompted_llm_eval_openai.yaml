@@ -18,8 +18,8 @@ config:
     llm_provider:
       provider: openai
       model_kwargs:
-        model: gpt-4o-mini
-        temperature: 0.0
+        model: gpt-5-mini
+        temperature: 1.0
       rate_limiter_config:
         requests_per_second: 50
         max_bucket_size: 50
@@ -36,9 +36,10 @@ config:
   evals_config:
     datamodule_config:
       lmdb_paths:
-        - ${oc.env:PYINE_DATA_ROOT}/eval_exports/my_model_eval.lmdb
+        - "./debug_db/"
       split_config:
-        split_source: TACO
+        split_source: "./debug_db/debug_split.json"
     target_fpr_values: [0.001, 0.01, 0.05]
 
-  use_wandb_logging: false
+  use_wandb_logging: true
+  wandb_project: pyine-tests

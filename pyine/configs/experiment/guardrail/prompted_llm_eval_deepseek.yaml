@@ -36,4 +36,5 @@ config:
       split_config:
         split_source: TACO
 
-  use_wandb_logging: false
+  use_wandb_logging: true
+  wandb_project: pyine-tests
