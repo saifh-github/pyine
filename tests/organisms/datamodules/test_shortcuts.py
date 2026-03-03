@@ -1509,6 +1509,104 @@ class TestGetOverlappingTraceIds:
         assert result == frozenset()
 
 
+class TestGetHfMessagesDatasetForDerivedSubset:
+    """Tests for HF dataset identifier suffixing in derived subsets."""
+
+    def test_suffixes_overlapping_identifiers_with_keep_original_data(
+        self,
+        mocker: MockerFixture,
+    ) -> None:
+        dm = _make_stub_shortcuts_datamodule()
+        base_dataset = hf_datasets.Dataset.from_list(
+            [
+                {
+                    "messages": [{"role": "user", "content": "x"}],
+                    "sample_data": {"identifier": "shared_id"},
+                },
+                {
+                    "messages": [{"role": "user", "content": "y"}],
+                    "sample_data": {"identifier": "unique_id"},
+                },
+            ]
+        )
+        mocker.patch.object(
+            pyine.organisms.datamodules.base.BiasDataModuleBase,
+            "get_hf_messages_dataset",
+            return_value=base_dataset,
+        )
+        dm._get_overlapping_trace_ids = lambda _parent, _hint: frozenset(["shared_id"])  # type: ignore[attr-defined]
+        output_dataset = dm._get_hf_messages_dataset_for_derived_subset(
+            derived_name="valid_hinted",
+            parent_name="valid",
+            append_answer=False,
+            merge_system_with_user=False,
+            keep_original_data=True,
+            force_regenerate=False,
+        )
+        identifiers = [sample["identifier"] for sample in output_dataset["sample_data"]]
+        assert identifiers == ["shared_id::hinted", "unique_id"]
+
+    def test_returns_original_dataset_when_keep_original_data_is_false(
+        self,
+        mocker: MockerFixture,
+    ) -> None:
+        dm = _make_stub_shortcuts_datamodule()
+        base_dataset = hf_datasets.Dataset.from_list(
+            [
+                {"messages": [{"role": "user", "content": "x"}]},
+            ]
+        )
+        mocker.patch.object(
+            pyine.organisms.datamodules.base.BiasDataModuleBase,
+            "get_hf_messages_dataset",
+            return_value=base_dataset,
+        )
+
+        def _raise_if_called(*_args: typing.Any) -> typing.NoReturn:
+            raise RuntimeError("should not be called")
+
+        dm._get_overlapping_trace_ids = _raise_if_called  # type: ignore[attr-defined]
+        output_dataset = dm._get_hf_messages_dataset_for_derived_subset(
+            derived_name="valid_hinted",
+            parent_name="valid",
+            append_answer=False,
+            merge_system_with_user=False,
+            keep_original_data=False,
+            force_regenerate=False,
+        )
+        assert output_dataset is base_dataset
+
+    def test_base_subset_still_concatenates_derived_subsets(
+        self,
+        mocker: MockerFixture,
+    ) -> None:
+        dm = _make_stub_shortcuts_datamodule()
+        dm.config._expanded_base_names = frozenset(["valid"])
+        dm.config.subset_names = ("valid", "valid_hinted", "valid_misleading", "valid_hintless")
+        dm.config._get_parent_subset_name = lambda name: "valid" if name != "valid" else name
+
+        def _make_output_dataset(**kwargs: typing.Any) -> hf_datasets.Dataset:
+            derived_name = typing.cast("str", kwargs["derived_name"])
+            return hf_datasets.Dataset.from_list([{"messages": [], "sample_data": {"identifier": derived_name}}])
+
+        mocker.patch.object(
+            shortcuts_mod.ShortcutBiasDataModule,
+            "_get_hf_messages_dataset_for_derived_subset",
+            side_effect=_make_output_dataset,
+        )
+        output_dataset = dm.get_hf_messages_dataset(
+            subset_name="valid",
+            append_answer=False,
+            keep_original_data=True,
+        )
+        assert len(output_dataset) == 3
+        assert [sample["identifier"] for sample in output_dataset["sample_data"]] == [
+            "valid_hinted",
+            "valid_misleading",
+            "valid_hintless",
+        ]
+
+
 def _make_mock_trace_metadata(identifier: str) -> types.SimpleNamespace:
     """Helper to create mock trace metadata with identifier."""
     return types.SimpleNamespace(identifier=identifier)
