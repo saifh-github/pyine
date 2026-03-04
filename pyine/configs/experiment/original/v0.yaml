@@ -19,7 +19,6 @@ runtime:
   tags:
     - "model:${config.base_model}"
   seed: 0
-  dry_run: False
 
 #hydra:
 #  sweeper:  # override settings for wandb sweeps when launching the app in multirun mode

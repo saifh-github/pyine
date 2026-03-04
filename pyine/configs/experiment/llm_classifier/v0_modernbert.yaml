@@ -18,7 +18,6 @@ runtime:
     - "model:${config.base_model}"
     - "llm-classifier"
   seed: 42
-  dry_run: false
 
 config:
   _target_: pyine.apps.trainers.llm_classifier_trainer_configs.LLMClassifierTrainerAppMainConfig

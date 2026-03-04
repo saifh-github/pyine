@@ -17,7 +17,6 @@ runtime:
     - "model:checkpoint-500-RL_HT_44_full_ds"
     - "probe-training"
   seed: 42
-  dry_run: false
 
 config:
   _target_: pyine.apps.trainers.probe_trainer_configs.ProbeTrainerAppMainConfig

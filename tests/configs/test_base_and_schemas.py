@@ -1,6 +1,7 @@
 import pathlib
 import types
 
+import omegaconf
 import pytest
 
 import pyine.configs.base
@@ -222,3 +223,18 @@ def test_runtime_config_wandb_guards(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     with pytest.raises(RuntimeError):
         runtime.add_wandb_tag("extra")
+
+
+def test_experiment_configs_do_not_override_runtime_dry_run() -> None:
+    experiment_root = pathlib.Path("pyine/configs/experiment")
+    experiment_config_paths = sorted(experiment_root.rglob("*.yaml"))
+    assert experiment_config_paths, "no experiment yaml configs found"
+    paths_with_runtime_dry_run_override: list[pathlib.Path] = []
+    for experiment_config_path in experiment_config_paths:
+        config = omegaconf.OmegaConf.load(experiment_config_path)
+        runtime_dry_run = omegaconf.OmegaConf.select(config, "runtime.dry_run")
+        if runtime_dry_run is not None:
+            paths_with_runtime_dry_run_override.append(experiment_config_path)
+    assert not paths_with_runtime_dry_run_override, (
+        f"experiment configs must not set runtime.dry_run; found overrides in: {paths_with_runtime_dry_run_override}"
+    )

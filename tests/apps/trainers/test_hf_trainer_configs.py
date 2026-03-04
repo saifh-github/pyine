@@ -1,6 +1,7 @@
 import pathlib
 
 import hydra_zen
+import omegaconf
 import pytest
 
 import pyine.apps.trainers.common
@@ -89,3 +90,56 @@ def test_register_hydra_configs_registers_sweepers(
     rl_configs = pyine.apps.trainers.hf_rl_trainer_configs.register_hydra_configs(pyine.evals.common.EvalType.CODE_EXEC)
     sweeper_configs = {(cfg.group, cfg.name) for cfg in rl_configs if cfg.group == "hydra/sweeper"}
     assert ("hydra/sweeper", "wandb_sweeper_base") in sweeper_configs
+
+
+def test_v0_rl_eval_base_uses_vllm_and_respects_runtime_dry_run(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pyine.configs.base.register_searchpath_plugin()
+    monkeypatch.setattr(pyine.utils.filesystem, "get_logs_root_path", lambda: tmp_path)
+    app_configs = pyine.apps.trainers.hf_rl_trainer_configs.register_hydra_configs(
+        pyine.evals.common.EvalType.CODE_EXEC
+    )
+    entrypoint_config = next(
+        (cfg for cfg in app_configs if cfg.name == "entrypoint" and cfg.group is None),
+        None,
+    )
+    assert entrypoint_config is not None
+
+    def _extract_payload(cfg: omegaconf.DictConfig) -> dict[str, object]:
+        lmdb_paths = omegaconf.OmegaConf.select(cfg, "config.datamodule_config.lmdb_paths")
+        if lmdb_paths is None:
+            raise AssertionError("missing datamodule lmdb_paths")
+        lmdb_paths_list = list(lmdb_paths)
+        return {
+            "runtime_dry_run": omegaconf.OmegaConf.select(cfg, "runtime.dry_run"),
+            "lmdb_paths_count": len(lmdb_paths_list),
+            "vllm_provider": omegaconf.OmegaConf.select(
+                cfg,
+                "config.evals_config.vllm_provider_config.provider",
+            ),
+            "vllm_model": omegaconf.OmegaConf.select(
+                cfg,
+                "config.evals_config.vllm_provider_config.model_kwargs.model",
+            ),
+            "base_model": omegaconf.OmegaConf.select(cfg, "config.base_model"),
+        }
+
+    job = hydra_zen.launch(
+        entrypoint_config.config,
+        _extract_payload,
+        overrides=[
+            "+experiment=original/v0_rl_eval_base",
+            "runtime=dry_run",
+            "config.use_wandb_logging=false",
+        ],
+        config_name="entrypoint",
+        version_base=pyine.configs.base.target_hydra_version,
+        with_log_configuration=False,
+    )
+    payload = job.return_value
+    assert payload["runtime_dry_run"] is True
+    assert payload["lmdb_paths_count"] == 4
+    assert payload["vllm_provider"] == "vllm"
+    assert payload["vllm_model"] == payload["base_model"]

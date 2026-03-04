@@ -23,7 +23,6 @@ runtime:
     - "model:${config.base_model}"
     - "rl-training"
   seed: 0
-  dry_run: False
 
 config:
   # Explicitly specify RL config class (overrides the SFT default from /config: base)
