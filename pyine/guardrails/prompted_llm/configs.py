@@ -28,8 +28,6 @@ class PromptedLLMGuardrailConfig(pydantic.BaseModel):
     # --- Prompt ---
     prompt_name: str = "guardrail/correctness_judge"
     """Name of the prompt template to use (resolved by PromptManager)."""
-    prompt_version: str | None = None
-    """Prompt version override. None uses the default version."""
     use_chat_template: bool = True
     """Whether to use a chat prompt template (system + human message)."""
 

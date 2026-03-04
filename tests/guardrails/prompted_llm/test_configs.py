@@ -23,7 +23,6 @@ class TestConfigDefaults:
     def test_config_defaults(self) -> None:
         config = PromptedLLMGuardrailConfig(llm_provider=_make_llm_provider())
         assert config.prompt_name == "guardrail/correctness_judge"
-        assert config.prompt_version is None
         assert config.use_chat_template is True
         assert config.max_workers == 10
         assert config.default_score_on_error == 0.5
@@ -32,13 +31,11 @@ class TestConfigDefaults:
         config = PromptedLLMGuardrailConfig(
             llm_provider=_make_llm_provider(),
             prompt_name="custom/prompt",
-            prompt_version="v2",
             use_chat_template=False,
             max_workers=5,
             default_score_on_error=0.3,
         )
         assert config.prompt_name == "custom/prompt"
-        assert config.prompt_version == "v2"
         assert config.use_chat_template is False
         assert config.max_workers == 5
         assert config.default_score_on_error == 0.3

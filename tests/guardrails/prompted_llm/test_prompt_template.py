@@ -8,7 +8,6 @@ import langchain_core.output_parsers
 
 import pyine.prompts.manager
 from pyine.prompts.configs.guardrail.correctness_judge import (
-    CorrectnessJudgement,
     CorrectnessJudgementWithReasoning,
     get_output_parser,
 )
@@ -24,10 +23,6 @@ class TestPromptTemplateLoads:
         config = pyine.prompts.manager.get_prompt_config("guardrail/correctness_judge", version="with_reasoning")
         assert config is not None
 
-    def test_prompt_template_loads_score_only(self) -> None:
-        config = pyine.prompts.manager.get_prompt_config("guardrail/correctness_judge", version="score_only")
-        assert config is not None
-
 
 class TestPromptTemplateRenders:
     def test_prompt_template_renders(self) -> None:
@@ -37,19 +32,19 @@ class TestPromptTemplateRenders:
         template = get_prompt_template(use_chat_template=True)
         # Render with sample variables
         rendered = template.format(
+            prompt="What does this code output?",
             model_output="The output is 42",
-            expected_output="42",
         )
+        assert "What does this code output?" in rendered
         assert "The output is 42" in rendered
-        assert "42" in rendered
 
     def test_prompt_template_renders_with_final_answer(self) -> None:
         from pyine.prompts.configs.guardrail.correctness_judge import get_prompt_template
 
         template = get_prompt_template(use_chat_template=True)
         rendered = template.format(
+            prompt="What does this code output?",
             model_output="The output is 42",
-            expected_output="42",
             final_answer="42",
         )
         assert "42" in rendered
@@ -68,14 +63,6 @@ class TestPromptOutputParser:
         assert isinstance(result, CorrectnessJudgementWithReasoning)
         assert result.score == 0.85
         assert result.reasoning == "Looks correct"
-
-    def test_prompt_output_parser_score_only_version(self) -> None:
-        parser = get_output_parser(version="score_only")
-        assert parser is not None
-        valid_json = json.dumps({"score": 0.5})
-        result = parser.parse(valid_json)
-        assert isinstance(result, CorrectnessJudgement)
-        assert result.score == 0.5
 
     def test_prompt_output_parser_with_reasoning_version(self) -> None:
         parser = get_output_parser(version="with_reasoning")

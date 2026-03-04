@@ -13,7 +13,6 @@ runtime:
 config:
   guardrail_config:
     prompt_name: guardrail/correctness_judge
-    prompt_version: with_reasoning
     max_workers: 10
     default_score_on_error: 0.5
 

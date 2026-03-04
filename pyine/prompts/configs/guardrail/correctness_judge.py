@@ -30,9 +30,7 @@ def get_output_parser(
     version: "pyine.prompts.types.PromptVersionType | None" = None,
 ) -> langchain_core.output_parsers.BaseOutputParser[typing.Any] | None:
     """Return the output parser for the correctness judge prompt."""
-    if version == "score_only":
-        model = CorrectnessJudgement
-    elif version == "with_reasoning" or version is None:  # default
+    if version == "with_reasoning" or version is None:  # default
         model = CorrectnessJudgementWithReasoning
     else:
         raise NotImplementedError(f"Unsupported version: {version}")

@@ -129,7 +129,6 @@ ______________________________________________________________________
 | ------------------------ | ----------------------------- |
 | `runtime.seed`           | `42`                          |
 | `prompt_name`            | `guardrail/correctness_judge` |
-| `prompt_version`         | `with_reasoning`              |
 | `max_workers`            | `10`                          |
 | `default_score_on_error` | `0.5`                         |
 | `split_source`           | `TACO`                        |
@@ -155,7 +154,6 @@ Defined in `pyine/guardrails/prompted_llm/configs.py`:
 | ------------------------ | ------------------- | ------------------------------- | ------------------------------------------------------------------------------------ |
 | `llm_provider`           | `LLMProviderConfig` | (required)                      | LLM provider config (provider, model_kwargs, rate_limiter_config, with_retry_config) |
 | `prompt_name`            | `str`               | `"guardrail/correctness_judge"` | Prompt template name resolved by PromptManager                                       |
-| `prompt_version`         | `str \| None`       | `None`                          | `"with_reasoning"`, `"score_only"`, or `None` for default                            |
 | `use_chat_template`      | `bool`              | `True`                          | Whether to use chat prompt template (system + human message)                         |
 | `max_workers`            | `int`               | `10`                            | Max concurrent LLM calls (ThreadPoolExecutor workers)                                |
 | `default_score_on_error` | `float`             | `0.5`                           | Score assigned when LLM call fails after retries                                     |
@@ -169,13 +167,6 @@ Defined in `pyine/guardrails/prompted_llm/configs.py`:
 | `rate_limiter_config` | `dict \| None`                     | `None`     | Config for `InMemoryRateLimiter` (e.g. `requests_per_second`, `max_bucket_size`)         |
 | `with_retry_config`   | `dict \| None`                     | `None`     | Config for LangChain `.with_retry()` (set programmatically for exception types)          |
 
-### Prompt Versions
-
-| Version          | Output schema                       | Use case                          |
-| ---------------- | ----------------------------------- | --------------------------------- |
-| `with_reasoning` | `CorrectnessJudgementWithReasoning` | Development, debugging, analysis  |
-| `score_only`     | `CorrectnessJudgement`              | Production runs (faster, cheaper) |
-
 ______________________________________________________________________
 
 ## CLI Usage
@@ -188,9 +179,6 @@ config.guardrail_config.llm_provider.model_kwargs.model=gpt-5-mini
 
 # Change concurrency
 config.guardrail_config.max_workers=20
-
-# Use score_only prompt version (faster, no reasoning)
-config.guardrail_config.prompt_version=score_only
 
 # Set target FPR values
 config.evals_config.target_fpr_values='[0.01,0.05]'
@@ -269,7 +257,6 @@ scorer.get_metadata()
 # {
 #     "scorer_type": "prompted_llm",
 #     "prompt_name": "guardrail/correctness_judge",
-#     "prompt_version": None,
 #     "provider": "openai",
 #     "model_kwargs": {"model": "gpt-5-mini", "temperature": 0.0},
 #     "max_workers": 10,

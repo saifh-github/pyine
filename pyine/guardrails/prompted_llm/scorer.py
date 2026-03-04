@@ -35,7 +35,6 @@ class PromptedLLMGuardrailScorer:
         self._chain = pyine.prompts.manager.get_prompt_chain(
             model=self._llm,
             prompt_name=config.prompt_name,
-            version=config.prompt_version,
             use_chat_template=config.use_chat_template,
             runnable_name="correctness_judge",
         )
@@ -88,8 +87,8 @@ class PromptedLLMGuardrailScorer:
         Called from worker threads. Error counting is protected by a threading.Lock.
         """
         input_vars: dict[str, typing.Any] = {
+            "prompt": record.record.get("prompt", ""),
             "model_output": record.model_output,
-            "expected_output": record.expected_output,
         }
         # Pass final_answer when available; the Jinja2 template conditional
         # hides the block when final_answer is empty (the partial_variables default).
@@ -166,7 +165,6 @@ class PromptedLLMGuardrailScorer:
         return {
             "scorer_type": "prompted_llm",
             "prompt_name": self._config.prompt_name,
-            "prompt_version": self._config.prompt_version,
             "provider": self._config.llm_provider.provider,
             "model_kwargs": self._config.llm_provider.model_kwargs,
             "max_workers": self._config.max_workers,

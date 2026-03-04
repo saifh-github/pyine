@@ -61,10 +61,9 @@ async def main(
     # 1. Build scorer from guardrail config
     scorer = PromptedLLMGuardrailScorer(config.guardrail_config)
     logger.info(
-        "built prompted LLM scorer: provider=%s, prompt=%s, version=%s",
+        "built prompted LLM scorer: provider=%s, prompt=%s",
         config.guardrail_config.llm_provider.provider,
         config.guardrail_config.prompt_name,
-        config.guardrail_config.prompt_version,
     )
 
     # 2. Prepare datamodule (loads LMDB, builds guardrail splits)

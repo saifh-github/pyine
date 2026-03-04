@@ -40,6 +40,7 @@ def _make_record(
     model_output: str = "output",
     final_answer: str | None = None,
     expected_output: str = "expected",
+    prompt: str = "Analyze the following code...",
 ) -> correctness_types.EvalRecord:
     return correctness_types.EvalRecord(
         sample_id=sample_id,
@@ -51,7 +52,7 @@ def _make_record(
         label=label,
         code_type="original",
         tags=[],
-        record={},
+        record={"prompt": prompt},
         difficulty_score=None,
     )
 
@@ -182,7 +183,6 @@ class TestMetadata:
         required_keys = {
             "scorer_type",
             "prompt_name",
-            "prompt_version",
             "provider",
             "model_kwargs",
             "max_workers",
@@ -257,11 +257,11 @@ class TestFinalAnswerHandling:
         input_vars = call_args[0][0]
         assert "final_answer" not in input_vars
 
-    def test_model_output_and_expected_always_passed(self) -> None:
+    def test_model_output_and_prompt_always_passed(self) -> None:
         scorer, mock_chain = _build_scorer_with_mock_chain()
-        record = _make_record(model_output="my output", expected_output="my expected")
+        record = _make_record(model_output="my output", prompt="my prompt")
         scorer.score_records([record])
         call_args = mock_chain.invoke.call_args
         input_vars = call_args[0][0]
         assert input_vars["model_output"] == "my output"
-        assert input_vars["expected_output"] == "my expected"
+        assert input_vars["prompt"] == "my prompt"
