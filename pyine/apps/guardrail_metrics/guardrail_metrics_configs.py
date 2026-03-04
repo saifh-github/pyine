@@ -225,7 +225,7 @@ if __name__ == "__main__":
 
     pyine.configs.base.register_searchpath_plugin()
     pyine.configs.utils.print_experiment_configs(
-        config_descriptions=register_hydra_configs(eval_type=pyine.evals.common.EvalType.CODE_EXEC),
+        config_descriptions=register_hydra_configs(eval_type=pyine.evals.common.EvalType.CORRECTNESS),
         app_name="guardrail_metrics",
         cli_args=sys.argv[1:],
     )
