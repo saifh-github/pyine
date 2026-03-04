@@ -8,6 +8,8 @@ from __future__ import annotations
 import typing
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 import pyine.evals.correctness.types as correctness_types
 import pyine.utils.llm_providers
 from pyine.guardrails.prompted_llm.configs import PromptedLLMGuardrailConfig
@@ -38,7 +40,7 @@ def _make_record(
     sample_id: str = "TEST/VALID/p000000/s0000/t0000",
     label: bool = True,
     model_output: str = "output",
-    final_answer: str | None = None,
+    final_answer: str = "expected",
     expected_output: str = "expected",
     prompt: str = "Analyze the following code...",
 ) -> correctness_types.EvalRecord:
@@ -249,13 +251,23 @@ class TestFinalAnswerHandling:
         assert "final_answer" in input_vars
         assert input_vars["final_answer"] == "42"
 
-    def test_final_answer_omitted_when_none(self) -> None:
-        scorer, mock_chain = _build_scorer_with_mock_chain()
-        record = _make_record(final_answer=None)
-        scorer.score_records([record])
-        call_args = mock_chain.invoke.call_args
-        input_vars = call_args[0][0]
-        assert "final_answer" not in input_vars
+    def test_final_answer_none_raises(self) -> None:
+        scorer, _ = _build_scorer_with_mock_chain()
+        record = correctness_types.EvalRecord(
+            sample_id="TEST/VALID/p000000/s0000/t0000",
+            problem_id="TEST/VALID/p000000",
+            attempt_index=0,
+            model_output="output",
+            final_answer=None,
+            expected_output="expected",
+            label=True,
+            code_type="original",
+            tags=[],
+            record={"prompt": "some prompt"},
+            difficulty_score=None,
+        )
+        with pytest.raises(AssertionError, match="final_answer is required"):
+            scorer.score_records([record])
 
     def test_model_output_and_prompt_always_passed(self) -> None:
         scorer, mock_chain = _build_scorer_with_mock_chain()
