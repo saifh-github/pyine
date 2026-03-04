@@ -1,0 +1,28 @@
+# @package _global_
+
+# RL eval-only config for benchmarking the base model (no training).
+# Usage: uv run python -m pyine.apps.trainers.hf_trainer +experiment=original/v0_rl_eval_base
+
+defaults:
+  - original/v0_rl
+  - override /config/datamodule_config: shortcuts_TACO_10s10t_v1_part1to4
+  - _self_
+
+runtime:
+  exp_name: original/v0_rl_eval_base
+  run_name: "${runtime.exp_name}"
+
+config:
+  grpo_config:
+    do_train: False
+    do_eval: False
+    do_predict: True
+  evals_config:
+    vllm_provider_config:
+      provider: vllm
+      model_kwargs:
+        base_url: "http://localhost:8000/v1"  # start_vllm arg: --port 8000
+        model: "${config.base_model}"  # start_vllm arg: --model ${config.base_model}
+        max_tokens: ${config.evals_config.eval_generation_max_new_tokens_override}
+        temperature: ${config.evals_config.sampling_temperature_override}
+        top_p: ${config.evals_config.sampling_top_p_override}

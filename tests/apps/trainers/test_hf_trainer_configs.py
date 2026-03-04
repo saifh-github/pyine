@@ -123,6 +123,30 @@ def test_v0_rl_eval_base_uses_vllm_and_respects_runtime_dry_run(
                 cfg,
                 "config.evals_config.vllm_provider_config.model_kwargs.model",
             ),
+            "vllm_max_tokens": omegaconf.OmegaConf.select(
+                cfg,
+                "config.evals_config.vllm_provider_config.model_kwargs.max_tokens",
+            ),
+            "vllm_temperature": omegaconf.OmegaConf.select(
+                cfg,
+                "config.evals_config.vllm_provider_config.model_kwargs.temperature",
+            ),
+            "vllm_top_p": omegaconf.OmegaConf.select(
+                cfg,
+                "config.evals_config.vllm_provider_config.model_kwargs.top_p",
+            ),
+            "eval_max_tokens": omegaconf.OmegaConf.select(
+                cfg,
+                "config.evals_config.eval_generation_max_new_tokens_override",
+            ),
+            "eval_temperature": omegaconf.OmegaConf.select(
+                cfg,
+                "config.evals_config.sampling_temperature_override",
+            ),
+            "eval_top_p": omegaconf.OmegaConf.select(
+                cfg,
+                "config.evals_config.sampling_top_p_override",
+            ),
             "base_model": omegaconf.OmegaConf.select(cfg, "config.base_model"),
         }
 
@@ -143,3 +167,6 @@ def test_v0_rl_eval_base_uses_vllm_and_respects_runtime_dry_run(
     assert payload["lmdb_paths_count"] == 4
     assert payload["vllm_provider"] == "vllm"
     assert payload["vllm_model"] == payload["base_model"]
+    assert payload["vllm_max_tokens"] == payload["eval_max_tokens"]
+    assert payload["vllm_temperature"] == payload["eval_temperature"]
+    assert payload["vllm_top_p"] == payload["eval_top_p"]
