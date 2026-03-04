@@ -7,11 +7,11 @@
 #       +experiment=guardrail/prompted_llm_eval_deepseek
 
 defaults:
+  - guardrail/prompted_llm_eval_base
   - _self_
 
 runtime:
   exp_name: prompted_llm_guardrail_eval_deepseek
-  seed: 42
 
 config:
   guardrail_config:
@@ -23,18 +23,3 @@ config:
       rate_limiter_config:
         requests_per_second: 20
         max_bucket_size: 20
-      # NOTE: with_retry_config omitted from YAML — see OpenAI config comment.
-      # Set programmatically using get_default_openai_provider_retry_config().
-    prompt_name: guardrail/correctness_judge
-    prompt_version: with_reasoning
-    max_workers: 10
-
-  evals_config:
-    datamodule_config:
-      lmdb_paths:
-        - ${oc.env:PYINE_DATA_ROOT}/eval_exports/my_model_eval.lmdb
-      split_config:
-        split_source: TACO
-
-  use_wandb_logging: true
-  wandb_project: pyine-tests

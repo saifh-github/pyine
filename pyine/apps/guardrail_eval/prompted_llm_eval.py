@@ -123,12 +123,7 @@ def async_prompted_llm_eval_main_wrapper(
 
 
 if __name__ == "__main__":
-    import sys
-
     import pyine.apps.trainers.common
-
-    # Filter DeepSpeed's --local_rank to avoid Hydra conflict
-    sys.argv = [arg for arg in sys.argv if not arg.startswith("--local_rank")]
 
     pyine.apps.trainers.common.hydra_main(
         eval_type=pyine.evals.common.EvalType.CORRECTNESS,

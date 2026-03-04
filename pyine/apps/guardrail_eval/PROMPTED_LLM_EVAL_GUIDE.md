@@ -106,10 +106,13 @@ result = create_debug_probe_dataset(
 
 ### Step 2: Create an Experiment Config
 
+All experiment configs inherit from a shared **base config**
+(`guardrail/prompted_llm_eval_base`) that defines common defaults (seed, prompt settings,
+eval pipeline config, etc.). Provider-specific configs only need to override what differs.
+
 Create a new experiment config file in `pyine/configs/experiment/guardrail/`:
 
 ```yaml
-# pyine/configs/experiment/guardrail/my_eval.yaml
 # @package _global_
 #
 # Usage:
@@ -117,11 +120,8 @@ Create a new experiment config file in `pyine/configs/experiment/guardrail/`:
 #       +experiment=guardrail/my_eval
 
 defaults:
+  - guardrail/prompted_llm_eval_base
   - _self_
-
-runtime:
-  exp_name: prompted_llm_guardrail_eval
-  seed: 42
 
 config:
   guardrail_config:
@@ -133,24 +133,22 @@ config:
       rate_limiter_config:
         requests_per_second: 50
         max_bucket_size: 50
-      # NOTE: with_retry_config is omitted from YAML because retry_if_exception_type
-      # requires actual Python exception classes, not strings. Set it programmatically
-      # using get_default_openai_provider_retry_config().
-    prompt_name: guardrail/correctness_judge
-    prompt_version: with_reasoning
-    max_workers: 10
-    default_score_on_error: 0.5
-
-  evals_config:
-    datamodule_config:
-      lmdb_paths:
-        - /path/to/eval_export.lmdb
-      split_config:
-        split_source: TACO
-    target_fpr_values: [0.001, 0.01, 0.05]
-
-  use_wandb_logging: false
 ```
+
+The base config (`prompted_llm_eval_base.yaml`) provides these defaults:
+
+| Field                    | Default                       |
+| ------------------------ | ----------------------------- |
+| `runtime.seed`           | `42`                          |
+| `prompt_name`            | `guardrail/correctness_judge` |
+| `prompt_version`         | `with_reasoning`              |
+| `max_workers`            | `10`                          |
+| `default_score_on_error` | `0.5`                         |
+| `split_source`           | `TACO`                        |
+| `target_fpr_values`      | `[0.001, 0.01, 0.05]`         |
+| `use_wandb_logging`      | `false`                       |
+
+Any of these can be overridden in the provider-specific config or on the command line.
 
 **Important:** The `_target_` field is handled automatically by the Hydra config registration in
 `prompted_llm_eval_configs.py`. No explicit `_target_` is needed in experiment YAML files.
@@ -164,11 +162,12 @@ python -m pyine.apps.guardrail_eval.prompted_llm_eval \
 
 ### Available Experiment Configs
 
-| Config                                 | Provider     | Model                   | Notes                        |
-| -------------------------------------- | ------------ | ----------------------- | ---------------------------- |
-| `guardrail/prompted_llm_eval_openai`   | OpenAI       | `gpt-5-mini`            | Rate limited at 50 req/s     |
-| `guardrail/prompted_llm_eval_vllm`     | vLLM (local) | `Llama-3.1-8B-Instruct` | Requires running vLLM server |
-| `guardrail/prompted_llm_eval_deepseek` | DeepSeek     | `deepseek-chat`         | Rate limited at 20 req/s     |
+| Config                                 | Provider     | Model                   | Notes                                  |
+| -------------------------------------- | ------------ | ----------------------- | -------------------------------------- |
+| `guardrail/prompted_llm_eval_base`     | —            | —                       | Shared base config (not used directly) |
+| `guardrail/prompted_llm_eval_openai`   | OpenAI       | `gpt-5-mini`            | Rate limited at 50 req/s               |
+| `guardrail/prompted_llm_eval_vllm`     | vLLM (local) | `Llama-3.1-8B-Instruct` | Requires running vLLM server           |
+| `guardrail/prompted_llm_eval_deepseek` | DeepSeek     | `deepseek-chat`         | Rate limited at 20 req/s               |
 
 ______________________________________________________________________
 
@@ -423,15 +422,41 @@ ______________________________________________________________________
 
 ## YAML Examples
 
+All provider configs inherit from the base config (`guardrail/prompted_llm_eval_base`) via the
+Hydra `defaults` list and only override provider-specific fields.
+
 ### OpenAI API
 
-See `pyine/configs/experiment/guardrail/prompted_llm_eval_openai.yaml`.
+See `pyine/configs/experiment/guardrail/prompted_llm_eval_openai.yaml`. Overrides the LLM
+provider and points at debug data paths:
+
+```yaml
+defaults:
+  - guardrail/prompted_llm_eval_base
+  - _self_
+
+config:
+  guardrail_config:
+    llm_provider:
+      provider: openai
+      model_kwargs:
+        model: gpt-5-mini
+        temperature: 1.0
+      rate_limiter_config:
+        requests_per_second: 50
+        max_bucket_size: 50
+```
 
 ### Local vLLM Server
 
-See `pyine/configs/experiment/guardrail/prompted_llm_eval_vllm.yaml`.
+See `pyine/configs/experiment/guardrail/prompted_llm_eval_vllm.yaml`. Overrides the LLM
+provider, adds `base_url`, and lowers `max_workers` to match GPU throughput:
 
 ```yaml
+defaults:
+  - guardrail/prompted_llm_eval_base
+  - _self_
+
 config:
   guardrail_config:
     llm_provider:
@@ -445,9 +470,14 @@ config:
 
 ### DeepSeek API
 
-See `pyine/configs/experiment/guardrail/prompted_llm_eval_deepseek.yaml`.
+See `pyine/configs/experiment/guardrail/prompted_llm_eval_deepseek.yaml`. Overrides the LLM
+provider and rate limiter:
 
 ```yaml
+defaults:
+  - guardrail/prompted_llm_eval_base
+  - _self_
+
 config:
   guardrail_config:
     llm_provider:
@@ -458,6 +488,26 @@ config:
       rate_limiter_config:
         requests_per_second: 20
         max_bucket_size: 20
+```
+
+### Adding a New Provider
+
+To add a new provider, create a config that inherits from the base and overrides only the
+`llm_provider` section (and any other provider-specific fields):
+
+```yaml
+# @package _global_
+defaults:
+  - guardrail/prompted_llm_eval_base
+  - _self_
+
+config:
+  guardrail_config:
+    llm_provider:
+      provider: openai           # or a new provider
+      model_kwargs:
+        model: my-model-name
+        temperature: 0.0
 ```
 
 ### With `score_only` Prompt (Faster, Cheaper)
@@ -514,20 +564,3 @@ wrapping it in an additional `asyncio.run()`.
 Some providers (especially local vLLM servers) do not populate token usage fields in their
 responses. A `verification_costs` array of all zeros should be interpreted as "token tracking
 not available" rather than "zero cost".
-
-**`with_retry_config` in YAML**
-
-Retry configuration requires Python exception classes (`retry_if_exception_type`) which cannot
-be represented in YAML. Set it programmatically:
-
-```python
-from pyine.utils.llm_providers import get_default_openai_provider_retry_config
-
-config = PromptedLLMGuardrailConfig(
-    llm_provider=LLMProviderConfig(
-        provider="openai",
-        model_kwargs={"model": "gpt-4o-mini", "temperature": 0.0},
-        with_retry_config=get_default_openai_provider_retry_config(),
-    ),
-)
-```

@@ -12,11 +12,11 @@
 #       +experiment=guardrail/prompted_llm_eval_vllm
 
 defaults:
+  - guardrail/prompted_llm_eval_base
   - _self_
 
 runtime:
   exp_name: prompted_llm_guardrail_eval_local
-  seed: 42
 
 config:
   guardrail_config:
@@ -26,20 +26,4 @@ config:
         model: meta-llama/Llama-3.1-8B-Instruct   # must match vLLM server --model
         temperature: 0.0
         base_url: http://localhost:8000/v1           # vLLM server address
-      # No rate_limiter_config needed for local server (no API quotas)
-      # No with_retry_config needed (local server is reliable)
-    prompt_name: guardrail/correctness_judge
-    prompt_version: with_reasoning
     max_workers: 8     # match GPU throughput
-    default_score_on_error: 0.5
-
-  evals_config:
-    datamodule_config:
-      lmdb_paths:
-        - ${oc.env:PYINE_DATA_ROOT}/eval_exports/my_model_eval.lmdb
-      split_config:
-        split_source: TACO
-    target_fpr_values: [0.001, 0.01, 0.05]
-
-  use_wandb_logging: true
-  wandb_project: pyine-tests
