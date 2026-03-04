@@ -74,6 +74,26 @@ class TestScoringResult:
                 verification_costs=[1.0, -0.5],
             )
 
+    def test_valid_with_attempt_metadata(self) -> None:
+        result = correctness_types.ScoringResult(
+            scores=[0.1, 0.9],
+            attempt_metadata={
+                ("s1", 0, 0): {"input_token_count": 12},
+                ("s2", 1, 1): {"input_token_count": 8},
+            },
+        )
+        assert result.attempt_metadata is not None
+        assert result.attempt_metadata[("s1", 0, 0)]["input_token_count"] == 12
+
+    def test_attempt_metadata_length_mismatch(self) -> None:
+        with pytest.raises(pydantic.ValidationError, match="attempt_metadata must have same length"):
+            correctness_types.ScoringResult(
+                scores=[0.1, 0.9],
+                attempt_metadata={
+                    ("s1", 0, 0): {"input_token_count": 12},
+                },
+            )
+
 
 class TestGuardrailScorerProtocol:
     def test_protocol_conformance(self) -> None:

@@ -1,4 +1,5 @@
 import enum
+import functools
 import pathlib
 import typing
 
@@ -10,6 +11,7 @@ import pyine.data.datamodule
 import pyine.evals.utils
 import pyine.utils.llm_providers
 import pyine.utils.parsing
+import pyine.utils.reprod
 import pyine.utils.transformers
 
 
@@ -46,6 +48,31 @@ class EvalResult(pydantic.BaseModel):
 
     metrics: pyine.evals.utils.MetricsDictType
     """Dictionary of aggregated evaluation metrics; keys are metric names, values are eval outcomes."""
+    eval_metadata: dict[str, typing.Any] = pydantic.Field(default_factory=dict)
+    """Eval-level metadata describing how this result was produced (config, subset, runtime info)."""
+
+
+@functools.lru_cache(maxsize=1)
+def _get_cached_eval_reprod_metadata() -> dict[str, str]:
+    """Returns cached reprod metadata for eval result payloads."""
+    return pyine.utils.reprod.get_reprod_metadata()
+
+
+def get_cached_eval_reprod_metadata() -> dict[str, str]:
+    """Returns a copy of cached reprod metadata (callers can mutate safely)."""
+    return dict(_get_cached_eval_reprod_metadata())
+
+
+def build_base_eval_metadata(
+    eval_type: EvalType | None,
+    eval_subset_name: str | None,
+) -> dict[str, typing.Any]:
+    """Build the base eval metadata dict shared by all evaluation pipelines."""
+    return {
+        "eval_type": str(eval_type) if eval_type is not None else None,
+        "eval_subset_name": eval_subset_name,
+        "reprod_metadata": get_cached_eval_reprod_metadata(),
+    }
 
 
 class RunnableEvalConfig(pydantic.BaseModel):
@@ -121,6 +148,18 @@ class BaseEvalsConfig(pydantic.BaseModel):
         default_factory=pyine.evals.utils.SampleCategoryExtractionConfig,
     )
     """Configuration for extracting eval categories from sample data; set to None to disable."""
+
+    result_dump_dir: pathlib.Path | None = None
+    """When set, the full EvalResult is pickled to this directory after evaluation completes.
+
+    Produced filenames are generated via persistence.build_result_dump_path(). Enables offline
+    analysis (notebooks, debugging) without requiring W&B.
+    """
+    result_dump_overwrite: bool = False
+    """When True, overwrite existing dump files instead of raising FileExistsError.
+
+    Useful for intentional reruns; default is fail-loud to prevent accidental overwrites.
+    """
 
     # ---------------- public overridable evaluation methods ----------------
 

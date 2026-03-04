@@ -245,6 +245,7 @@ class FakeEvalResult:
     metrics: dict[str, object]
     artifacts: list[FakeArtifact]
     category_to_identifiers: dict[str, list[str]]
+    eval_metadata: dict[str, typing.Any] = dataclasses.field(default_factory=dict)
 
 
 def build_ai_message(

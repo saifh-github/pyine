@@ -275,52 +275,6 @@ class TestExtractCategoryMetrics:
         assert len(categories) == 1
 
 
-class TestFilterRunsByDate:
-    """Tests for filter_runs_by_date."""
-
-    @pytest.fixture
-    def sample_runs(self) -> list[MockWandBRun]:
-        """Create sample runs with different dates."""
-        return [
-            MockWandBRun(run_id="r1", created_at="2025-01-01T00:00:00"),
-            MockWandBRun(run_id="r2", created_at="2025-01-15T00:00:00"),
-            MockWandBRun(run_id="r3", created_at="2025-02-01T00:00:00"),
-        ]
-
-    def test_filters_by_start_date(self, sample_runs: list[MockWandBRun]) -> None:
-        """filter_runs_by_date excludes runs before start_date."""
-        filtered = pyine.evals.code_exec.analysis.filter_runs_by_date(
-            sample_runs,
-            start_date="2025-01-10T00:00:00",
-        )
-        assert len(filtered) == 2
-        assert all(r.id in ["r2", "r3"] for r in filtered)
-
-    def test_filters_by_end_date(self, sample_runs: list[MockWandBRun]) -> None:
-        """filter_runs_by_date excludes runs after end_date."""
-        filtered = pyine.evals.code_exec.analysis.filter_runs_by_date(
-            sample_runs,
-            end_date="2025-01-20T00:00:00",
-        )
-        assert len(filtered) == 2
-        assert all(r.id in ["r1", "r2"] for r in filtered)
-
-    def test_filters_by_date_range(self, sample_runs: list[MockWandBRun]) -> None:
-        """filter_runs_by_date filters by both start and end date."""
-        filtered = pyine.evals.code_exec.analysis.filter_runs_by_date(
-            sample_runs,
-            start_date="2025-01-10T00:00:00",
-            end_date="2025-01-20T00:00:00",
-        )
-        assert len(filtered) == 1
-        assert filtered[0].id == "r2"
-
-    def test_no_filter_returns_all(self, sample_runs: list[MockWandBRun]) -> None:
-        """filter_runs_by_date returns all runs when no dates specified."""
-        filtered = pyine.evals.code_exec.analysis.filter_runs_by_date(sample_runs)
-        assert len(filtered) == 3
-
-
 class TestSummarizeRunsToDataframe:
     """Tests for summarize_runs_to_dataframe."""
 

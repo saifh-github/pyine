@@ -3,6 +3,7 @@ import collections.abc
 import concurrent.futures
 import copy
 import logging
+import pathlib
 import typing
 
 import datasets as hf_datasets
@@ -18,6 +19,7 @@ import pyine.evals.code_exec.evaluator
 import pyine.evals.code_exec.utils
 import pyine.evals.common
 import pyine.evals.logging
+import pyine.evals.persistence
 import pyine.evals.utils
 import pyine.organisms.datamodules.samples
 import pyine.utils.code.difficulty
@@ -188,6 +190,14 @@ async def evaluate_runnable_model(
                 f"num_attempts_per_sample > 1 requires temperature > 0 for diverse outputs, "
                 f"but detected temperature={detected_temp} on the runnable chain"
             )
+    eval_metadata: dict[str, typing.Any] = {
+        **pyine.evals.common.build_base_eval_metadata(eval_config.eval_type, eval_subset_name),
+        "evaluation_backend": "runnable",
+        "chain_class": pyine.utils.portability.get_fully_qualified_name(type(chain)),
+        "detected_temperature": detected_temp,
+        "eval_config": pyine.utils.portability.make_json_serializable(eval_config),
+        "datamodule_config": pyine.utils.portability.make_json_serializable(datamodule.config),
+    }
     # output parser setup
     output_parser: pyine.utils.parsing.TagsOutputParser | None = None
     parsed_output_store: dict[pyine.evals.code_exec.utils.AttemptKey, pyine.utils.parsing.ParsedOutput] | None = None
@@ -204,10 +214,11 @@ async def evaluate_runnable_model(
         prompt_text_store = {}
         prompt_messages_store = {}
         export_metadata = {
-            "chain_class": pyine.utils.portability.get_fully_qualified_name(type(chain)),
-            "detected_temperature": detected_temp,
-            "eval_config": pyine.utils.portability.make_json_serializable(eval_config),
-            "datamodule_config": pyine.utils.portability.make_json_serializable(datamodule.config),
+            "chain_class": eval_metadata["chain_class"],
+            "detected_temperature": eval_metadata["detected_temperature"],
+            "eval_config": eval_metadata["eval_config"],
+            "datamodule_config": eval_metadata["datamodule_config"],
+            "reprod_metadata": eval_metadata["reprod_metadata"],
         }
     retry_config = eval_config.eval_runnable_config.with_retry_config
     if retry_config is not None:
@@ -351,8 +362,11 @@ async def evaluate_runnable_model(
         prompt_text_store=prompt_text_store,
         prompt_messages_store=prompt_messages_store,
         export_metadata=export_metadata,
+        eval_metadata=eval_metadata,
         eval_subset_name=eval_subset_name,
         parsed_output_store=parsed_output_store,
+        result_dump_dir=eval_config.result_dump_dir,
+        result_dump_overwrite=eval_config.result_dump_overwrite,
     )
 
 
@@ -452,6 +466,14 @@ async def evaluate_hf_model(
     if getattr(model, "gradient_checkpointing", False):
         logger.debug("disabling gradient checkpointing for generation evals")
         model.gradient_checkpointing_disable()
+    eval_metadata: dict[str, typing.Any] = {
+        **pyine.evals.common.build_base_eval_metadata(eval_config.eval_type, eval_subset_name),
+        "evaluation_backend": "hf",
+        "model_name": getattr(model.config, "name_or_path", type(model).__qualname__),
+        "generation_config": gen_config.to_dict(),
+        "eval_config": pyine.utils.portability.make_json_serializable(eval_config),
+        "datamodule_config": pyine.utils.portability.make_json_serializable(datamodule.config),
+    }
     _log(f"preparing {eval_subset_name} prompts with chat template for text generation")
     prompts_ds = datamodule.get_hf_messages_dataset(
         subset_name=eval_subset_name,
@@ -504,10 +526,11 @@ async def evaluate_hf_model(
     if eval_config.disk_export_config is not None:
         prompt_text_store = {}
         export_metadata = {
-            "model_name": model.config.name_or_path,
-            "generation_config": gen_config.to_dict(),
-            "eval_config": pyine.utils.portability.make_json_serializable(eval_config),
-            "datamodule_config": pyine.utils.portability.make_json_serializable(datamodule.config),
+            "model_name": eval_metadata["model_name"],
+            "generation_config": eval_metadata["generation_config"],
+            "eval_config": eval_metadata["eval_config"],
+            "datamodule_config": eval_metadata["datamodule_config"],
+            "reprod_metadata": eval_metadata["reprod_metadata"],
         }
     _log("launching generation results analysis")
     wrapped_generation_results = tqdm.tqdm(
@@ -582,8 +605,11 @@ async def evaluate_hf_model(
         disk_export_config=eval_config.disk_export_config,
         prompt_text_store=prompt_text_store,
         export_metadata=export_metadata,
+        eval_metadata=eval_metadata,
         eval_subset_name=eval_subset_name,
         parsed_output_store=parsed_output_store,
+        result_dump_dir=eval_config.result_dump_dir,
+        result_dump_overwrite=eval_config.result_dump_overwrite,
     )
 
 
@@ -600,9 +626,12 @@ async def finalize_evaluation_results(
     prompt_text_store: dict[str, str] | None = None,
     prompt_messages_store: dict[str, list[dict[str, typing.Any]]] | None = None,
     export_metadata: dict[str, typing.Any] | None = None,
+    eval_metadata: dict[str, typing.Any] | None = None,
     eval_subset_name: str | None = None,
     parsed_output_store: dict[pyine.evals.code_exec.utils.AttemptKey, pyine.utils.parsing.ParsedOutput] | None = None,
     category_to_identifiers_override: dict[str, list[str]] | None = None,
+    result_dump_dir: pathlib.Path | None = None,
+    result_dump_overwrite: bool = False,
 ) -> pyine.evals.code_exec.utils.CodeExecEvalResult:
     """Finalizes the evaluation results by aggregating metrics and preparing captured prediction artifacts."""
     difficulty_scores: dict[str, float | None] | None = None
@@ -689,8 +718,16 @@ async def finalize_evaluation_results(
             store_aggregated_metrics=disk_export_config.store_aggregated_metrics,
         )
         disk_logger.close()
-    return pyine.evals.code_exec.utils.CodeExecEvalResult(
+    result = pyine.evals.code_exec.utils.CodeExecEvalResult(
         metrics=output_metrics,
         artifacts=prediction_artifacts,
         category_to_identifiers=category_to_identifiers,
+        eval_metadata=eval_metadata or {},
     )
+    pyine.evals.persistence.maybe_dump_eval_result(
+        result=result,
+        dump_dir=result_dump_dir,
+        eval_subset_name=eval_subset_name,
+        overwrite=result_dump_overwrite,
+    )
+    return result

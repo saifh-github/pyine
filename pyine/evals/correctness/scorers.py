@@ -63,12 +63,14 @@ class ProbeScorer:
         assert all(isinstance(t, str) for t in texts), f"'{self._text_field}' must be str on all records"
         all_scores: list[float] = []
         all_costs: list[float] = []
+        all_metadata: dict[correctness_types.ScoredAttemptKey, dict[str, typing.Any]] = {}
         device = next(self._probe.parameters()).device
         self._probe.eval()
         self._model.eval()
         with torch.no_grad():
             for batch_start in range(0, len(texts), self._batch_size):
                 batch_texts = texts[batch_start : batch_start + self._batch_size]
+                batch_records = records[batch_start : batch_start + self._batch_size]
                 encoded = self._tokenizer(
                     batch_texts,
                     return_tensors="pt",
@@ -93,7 +95,25 @@ class ProbeScorer:
                         score = torch.sigmoid(logits).squeeze()  # pyright: ignore[reportUnknownMemberType]
                     all_costs.append(float(flop_counter.get_total_flops()))
                     all_scores.append(float(score))
-        return correctness_types.ScoringResult(scores=all_scores, verification_costs=all_costs)
+                    sample_record = batch_records[sample_idx]
+                    draw_index = batch_start + sample_idx
+                    attempt_key: correctness_types.ScoredAttemptKey = (
+                        sample_record.sample_id,
+                        sample_record.attempt_index,
+                        draw_index,
+                    )
+                    sample_mask_tensor = typing.cast("torch.Tensor", sample_mask)
+                    input_token_count = int(sample_mask_tensor.to(dtype=torch.int64).sum().item())
+                    all_metadata[attempt_key] = {
+                        "input_token_count": input_token_count,  # lightweight forensic context
+                        # (we could add more here, but there's not much to actually add in this simple wrapper)
+                        # (note: we DO NOT add record data purposefully, as that is gathered at the run level)
+                    }
+        return correctness_types.ScoringResult(
+            scores=all_scores,
+            verification_costs=all_costs,
+            attempt_metadata=all_metadata,
+        )
 
     def get_metadata(self) -> dict[str, typing.Any]:
         """Return probe configuration details."""
@@ -143,12 +163,13 @@ class LLMClassifierScorer:
         assert all(isinstance(t, str) for t in texts), f"'{self._text_field}' must be str on all records"
         all_scores: list[float] = []
         all_costs: list[float] = []
+        all_metadata: dict[correctness_types.ScoredAttemptKey, dict[str, typing.Any]] = {}
         device = next(self._model.parameters()).device  # type: ignore[reportUnknownMemberType]
         self._model.eval()
         # each sample is processed individually to get exact per-sample FLOP counts
         # (full classifier forward + softmax; no padding overhead)
         with torch.no_grad():
-            for text in texts:
+            for draw_index, (record, text) in enumerate(zip(records, texts, strict=True)):
                 encoded = self._tokenizer(
                     text,
                     return_tensors="pt",
@@ -164,7 +185,19 @@ class LLMClassifierScorer:
                 all_costs.append(float(flop_counter.get_total_flops()))
                 positive_prob = probs[:, 1].item()  # pyright: ignore[reportUnknownMemberType]
                 all_scores.append(float(positive_prob))
-        return correctness_types.ScoringResult(scores=all_scores, verification_costs=all_costs)
+                attempt_key: correctness_types.ScoredAttemptKey = (record.sample_id, record.attempt_index, draw_index)
+                attention_mask_tensor = typing.cast("torch.Tensor", attention_mask)
+                input_token_count = int(attention_mask_tensor.to(dtype=torch.int64).sum().item())
+                all_metadata[attempt_key] = {
+                    "input_token_count": input_token_count,  # lightweight forensic context
+                    # (we could add more here, but there's not much to actually add in this simple wrapper)
+                    # (note: we DO NOT add record data purposefully, as that is gathered at the run level)
+                }
+        return correctness_types.ScoringResult(
+            scores=all_scores,
+            verification_costs=all_costs,
+            attempt_metadata=all_metadata,
+        )
 
     def get_metadata(self) -> dict[str, typing.Any]:
         """Return classifier model details."""

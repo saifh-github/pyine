@@ -16,6 +16,7 @@ import pyine.evals.correctness.datamodule as correctness_datamodule_mod
 import pyine.evals.correctness.datamodule_configs as correctness_datamodule_configs
 import pyine.evals.correctness.metrics as correctness_metrics
 import pyine.evals.correctness.types as correctness_types
+import pyine.evals.persistence
 import pyine.evals.utils
 
 
@@ -170,13 +171,20 @@ class CorrectnessEvalsConfig(pyine.evals.common.BaseEvalsConfig):
             guardrails = list(wrapped_model)  # type: ignore[reportUnknownArgumentType]
         else:
             guardrails = [wrapped_model]
-        return await correctness_impl.evaluate_guardrail_replicas(  # type: ignore[reportArgumentType]
+        result = await correctness_impl.evaluate_guardrail_replicas(  # type: ignore[reportArgumentType]
             config=self,
             guardrails=guardrails,
             datamodule=datamodule,
             eval_subset_name=eval_subset_name,
             verbose=verbose,
         )
+        pyine.evals.persistence.maybe_dump_eval_result(
+            result=result,
+            dump_dir=self.result_dump_dir,
+            eval_subset_name=eval_subset_name,
+            overwrite=self.result_dump_overwrite,
+        )
+        return result
 
     @typing.override
     def define_metrics_for_wandb(

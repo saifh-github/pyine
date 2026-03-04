@@ -16,12 +16,14 @@ import pyine.guardrails.probes.base
 def _make_record(
     sample_id: str = "s1",
     label: bool = True,
+    attempt_index: int = 0,
+    model_output: str = "hello world",
 ) -> correctness_types.EvalRecord:
     return correctness_types.EvalRecord(
         sample_id=sample_id,
         problem_id="p1",
-        attempt_index=0,
-        model_output="hello world",
+        attempt_index=attempt_index,
+        model_output=model_output,
         final_answer="42",
         expected_output="expected",
         label=label,
@@ -73,6 +75,150 @@ class _MockModel(torch.nn.Module):
         return type("Output", (), {"last_hidden_state": hidden_states})()
 
 
+class _FastTokenizer:
+    """Minimal tokenizer used by fast tests (no network/model downloads)."""
+
+    def __call__(
+        self,
+        texts: str | list[str],
+        return_tensors: str = "pt",
+        padding: bool = False,
+        truncation: bool = True,
+        max_length: int | None = None,
+    ) -> dict[str, torch.Tensor]:
+        assert return_tensors == "pt"
+        assert truncation
+        text_list = [texts] if isinstance(texts, str) else texts
+        token_counts = [
+            max(1, min(len(text.split()), max_length if max_length is not None else len(text.split())))
+            for text in text_list
+        ]
+        if padding:
+            seq_len = max(token_counts)
+        else:
+            seq_len = token_counts[0]
+        input_ids = torch.zeros((len(text_list), seq_len), dtype=torch.int64)
+        attention_mask = torch.zeros_like(input_ids)
+        for text_idx, token_count in enumerate(token_counts):
+            attention_mask[text_idx, :token_count] = 1
+        return {"input_ids": input_ids, "attention_mask": attention_mask}
+
+
+class _FastBackboneModel(torch.nn.Module):
+    """Small model that records input shapes for the fake activation extractor."""
+
+    def __init__(
+        self,
+        hidden_size: int = 8,
+    ) -> None:
+        super().__init__()  # pyright: ignore[reportUnknownMemberType]
+        self._dummy = torch.nn.Parameter(torch.zeros(1))  # pyright: ignore[reportUnknownMemberType]
+        self.config = type("Config", (), {"hidden_size": hidden_size})()
+        self.last_input_shape: tuple[int, int] = (1, 1)
+
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        **kwargs: typing.Any,
+    ) -> typing.Any:
+        del attention_mask, kwargs
+        batch_size, seq_len = tuple(input_ids.shape)
+        self.last_input_shape = (int(batch_size), int(seq_len))
+        hidden_states = torch.zeros(batch_size, seq_len, self.config.hidden_size)  # pyright: ignore[reportUnknownMemberType]
+        return type("Output", (), {"last_hidden_state": hidden_states})()
+
+
+class _FastExtractor:
+    """Fake activation extractor that returns deterministic per-layer tensors."""
+
+    def __init__(
+        self,
+        model: _FastBackboneModel,
+        layer: int,
+    ) -> None:
+        self._model = model
+        self._layer = layer
+
+    def get_activations(
+        self,
+    ) -> dict[int, torch.Tensor]:
+        batch_size, seq_len = self._model.last_input_shape
+        activations = torch.zeros(batch_size, seq_len, self._model.config.hidden_size)  # pyright: ignore[reportUnknownMemberType]
+        return {self._layer: activations}
+
+
+class _FastClassifierModel(torch.nn.Module):
+    """Small binary classifier used by fast scorer tests."""
+
+    def __init__(self) -> None:
+        super().__init__()  # pyright: ignore[reportUnknownMemberType]
+        self._dummy = torch.nn.Parameter(torch.zeros(1))  # pyright: ignore[reportUnknownMemberType]
+        self.config = type("Config", (), {"name_or_path": "fast-classifier"})()
+
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        **kwargs: typing.Any,
+    ) -> typing.Any:
+        del input_ids, kwargs
+        token_counts = attention_mask.to(dtype=torch.float32).sum(dim=1, keepdim=True)
+        logits = torch.cat([-token_counts, token_counts], dim=1)  # higher token count => higher positive score
+        return type("Output", (), {"logits": logits})()
+
+
+class TestScorerAttemptMetadataFast:
+    def test_probe_scorer_reports_attempt_metadata(self) -> None:
+        model = _FastBackboneModel(hidden_size=8)
+        probe_config = pyine.guardrails.probes.base.ProbeConfig(
+            name="test_probe",
+            architecture="mean_pool",
+            layer=1,
+            hidden_dim=8,
+        )
+        scorer = correctness_scorers.ProbeScorer(
+            probe=_MockProbe(probe_config),
+            probe_config=probe_config,
+            model=model,
+            tokenizer=_FastTokenizer(),
+            extractor=_FastExtractor(model, layer=1),  # type: ignore[arg-type]
+            batch_size=2,
+            max_seq_length=128,
+            text_field="model_output",
+        )
+        records = [
+            _make_record(sample_id="short", model_output="hello"),
+            _make_record(sample_id="long", model_output="hello this is a longer sequence"),
+        ]
+        result = scorer.score_records(records)
+        assert result.attempt_metadata is not None
+        assert set(result.attempt_metadata.keys()) == {("short", 0, 0), ("long", 0, 1)}
+        assert (
+            result.attempt_metadata[("short", 0, 0)]["input_token_count"]
+            < result.attempt_metadata[("long", 0, 1)]["input_token_count"]
+        )
+
+    def test_classifier_scorer_reports_attempt_metadata(self) -> None:
+        scorer = correctness_scorers.LLMClassifierScorer(
+            model=_FastClassifierModel(),  # type: ignore[arg-type]
+            tokenizer=_FastTokenizer(),  # type: ignore[arg-type]
+            max_seq_length=128,
+            text_field="model_output",
+        )
+        records = [
+            _make_record(sample_id="short", model_output="hello"),
+            _make_record(sample_id="long", model_output="hello this is a longer sequence"),
+        ]
+        result = scorer.score_records(records)
+        assert result.attempt_metadata is not None
+        assert set(result.attempt_metadata.keys()) == {("short", 0, 0), ("long", 0, 1)}
+        assert (
+            result.attempt_metadata[("short", 0, 0)]["input_token_count"]
+            < result.attempt_metadata[("long", 0, 1)]["input_token_count"]
+        )
+
+
 @pytest.mark.slow
 class TestProbeScorer:
     def test_produces_correct_number_of_scores(self) -> None:
@@ -106,6 +252,9 @@ class TestProbeScorer:
         assert result.verification_costs is not None
         assert len(result.verification_costs) == 5
         assert all(cost >= 0.0 for cost in result.verification_costs)
+        assert result.attempt_metadata is not None
+        assert len(result.attempt_metadata) == 5
+        assert all("input_token_count" in metadata for metadata in result.attempt_metadata.values())
         extractor.remove_hooks()
 
     def test_get_metadata_returns_dict(self) -> None:
@@ -181,6 +330,9 @@ class TestLLMClassifierScorer:
         assert result.verification_costs is not None
         assert len(result.verification_costs) == 6
         assert all(cost > 0.0 for cost in result.verification_costs)
+        assert result.attempt_metadata is not None
+        assert len(result.attempt_metadata) == 6
+        assert all("input_token_count" in metadata for metadata in result.attempt_metadata.values())
 
     def test_get_metadata_returns_dict(self) -> None:
         model = transformers.AutoModelForSequenceClassification.from_pretrained("prajjwal1/bert-tiny", num_labels=2)
@@ -232,3 +384,8 @@ class TestLLMClassifierScorer:
         result = scorer.score_records([short_record, long_record])
         assert result.verification_costs is not None
         assert result.verification_costs[1] > result.verification_costs[0]
+        assert result.attempt_metadata is not None
+        assert (
+            result.attempt_metadata[("short", 0, 0)]["input_token_count"]
+            < result.attempt_metadata[("long", 0, 1)]["input_token_count"]
+        )

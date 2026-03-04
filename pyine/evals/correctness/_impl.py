@@ -12,6 +12,8 @@ import pyine.evals.common
 import pyine.evals.correctness.calibration as correctness_calibration
 import pyine.evals.correctness.metrics as correctness_metrics
 import pyine.evals.correctness.types as correctness_types
+import pyine.evals.persistence
+import pyine.utils.portability
 
 if typing.TYPE_CHECKING:
     import pyine.evals.correctness.configs as correctness_configs
@@ -44,6 +46,10 @@ async def evaluate_guardrail_replicas(
     verbose: bool = False,
 ) -> CorrectnessEvalResult:
     """Run the full guardrail correctness evaluation pipeline.
+
+    Does not auto-dump results to disk; callers that need persistence should use
+    ``persistence.save_eval_result`` after receiving the result, or call via
+    ``evaluate_guardrail_types`` / ``evaluate_wrapped_model`` which handle dumping.
 
     Args:
         config: Correctness evaluation configuration.
@@ -87,6 +93,13 @@ async def evaluate_guardrail_replicas(
         f"{len(calibration_records)} calibration records"
     )
     eval_class_balance = correctness_metrics.compute_class_balance(eval_records)
+    attempt_records_by_key = _build_attempt_records_by_key(eval_records)
+    eval_metadata: dict[str, typing.Any] = {
+        **pyine.evals.common.build_base_eval_metadata(config.eval_type, eval_subset_name),
+        "eval_config": pyine.utils.portability.make_json_serializable(config),
+        "datamodule_config": pyine.utils.portability.make_json_serializable(datamodule.config),
+        "num_guardrail_replicas": len(guardrails),
+    }
 
     # run each guardrail that we were provided (the input is a sequence of GuardrailScorer replicas)
     per_run_results: list[correctness_types.SingleRunResult] = []
@@ -116,10 +129,13 @@ async def evaluate_guardrail_replicas(
         guardrail_splits=guardrail_splits,
         eval_class_balance=eval_class_balance,
         config=config,
+        attempt_records_by_key=attempt_records_by_key,
     )
+    eval_metadata["guardrail_metadata_by_run"] = [result.guardrail_metadata for result in per_run_results]
     return CorrectnessEvalResult(
         metrics=aggregated.to_flat_dict(),
         aggregated=aggregated,
+        eval_metadata=eval_metadata,
     )
 
 
@@ -129,6 +145,36 @@ class _SingleRunOutput(typing.NamedTuple):
     result: correctness_types.SingleRunResult
     eval_scores: np.ndarray[typing.Any, np.dtype[np.floating[typing.Any]]]
     thresholds: dict[float, float]
+
+
+def _build_attempt_records_by_key(
+    records: list[correctness_types.EvalRecord],
+) -> dict[correctness_types.ScoredAttemptKey, dict[str, typing.Any]]:
+    """Build a shared scored-attempt->record map for notebook inspection."""
+    attempt_records_by_key: dict[correctness_types.ScoredAttemptKey, dict[str, typing.Any]] = {}
+    for draw_index, record in enumerate(records):
+        attempt_key: correctness_types.ScoredAttemptKey = (record.sample_id, record.attempt_index, draw_index)
+        attempt_records_by_key[attempt_key] = dict(record.record)
+    return attempt_records_by_key
+
+
+def _validate_attempt_metadata_alignment(
+    records: list[correctness_types.EvalRecord],
+    scoring_result: correctness_types.ScoringResult,
+    split_name: str,
+) -> None:
+    """Validate scorer-provided metadata keys align exactly with the input records."""
+    if scoring_result.attempt_metadata is None:
+        return
+    expected_keys = {(record.sample_id, record.attempt_index, draw_index) for draw_index, record in enumerate(records)}
+    actual_keys = set(scoring_result.attempt_metadata.keys())
+    if actual_keys != expected_keys:
+        missing = sorted(expected_keys - actual_keys)
+        extras = sorted(actual_keys - expected_keys)
+        raise ValueError(
+            f"scorer attempt_metadata keys do not align with {split_name} records; "
+            f"missing={missing[:5]}, extras={extras[:5]}"
+        )
 
 
 def _evaluate_single_run(
@@ -155,15 +201,54 @@ def _evaluate_single_run(
             f"scorer returned {len(calibration_result.scores)} scores for "
             f"{len(calibration_records)} calibration records"
         )
+    _validate_attempt_metadata_alignment(calibration_records, calibration_result, "calibration")
     eval_result = guardrail.score_records(eval_records)
     if len(eval_result.scores) != len(eval_records):
         raise ValueError(f"scorer returned {len(eval_result.scores)} scores for {len(eval_records)} eval records")
+    _validate_attempt_metadata_alignment(eval_records, eval_result, "eval")
     metadata = guardrail.get_metadata()
     cost_unit = guardrail.get_verification_cost_unit()
     calibration_scores = np.array(calibration_result.scores, dtype=np.float64)
-    calibration_labels = np.array([rec.label for rec in calibration_records], dtype=np.bool_)
+    calibration_labels = np.array([record.label for record in calibration_records], dtype=np.bool_)
     eval_scores = np.array(eval_result.scores, dtype=np.float64)
-    eval_labels = np.array([rec.label for rec in eval_records], dtype=np.bool_)
+    eval_labels = np.array([record.label for record in eval_records], dtype=np.bool_)
+    eval_costs: typing.Sequence[float | None]
+    if eval_result.verification_costs is None:
+        eval_costs = [None for _ in eval_records]
+    else:
+        eval_costs = eval_result.verification_costs
+    attempt_records: list[correctness_types.AttemptInspectionRecord] = []
+    for draw_index, (eval_record, score, verification_cost) in enumerate(
+        zip(
+            eval_records,
+            eval_result.scores,
+            eval_costs,
+            strict=True,
+        ),
+    ):
+        attempt_key: correctness_types.ScoredAttemptKey = (
+            eval_record.sample_id,
+            eval_record.attempt_index,
+            draw_index,
+        )
+        curr_attempt_metadata = None
+        if eval_result.attempt_metadata is not None:
+            curr_attempt_metadata = eval_result.attempt_metadata.get(attempt_key)
+        attempt_records.append(
+            correctness_types.AttemptInspectionRecord(
+                sample_id=eval_record.sample_id,
+                problem_id=eval_record.problem_id,
+                attempt_index=eval_record.attempt_index,
+                draw_index=draw_index,
+                label=eval_record.label,
+                score=score,
+                verification_cost=verification_cost,
+                final_answer=eval_record.final_answer,
+                code_type=eval_record.code_type,
+                difficulty_score=eval_record.difficulty_score,
+                attempt_metadata=curr_attempt_metadata,
+            )
+        )
     # calibrate thresholds and compute thresholded metrics
     thresholds: dict[float, float] = {}
     attempt_metrics: dict[float, correctness_types.ThresholdedMetrics] = {}
@@ -233,6 +318,8 @@ def _evaluate_single_run(
     )
     run_result = correctness_types.SingleRunResult(
         guardrail_metadata=metadata,
+        attempt_metadata=eval_result.attempt_metadata,
+        attempt_records=attempt_records,
         threshold_free=threshold_free,
         attempt_metrics=attempt_metrics,
         sample_metrics=sample_metrics,
@@ -252,6 +339,7 @@ def _aggregate_runs(
     guardrail_splits: correctness_splits.GuardrailSplits,
     eval_class_balance: correctness_types.ClassBalanceStats,
     config: correctness_configs.CorrectnessEvalsConfig,
+    attempt_records_by_key: dict[correctness_types.ScoredAttemptKey, dict[str, typing.Any]] | None = None,
 ) -> correctness_types.AggregatedResult:
     """Aggregate results across R independent guardrail runs.
 
@@ -263,6 +351,7 @@ def _aggregate_runs(
         guardrail_splits: The split used for all runs.
         eval_class_balance: Class balance stats for the evaluated subset.
         config: Evaluation configuration.
+        attempt_records_by_key: Optional shared raw record payloads keyed by attempt.
 
     Returns:
         AggregatedResult with cross-run statistics and hierarchical bootstrap CIs.
@@ -278,87 +367,24 @@ def _aggregate_runs(
                 _collect_scalar(f"tpr_at_{fpr_key}", tpr_val, metric_values)
         for target_fpr in config.target_fpr_values:
             fpr_key = correctness_metrics.format_fpr_key(target_fpr)
-            att = run_result.attempt_metrics.get(target_fpr)
-            if att is not None:
-                _collect_scalar(f"{fpr_key}/tpr", att.tpr, metric_values)
-                _collect_scalar(f"{fpr_key}/fpr", att.fpr, metric_values)
-                _collect_scalar(f"{fpr_key}/fnr", att.fnr, metric_values)
-                _collect_scalar(f"{fpr_key}/precision", att.precision, metric_values)
-                _collect_scalar(f"{fpr_key}/npv", att.npv, metric_values)
-            samp = run_result.sample_metrics.get(target_fpr)
-            if samp is not None:
-                _collect_scalar(f"{fpr_key}/base_pass_rate", samp.base_pass_rate, metric_values)
-                _collect_scalar(f"{fpr_key}/guarded_pass_rate", samp.guarded_pass_rate, metric_values)
-                _collect_scalar(f"{fpr_key}/unsafe_slip_rate", samp.unsafe_slip_rate, metric_values)
-                _collect_scalar(f"{fpr_key}/total_block_rate", samp.total_block_rate, metric_values)
-                _collect_scalar(f"{fpr_key}/best_of_k_success_rate", samp.best_of_k_success_rate, metric_values)
-                _collect_scalar(f"{fpr_key}/cons_pass_rate", samp.cons_pass_rate, metric_values)
-                _collect_scalar(f"{fpr_key}/cons_unsafe_slip_rate", samp.cons_unsafe_slip_rate, metric_values)
-                _collect_scalar(
-                    f"{fpr_key}/cons_justified_reject_rate",
-                    samp.cons_justified_reject_rate,
-                    metric_values,
-                )
+            attempt = run_result.attempt_metrics.get(target_fpr)
+            if attempt is not None:
+                _collect_thresholded_metrics(fpr_key, attempt, metric_values)
+            sample = run_result.sample_metrics.get(target_fpr)
+            if sample is not None:
+                _collect_sample_level_metrics(fpr_key, sample, metric_values)
         # category metrics
         for cat_name, cat_result in run_result.category_results.items():
             safe_cat = cat_name.replace("/", "_")
             _collect_scalar(f"category/{safe_cat}/auroc", cat_result.threshold_free.auroc, metric_values)
-            _collect_scalar(
-                f"category/{safe_cat}/average_precision",
-                cat_result.threshold_free.average_precision,
-                metric_values,
-            )
             for target_fpr in config.target_fpr_values:
                 fpr_key = correctness_metrics.format_fpr_key(target_fpr)
-                cat_att = cat_result.attempt_metrics.get(target_fpr)
-                if cat_att is not None:
-                    _collect_scalar(f"category/{safe_cat}/{fpr_key}/tpr", cat_att.tpr, metric_values)
-                    _collect_scalar(f"category/{safe_cat}/{fpr_key}/fpr", cat_att.fpr, metric_values)
-                    _collect_scalar(f"category/{safe_cat}/{fpr_key}/fnr", cat_att.fnr, metric_values)
-                    _collect_scalar(f"category/{safe_cat}/{fpr_key}/precision", cat_att.precision, metric_values)
-                    _collect_scalar(f"category/{safe_cat}/{fpr_key}/npv", cat_att.npv, metric_values)
-                cat_samp = cat_result.sample_metrics.get(target_fpr)
-                if cat_samp is not None:
-                    _collect_scalar(
-                        f"category/{safe_cat}/{fpr_key}/base_pass_rate",
-                        cat_samp.base_pass_rate,
-                        metric_values,
-                    )
-                    _collect_scalar(
-                        f"category/{safe_cat}/{fpr_key}/guarded_pass_rate",
-                        cat_samp.guarded_pass_rate,
-                        metric_values,
-                    )
-                    _collect_scalar(
-                        f"category/{safe_cat}/{fpr_key}/unsafe_slip_rate",
-                        cat_samp.unsafe_slip_rate,
-                        metric_values,
-                    )
-                    _collect_scalar(
-                        f"category/{safe_cat}/{fpr_key}/total_block_rate",
-                        cat_samp.total_block_rate,
-                        metric_values,
-                    )
-                    _collect_scalar(
-                        f"category/{safe_cat}/{fpr_key}/best_of_k_success_rate",
-                        cat_samp.best_of_k_success_rate,
-                        metric_values,
-                    )
-                    _collect_scalar(
-                        f"category/{safe_cat}/{fpr_key}/cons_pass_rate",
-                        cat_samp.cons_pass_rate,
-                        metric_values,
-                    )
-                    _collect_scalar(
-                        f"category/{safe_cat}/{fpr_key}/cons_unsafe_slip_rate",
-                        cat_samp.cons_unsafe_slip_rate,
-                        metric_values,
-                    )
-                    _collect_scalar(
-                        f"category/{safe_cat}/{fpr_key}/cons_justified_reject_rate",
-                        cat_samp.cons_justified_reject_rate,
-                        metric_values,
-                    )
+                cat_attempt = cat_result.attempt_metrics.get(target_fpr)
+                if cat_attempt is not None:
+                    _collect_thresholded_metrics(f"category/{safe_cat}/{fpr_key}", cat_attempt, metric_values)
+                cat_sample = cat_result.sample_metrics.get(target_fpr)
+                if cat_sample is not None:
+                    _collect_sample_level_metrics(f"category/{safe_cat}/{fpr_key}", cat_sample, metric_values)
         # cost metrics per target_fpr
         for target_fpr in config.target_fpr_values:
             fpr_key = correctness_metrics.format_fpr_key(target_fpr)
@@ -421,6 +447,7 @@ def _aggregate_runs(
         split_summary=guardrail_splits.to_summary(),
         class_balance=eval_class_balance,
         per_run=per_run_results,
+        attempt_records_by_key=attempt_records_by_key,
         cross_run_mean=cross_run_mean,
         cross_run_std=cross_run_std,
         cross_run_p5=cross_run_p5,
@@ -440,6 +467,48 @@ def _collect_scalar(
     if name not in target:
         target[name] = []
     target[name].append(value)
+
+
+def _mean_of_non_none(values: list[float | None]) -> float | None:
+    """Return the mean of non-None values, or None if all values are None."""
+    valid = [val for val in values if val is not None]
+    return float(np.mean(valid)) if valid else None
+
+
+_THRESHOLDED_METRIC_FIELDS: tuple[str, ...] = ("tpr", "fpr", "fnr", "precision", "npv")
+"""ThresholdedMetrics field names collected during cross-run aggregation."""
+
+_SAMPLE_LEVEL_METRIC_FIELDS: tuple[str, ...] = (
+    "base_pass_rate",
+    "guarded_pass_rate",
+    "unsafe_slip_rate",
+    "total_block_rate",
+    "best_of_k_success_rate",
+    "cons_pass_rate",
+    "cons_unsafe_slip_rate",
+    "cons_justified_reject_rate",
+)
+"""SampleLevelMetrics field names collected during cross-run aggregation."""
+
+
+def _collect_thresholded_metrics(
+    prefix: str,
+    thresholded: correctness_types.ThresholdedMetrics,
+    target: dict[str, list[float | None]],
+) -> None:
+    """Collect all thresholded metric fields into the target dict."""
+    for field_name in _THRESHOLDED_METRIC_FIELDS:
+        _collect_scalar(f"{prefix}/{field_name}", getattr(thresholded, field_name), target)
+
+
+def _collect_sample_level_metrics(
+    prefix: str,
+    sample: correctness_types.SampleLevelMetrics,
+    target: dict[str, list[float | None]],
+) -> None:
+    """Collect all sample-level metric fields into the target dict."""
+    for field_name in _SAMPLE_LEVEL_METRIC_FIELDS:
+        _collect_scalar(f"{prefix}/{field_name}", getattr(sample, field_name), target)
 
 
 def _aggregate_difficulty_stats(
@@ -538,11 +607,6 @@ def _aggregate_cost_stats(
                 f"cost_unit mismatch across runs at target_fpr={target_fpr}: {cost_units}; "
                 f"all guardrail scorers must report the same cost unit"
             )
-
-        def _mean_of_non_none(values: list[float | None]) -> float | None:
-            valid = [val for val in values if val is not None]
-            return float(np.mean(valid)) if valid else None
-
         aggregated[target_fpr] = correctness_types.VerificationCostStats(
             target_fpr=target_fpr,
             cost_unit=cost_entries[0].cost_unit,
@@ -591,6 +655,44 @@ async def evaluate_guardrail_types(
     Returns:
         Mapping from type_name to its CorrectnessEvalResult.
     """
+    if not guardrails_by_type:
+        raise ValueError("guardrails_by_type is empty; nothing to evaluate")
+    if not eval_subset_name or not eval_subset_name.strip():
+        raise ValueError("eval_subset_name must be set (non-empty, non-whitespace)")
+    for type_name in guardrails_by_type:
+        if not type_name or not type_name.strip():
+            raise ValueError("guardrail type name must not be empty or whitespace")
+        lower = type_name.lower()
+        if any(lower.startswith(prefix) for prefix in correctness_types.RESERVED_TYPE_NAME_PREFIXES):
+            raise ValueError(
+                f"guardrail type name {type_name!r} collides with reserved metric namespace prefix; "
+                "choose a different name"
+            )
+        if lower in correctness_types.RESERVED_TYPE_NAME_EXACT:
+            raise ValueError(
+                f"guardrail type name {type_name!r} collides with reserved metric key; choose a different name"
+            )
+        if "/" in type_name:
+            raise ValueError(
+                f"guardrail type name {type_name!r} contains '/' which would create ambiguous W&B key paths; "
+                "choose a different name"
+            )
+    # pre-validate dump paths (including sanitization), and detect filename collisions before eval work
+    if config.result_dump_dir is not None:
+        seen_paths: dict[str, str] = {}  # normalized filename -> original type_name
+        for type_name in guardrails_by_type:
+            dump_path = pyine.evals.persistence.build_result_dump_path(
+                config.result_dump_dir,
+                eval_subset_name,
+                type_name=type_name,
+            )
+            normalized_name = dump_path.name.casefold()
+            if normalized_name in seen_paths:
+                raise ValueError(
+                    f"guardrail type names {seen_paths[normalized_name]!r} and {type_name!r} produce the same "
+                    f"dump filename '{dump_path.name}' after sanitization; use distinct type names"
+                )
+            seen_paths[normalized_name] = type_name
     results: dict[str, CorrectnessEvalResult] = {}
     for type_name, replicas in guardrails_by_type.items():
         if not replicas:
@@ -603,9 +705,26 @@ async def evaluate_guardrail_types(
             eval_subset_name=eval_subset_name,
             verbose=verbose,
         )
-        results[type_name] = result
+        result = result.model_copy(
+            update={
+                "eval_metadata": {
+                    **result.eval_metadata,
+                    "guardrail_type_name": type_name,
+                }
+            }
+        )
         if wandb_run is not None:
             type_prefix = f"benchmark/{eval_subset_name}/{type_name}"
             for metric_name, metric_val in result.metrics.items():
                 wandb_run.summary[f"{type_prefix}/{metric_name}"] = metric_val  # type: ignore[reportUnknownMemberType]
+        results[type_name] = result
+        pyine.evals.persistence.maybe_dump_eval_result(
+            result=result,
+            dump_dir=config.result_dump_dir,
+            eval_subset_name=eval_subset_name,
+            type_name=type_name,
+            overwrite=config.result_dump_overwrite,
+        )
+    if wandb_run is not None:
+        wandb_run.summary[f"benchmark/{eval_subset_name}/_guardrail_type_names"] = sorted(results.keys())  # type: ignore[reportUnknownMemberType]
     return results

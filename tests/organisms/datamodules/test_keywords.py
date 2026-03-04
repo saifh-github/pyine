@@ -1600,8 +1600,10 @@ def test_cluster_cache_deterministic() -> None:
         update={
             "max_solution_count": 50,
             "keyword": "result",
-            "min_samples_with_keyword": 1,
-            "min_samples_without_keyword": 1,
+            # this test validates cluster-cache determinism, not eval subset balancing.
+            # keep thresholds at 0 so dataset split drift cannot make the test fail spuriously.
+            "min_samples_with_keyword": 0,
+            "min_samples_without_keyword": 0,
         }
     )
     dm1 = config1.instantiate_datamodule(verbose=True)

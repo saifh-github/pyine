@@ -109,10 +109,8 @@ class RecordResamplingConfig(pydantic.BaseModel):
             return value
         if not value:
             raise ValueError("code_type_proportions must be non-empty when set")
-        import math
-
         for key, weight in value.items():
-            if not math.isfinite(weight) or weight <= 0:
+            if not np.isfinite(weight) or weight <= 0:
                 raise ValueError(
                     f"code_type_proportions values must be finite and positive, got {weight} for key {key!r}"
                 )
@@ -189,10 +187,51 @@ class EvalRecord:
     """Full LMDB record (so that consumers can access whatever they need)."""
 
 
+type AttemptKey = tuple[str, int]
+"""Base attempt identifier key: ``(sample_id, attempt_index)`` from the source LMDB."""
+
+
+type ScoredAttemptKey = tuple[str, int, int]
+"""Per-scored-row key: ``(sample_id, attempt_index, draw_index)``.
+
+The ``draw_index`` disambiguates duplicated attempts created by resampling with replacement.
+"""
+
+
+class AttemptInspectionRecord(pydantic.BaseModel):
+    """Per-attempt record for one-by-one qualitative correctness analysis."""
+
+    model_config = pydantic.ConfigDict(frozen=True)
+    """Pydantic model configuration (freezes the dataclass)."""
+
+    sample_id: str
+    """Sample identifier."""
+    problem_id: str
+    """Problem identifier."""
+    attempt_index: int
+    """Zero-based attempt index."""
+    draw_index: int
+    """Zero-based index in the scored record list (post-resampling)."""
+    label: bool
+    """Ground-truth correctness label for this attempt."""
+    score: float
+    """Guardrail score for this attempt (higher = more likely correct)."""
+    verification_cost: float | None = None
+    """Optional per-attempt verification cost reported by the scorer."""
+    final_answer: str | None
+    """Parsed final answer when available."""
+    code_type: str
+    """Code type from LMDB metadata."""
+    difficulty_score: float | None
+    """Per-attempt difficulty score when available."""
+    attempt_metadata: dict[str, typing.Any] | None = None
+    """Optional scorer-provided metadata for this attempt."""
+
+
 class ScoringResult(pydantic.BaseModel):
     """Output of GuardrailScorer.score_records().
 
-    Bundles continuous scores with optional per-record verification costs.
+    Bundles continuous scores with optional per-record verification costs and metadata.
     """
 
     model_config = pydantic.ConfigDict(frozen=True)
@@ -206,15 +245,23 @@ class ScoringResult(pydantic.BaseModel):
     None when the scorer does not report costs. When present, must be same length as scores and all
     values must be non-negative. The actual `cost` unit solely depends on the guardrail implementation.
     """
+    attempt_metadata: dict[ScoredAttemptKey, dict[str, typing.Any]] | None = None
+    """Optional per-attempt metadata keyed by ``(sample_id, attempt_index, draw_index)``.
+
+    This is intended for lightweight forensic/debug context (for example input token counts).
+    When present, it must contain exactly one entry per scored attempt.
+    """
 
     @pydantic.model_validator(mode="after")
     def _validate_costs(self) -> ScoringResult:
-        """Validates that verification costs are non-negative and have same length as scores."""
+        """Validates that optional arrays/maps align with ``scores`` length and constraints."""
         if self.verification_costs is not None:
             if len(self.verification_costs) != len(self.scores):
                 raise ValueError("verification_costs must have same length as scores")
             if any(cost < 0 for cost in self.verification_costs):
                 raise ValueError("verification_costs must be non-negative")
+        if self.attempt_metadata is not None and len(self.attempt_metadata) != len(self.scores):
+            raise ValueError("attempt_metadata must have same length as scores")
         return self
 
 
@@ -228,7 +275,7 @@ class GuardrailScorer(typing.Protocol):
         self,
         records: list[EvalRecord],
     ) -> ScoringResult:
-        """Score records and optionally report verification costs."""
+        """Score records and optionally report verification costs and per-attempt metadata."""
         ...
 
     def get_metadata(self) -> dict[str, typing.Any]:
@@ -615,6 +662,10 @@ class SingleRunResult(pydantic.BaseModel):
 
     guardrail_metadata: dict[str, typing.Any]
     """Metadata from GuardrailScorer.get_metadata()."""
+    attempt_metadata: dict[ScoredAttemptKey, dict[str, typing.Any]] | None = None
+    """Per-attempt metadata from ``ScoringResult.attempt_metadata`` for the eval set."""
+    attempt_records: list[AttemptInspectionRecord] = pydantic.Field(default_factory=lambda: [])
+    """Per-attempt rows with scores + sample metadata for notebook browsing."""
     threshold_free: ThresholdFreeMetrics
     """Global threshold-free metrics (all categories combined)."""
     attempt_metrics: dict[float, ThresholdedMetrics]
@@ -654,6 +705,12 @@ class AggregatedResult(pydantic.BaseModel):
     """Label distribution on the test set."""
     per_run: list[SingleRunResult]
     """Full results for each guardrail run."""
+    attempt_records_by_key: dict[ScoredAttemptKey, dict[str, typing.Any]] | None = None
+    """Shared raw record payloads keyed by ``(sample_id, attempt_index, draw_index)``.
+
+    This stores heavyweight LMDB records once at the aggregated level so per-run
+    ``SingleRunResult.attempt_records`` can stay lightweight.
+    """
     cross_run_mean: dict[str, float]
     """Mean of each metric across runs (None-valued metrics excluded)."""
     cross_run_std: dict[str, float]
@@ -740,6 +797,32 @@ class AggregatedResult(pydantic.BaseModel):
         # per_sample_positive_rates has one entry per unique sample in the test set
         flat["sample_count"] = len(self.class_balance.per_sample_positive_rates)
         # note: cost and category metrics are already included via cross_run_mean/std/p5
-        # above (e.g. mean/fpr_0_01/cost_total, mean/category/regular/auroc, etc.)
+        # above (e.g. fpr_0_01/cost_total/mean, category/regular/auroc/mean, etc.)
         # the aggregated VerificationCostStats is available on self for programmatic access
         return flat
+
+
+# ---- Reserved type-name tokens (shared between _impl validation and analysis parsing) ----
+
+RESERVED_TYPE_NAME_PREFIXES: frozenset[str] = frozenset({"fpr_", "tpr_at_fpr_"})
+"""String prefixes that guardrail type names must NOT start with (case-insensitive).
+
+These collide with the FPR-keyed metric namespace (e.g. ``fpr_0_01/tpr/mean``).
+"""
+
+RESERVED_TYPE_NAME_EXACT: frozenset[str] = frozenset(
+    {
+        "category",
+        "class_balance",
+        "auroc",
+        "average_precision",
+        "sample_count",
+        "record_count",
+        "_guardrail_type_names",
+    }
+)
+"""Exact tokens that guardrail type names must NOT match (case-insensitive).
+
+These collide with top-level metric keys or metadata keys logged under ``benchmark/{subset}/`` in
+W&B summary.
+"""

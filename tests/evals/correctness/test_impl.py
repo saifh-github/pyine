@@ -15,103 +15,9 @@ import pyine.evals.correctness.datamodule as correctness_datamodule
 import pyine.evals.correctness.datamodule_configs as correctness_datamodule_configs
 import pyine.evals.correctness.splits as correctness_splits
 import pyine.evals.correctness.types as correctness_types
+import tests.evals.correctness.conftest as correctness_conftest
 
 _FAKE_LMDB_PATH = pathlib.Path("/fake/lmdb")
-
-
-class _MockGuardrailScorer:
-    """Scorer that returns predetermined scores based on labels."""
-
-    def __init__(
-        self,
-        noise_seed: int = 0,
-    ) -> None:
-        self._noise_seed = noise_seed
-
-    def score_records(
-        self,
-        records: list[correctness_types.EvalRecord],
-    ) -> correctness_types.ScoringResult:
-        rng = np.random.default_rng(self._noise_seed)
-        scores: list[float] = []
-        for rec in records:
-            base = 0.8 if rec.label else 0.2
-            scores.append(float(np.clip(base + rng.normal(0, 0.1), 0.0, 1.0)))
-        return correctness_types.ScoringResult(scores=scores)
-
-    def get_metadata(self) -> dict[str, typing.Any]:
-        return {"name": "mock", "seed": self._noise_seed}
-
-    def get_verification_cost_unit(self) -> str | None:
-        return None
-
-
-def _make_record(
-    sample_id: str,
-    problem_id: str,
-    attempt_index: int,
-    label: bool,
-    code_type: str = "original",
-) -> correctness_types.EvalRecord:
-    return correctness_types.EvalRecord(
-        sample_id=sample_id,
-        problem_id=problem_id,
-        attempt_index=attempt_index,
-        model_output="output",
-        final_answer=None,
-        expected_output="expected",
-        label=label,
-        code_type=code_type,
-        tags=[],
-        record={},
-        difficulty_score=None,
-    )
-
-
-def _make_dm_config() -> correctness_datamodule_configs.CorrectnessDataModuleConfig:
-    return correctness_datamodule_configs.CorrectnessDataModuleConfig(
-        lmdb_paths=(_FAKE_LMDB_PATH,),
-        split_config=correctness_types.GuardrailSplitConfig(split_source="TACO"),
-    )
-
-
-def _build_mock_datamodule(
-    monkeypatch: pytest.MonkeyPatch,
-    valid_records: list[correctness_types.EvalRecord],
-    test_records: list[correctness_types.EvalRecord],
-    train_records: list[correctness_types.EvalRecord] | None = None,
-) -> correctness_datamodule.CorrectnessDataModule:
-    """Build a datamodule with mocked LMDB/split loading."""
-    if train_records is None:
-        train_records = []
-    all_records = train_records + valid_records + test_records
-    valid_pids = frozenset({rec.problem_id for rec in valid_records})
-    test_pids = frozenset({rec.problem_id for rec in test_records})
-    train_pids = frozenset({rec.problem_id for rec in train_records})
-    splits = correctness_splits.GuardrailSplits(
-        guardrail_train=train_records,
-        guardrail_valid=valid_records,
-        guardrail_test=test_records,
-        train_problem_ids=train_pids,
-        valid_problem_ids=valid_pids,
-        test_problem_ids=test_pids,
-    )
-    monkeypatch.setattr(
-        "pyine.data.utils.lmdb_io.resolve_lmdb_paths",
-        lambda raw_paths: list(raw_paths),
-    )
-    monkeypatch.setattr(
-        "pyine.evals.correctness.datamodule.correctness_data_loading.load_records_from_lmdb",
-        lambda *_args, **_kwargs: all_records,
-    )
-    monkeypatch.setattr(
-        "pyine.evals.correctness.datamodule.correctness_splits.build_guardrail_splits",
-        lambda *_args, **_kwargs: splits,
-    )
-    dm = correctness_datamodule.CorrectnessDataModule(_make_dm_config())
-    dm.prepare_data()
-    dm.setup()
-    return dm
 
 
 class _FakeLMDBReader:
@@ -194,7 +100,7 @@ class TestEndToEnd:
             num_bootstrap_replicates=20,
             roc_fpr_grid_size=50,
         )
-        scorer = _MockGuardrailScorer(noise_seed=0)
+        scorer = correctness_conftest.MockGuardrailScorer(noise_seed=0)
         result = await correctness_impl.evaluate_guardrail_replicas(
             config=config,
             guardrails=[scorer],
@@ -218,16 +124,23 @@ class TestEndToEnd:
         assert "auroc/num_valid_runs" in flat
         assert any(key.endswith("/base_pass_rate/mean") for key in flat)
         assert single_run.guardrail_metadata["name"] == "mock"
+        assert result.eval_metadata["eval_subset_name"] == "guardrail_valid"
+        assert "eval_config" in result.eval_metadata
+        assert "datamodule_config" in result.eval_metadata
+        assert "reprod_metadata" in result.eval_metadata
+        assert len(result.eval_metadata["guardrail_metadata_by_run"]) == 1
+        assert result.aggregated.attempt_records_by_key is not None
+        assert len(result.aggregated.attempt_records_by_key) == len(dm.get_records_for_subset("guardrail_valid"))
 
     @pytest.mark.asyncio
     async def test_empty_guardrails_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         valid_records = [
-            _make_record("v0/s0/t0", "v0", 0, True),
-            _make_record("v0/s0/t0", "v0", 1, False),
+            correctness_conftest.make_record("v0/s0/t0", "v0", 0, True),
+            correctness_conftest.make_record("v0/s0/t0", "v0", 1, False),
         ]
-        dm = _build_mock_datamodule(monkeypatch, valid_records=valid_records, test_records=[])
+        dm = correctness_conftest.build_mock_datamodule(monkeypatch, valid_records=valid_records, test_records=[])
         config = correctness_configs.CorrectnessEvalsConfig(
-            datamodule_config=_make_dm_config(),
+            datamodule_config=correctness_conftest.make_dm_config(),
         )
         with pytest.raises(ValueError, match="guardrails must not be empty"):
             await correctness_impl.evaluate_guardrail_replicas(
@@ -329,17 +242,17 @@ class TestEvalSubsetValidation:
     @pytest.mark.asyncio
     async def test_guardrail_train_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         valid_records = [
-            _make_record("v0/s0/t0", "v0", 0, True),
-            _make_record("v0/s0/t0", "v0", 1, False),
+            correctness_conftest.make_record("v0/s0/t0", "v0", 0, True),
+            correctness_conftest.make_record("v0/s0/t0", "v0", 1, False),
         ]
-        dm = _build_mock_datamodule(monkeypatch, valid_records=valid_records, test_records=[])
+        dm = correctness_conftest.build_mock_datamodule(monkeypatch, valid_records=valid_records, test_records=[])
         config = correctness_configs.CorrectnessEvalsConfig(
-            datamodule_config=_make_dm_config(),
+            datamodule_config=correctness_conftest.make_dm_config(),
         )
         with pytest.raises(ValueError, match="guardrail_train is not supported"):
             await correctness_impl.evaluate_guardrail_replicas(
                 config=config,
-                guardrails=[_MockGuardrailScorer()],
+                guardrails=[correctness_conftest.MockGuardrailScorer()],
                 datamodule=dm,
                 eval_subset_name="guardrail_train",
             )
@@ -356,7 +269,7 @@ class TestFastEndToEnd:
         for prob_idx in range(3):
             for attempt_idx in range(2):
                 valid_records.append(
-                    _make_record(
+                    correctness_conftest.make_record(
                         f"TACO/TRAIN/p{prob_idx:06d}/s0000/t0000",
                         f"TACO/TRAIN/p{prob_idx:06d}",
                         attempt_idx,
@@ -366,21 +279,23 @@ class TestFastEndToEnd:
         for prob_idx in range(3, 6):
             for attempt_idx in range(2):
                 test_records.append(
-                    _make_record(
+                    correctness_conftest.make_record(
                         f"TACO/TRAIN/p{prob_idx:06d}/s0000/t0000",
                         f"TACO/TRAIN/p{prob_idx:06d}",
                         attempt_idx,
                         label=(attempt_idx == 0),
                     )
                 )
-        dm = _build_mock_datamodule(monkeypatch, valid_records=valid_records, test_records=test_records)
+        dm = correctness_conftest.build_mock_datamodule(
+            monkeypatch, valid_records=valid_records, test_records=test_records
+        )
         config = correctness_configs.CorrectnessEvalsConfig(
-            datamodule_config=_make_dm_config(),
+            datamodule_config=correctness_conftest.make_dm_config(),
             target_fpr_values=[0.05],
             num_bootstrap_replicates=5,
             roc_fpr_grid_size=10,
         )
-        scorer = _MockGuardrailScorer(noise_seed=0)
+        scorer = correctness_conftest.MockGuardrailScorer(noise_seed=0)
         result = await correctness_impl.evaluate_guardrail_replicas(
             config=config,
             guardrails=[scorer],
@@ -394,6 +309,7 @@ class TestFastEndToEnd:
         assert flat["sample_count"] == 3  # 3 valid problems
         assert "category/regular/auroc/mean" in flat
         assert "category/regular/fpr_0_05/guarded_pass_rate/mean" in flat
+        assert not any(key.startswith("category/") and "average_precision" in key for key in flat)
 
 
 class TestAggregateCostStats:
@@ -504,8 +420,8 @@ class TestCostCorrelationCollection:
             verification_cost_stats={0.05: cost_stats},
         )
         test_records = [
-            _make_record("s1", "p1", 0, True),
-            _make_record("s2", "p2", 0, False),
+            correctness_conftest.make_record("s1", "p1", 0, True),
+            correctness_conftest.make_record("s2", "p2", 0, False),
         ]
         test_scores = np.array([0.9, 0.1], dtype=np.float64)
         splits = correctness_splits.GuardrailSplits(
@@ -521,7 +437,7 @@ class TestCostCorrelationCollection:
             lambda **_kwargs: {},
         )
         config = correctness_configs.CorrectnessEvalsConfig(
-            datamodule_config=_make_dm_config(),
+            datamodule_config=correctness_conftest.make_dm_config(),
             target_fpr_values=[0.05],
         )
         eval_class_balance = correctness_types.ClassBalanceStats(
@@ -545,3 +461,303 @@ class TestCostCorrelationCollection:
         assert aggregated.cross_run_mean["fpr_0_05/cost_accuracy_rank_correlation"] == pytest.approx(0.42)
         assert "fpr_0_05/cost_difficulty_rank_correlation" in aggregated.cross_run_mean
         assert aggregated.cross_run_mean["fpr_0_05/cost_difficulty_rank_correlation"] == pytest.approx(-0.15)
+
+
+class TestAttemptMetadata:
+    """Tests for scorer per-attempt metadata alignment and persistence in run results."""
+
+    @pytest.mark.asyncio
+    async def test_attempt_metadata_propagates_to_single_run(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        valid_records = [
+            correctness_conftest.make_record("v0/s0/t0", "v0", 0, True),
+            correctness_conftest.make_record("v0/s0/t0", "v0", 1, False),
+            correctness_conftest.make_record("v1/s0/t0", "v1", 0, True),
+            correctness_conftest.make_record("v1/s0/t0", "v1", 1, False),
+        ]
+        dm = correctness_conftest.build_mock_datamodule(monkeypatch, valid_records=valid_records, test_records=[])
+        config = correctness_configs.CorrectnessEvalsConfig(
+            datamodule_config=correctness_conftest.make_dm_config(),
+            target_fpr_values=[0.05],
+            num_bootstrap_replicates=5,
+            roc_fpr_grid_size=10,
+        )
+
+        class _MetadataScorer:
+            def score_records(
+                self,
+                records: list[correctness_types.EvalRecord],
+            ) -> correctness_types.ScoringResult:
+                return correctness_types.ScoringResult(
+                    scores=[0.9 if record.label else 0.1 for record in records],
+                    attempt_metadata={
+                        (record.sample_id, record.attempt_index, draw_index): {"seen": True}
+                        for draw_index, record in enumerate(records)
+                    },
+                )
+
+            def get_metadata(self) -> dict[str, typing.Any]:
+                return {"name": "metadata"}
+
+            def get_verification_cost_unit(self) -> str | None:
+                return None
+
+        result = await correctness_impl.evaluate_guardrail_replicas(
+            config=config,
+            guardrails=[_MetadataScorer()],
+            datamodule=dm,
+            eval_subset_name="guardrail_valid",
+        )
+        single_run = result.aggregated.per_run[0]
+        assert single_run.attempt_metadata is not None
+        expected_keys = {
+            (record.sample_id, record.attempt_index, draw_index) for draw_index, record in enumerate(valid_records)
+        }
+        assert set(single_run.attempt_metadata.keys()) == expected_keys
+        assert len(single_run.attempt_records) == len(valid_records)
+        first_attempt = single_run.attempt_records[0]
+        assert first_attempt.sample_id == valid_records[0].sample_id
+        assert first_attempt.draw_index == 0
+        assert first_attempt.score == pytest.approx(0.9)
+        assert first_attempt.attempt_metadata is not None
+        assert first_attempt.attempt_metadata["seen"] is True
+        assert result.aggregated.attempt_records_by_key is not None
+        first_key = (valid_records[0].sample_id, valid_records[0].attempt_index, 0)
+        assert first_key in result.aggregated.attempt_records_by_key
+
+    @pytest.mark.asyncio
+    async def test_attempt_metadata_mismatch_raises(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        valid_records = [
+            correctness_conftest.make_record("v0/s0/t0", "v0", 0, True),
+            correctness_conftest.make_record("v0/s0/t0", "v0", 1, False),
+        ]
+        dm = correctness_conftest.build_mock_datamodule(monkeypatch, valid_records=valid_records, test_records=[])
+        config = correctness_configs.CorrectnessEvalsConfig(
+            datamodule_config=correctness_conftest.make_dm_config(),
+            target_fpr_values=[0.05],
+            num_bootstrap_replicates=5,
+            roc_fpr_grid_size=10,
+        )
+
+        class _BadMetadataScorer:
+            def score_records(
+                self,
+                records: list[correctness_types.EvalRecord],
+            ) -> correctness_types.ScoringResult:
+                return correctness_types.ScoringResult(
+                    scores=[0.5 for _ in records],
+                    attempt_metadata={
+                        (record.sample_id, record.attempt_index, draw_index + 100): {"bad": True}
+                        for draw_index, record in enumerate(records)
+                    },
+                )
+
+            def get_metadata(self) -> dict[str, typing.Any]:
+                return {"name": "bad_metadata"}
+
+            def get_verification_cost_unit(self) -> str | None:
+                return None
+
+        with pytest.raises(ValueError, match="attempt_metadata keys do not align"):
+            await correctness_impl.evaluate_guardrail_replicas(
+                config=config,
+                guardrails=[_BadMetadataScorer()],
+                datamodule=dm,
+                eval_subset_name="guardrail_valid",
+            )
+
+    @pytest.mark.asyncio
+    async def test_attempt_records_populated_without_attempt_metadata(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        valid_records = [
+            correctness_conftest.make_record("v0/s0/t0", "v0", 0, True),
+            correctness_conftest.make_record("v0/s0/t0", "v0", 1, False),
+        ]
+        dm = correctness_conftest.build_mock_datamodule(monkeypatch, valid_records=valid_records, test_records=[])
+        config = correctness_configs.CorrectnessEvalsConfig(
+            datamodule_config=correctness_conftest.make_dm_config(),
+            target_fpr_values=[0.05],
+            num_bootstrap_replicates=5,
+            roc_fpr_grid_size=10,
+        )
+
+        class _ScoreOnlyScorer:
+            def score_records(
+                self,
+                records: list[correctness_types.EvalRecord],
+            ) -> correctness_types.ScoringResult:
+                return correctness_types.ScoringResult(scores=[0.8 if record.label else 0.2 for record in records])
+
+            def get_metadata(self) -> dict[str, typing.Any]:
+                return {"name": "score_only"}
+
+            def get_verification_cost_unit(self) -> str | None:
+                return None
+
+        result = await correctness_impl.evaluate_guardrail_replicas(
+            config=config,
+            guardrails=[_ScoreOnlyScorer()],
+            datamodule=dm,
+            eval_subset_name="guardrail_valid",
+        )
+        single_run = result.aggregated.per_run[0]
+        assert len(single_run.attempt_records) == len(valid_records)
+        assert all(record.attempt_metadata is None for record in single_run.attempt_records)
+        assert single_run.attempt_records[0].score == pytest.approx(0.8)
+        assert single_run.attempt_records[1].score == pytest.approx(0.2)
+
+    @pytest.mark.asyncio
+    async def test_calibration_resampling_with_replacement_supports_attempt_metadata(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        valid_records = [
+            correctness_conftest.make_record("v0/s0/t0", "v0", 0, True),
+            correctness_conftest.make_record("v1/s0/t0", "v1", 0, False),
+        ]
+        dm = correctness_conftest.build_mock_datamodule(monkeypatch, valid_records=valid_records, test_records=[])
+        resampling_config = correctness_types.RecordResamplingConfig(
+            target_positive_ratio=0.9,
+            strategy="oversample",
+            max_records=4,
+            min_records_per_label=1,
+            seed=0,
+        )
+        calibration_records = dm.get_records_for_calibration(resampling_config=resampling_config)
+        base_keys = [(record.sample_id, record.attempt_index) for record in calibration_records]
+        assert len(base_keys) > len(set(base_keys))  # duplicate base attempts due to replacement
+        config = correctness_configs.CorrectnessEvalsConfig(
+            datamodule_config=correctness_conftest.make_dm_config(),
+            target_fpr_values=[0.05],
+            num_bootstrap_replicates=5,
+            roc_fpr_grid_size=10,
+            calibration_resampling=resampling_config,
+        )
+
+        class _MetadataScorer:
+            def score_records(
+                self,
+                records: list[correctness_types.EvalRecord],
+            ) -> correctness_types.ScoringResult:
+                return correctness_types.ScoringResult(
+                    scores=[0.8 if record.label else 0.2 for record in records],
+                    attempt_metadata={
+                        (record.sample_id, record.attempt_index, draw_index): {"seen": True}
+                        for draw_index, record in enumerate(records)
+                    },
+                )
+
+            def get_metadata(self) -> dict[str, typing.Any]:
+                return {"name": "metadata"}
+
+            def get_verification_cost_unit(self) -> str | None:
+                return None
+
+        result = await correctness_impl.evaluate_guardrail_replicas(
+            config=config,
+            guardrails=[_MetadataScorer()],
+            datamodule=dm,
+            eval_subset_name="guardrail_valid",
+        )
+        assert result.aggregated.per_run[0].attempt_metadata is not None
+
+
+class TestAggregateDifficultyStats:
+    """Tests for _aggregate_difficulty_stats cross-run averaging."""
+
+    def _make_difficulty_stats(
+        self,
+        per_bucket_auroc: dict[str, float | None] | None = None,
+        correlation: float | None = None,
+    ) -> correctness_types.DifficultyStats:
+        return correctness_types.DifficultyStats(
+            bucket_boundaries=(0.33, 0.67),
+            per_bucket_auroc=per_bucket_auroc,
+            per_bucket_tpr=None,
+            per_bucket_sample_count={"easy": 10, "medium": 10, "hard": 10},
+            difficulty_accuracy_rank_correlation=correlation,
+        )
+
+    def _make_single_run(
+        self,
+        difficulty_stats: correctness_types.DifficultyStats | None,
+    ) -> correctness_types.SingleRunResult:
+        empty_grid = np.array([], dtype=np.float64)
+        return correctness_types.SingleRunResult(
+            guardrail_metadata={},
+            threshold_free=correctness_types.ThresholdFreeMetrics(
+                auroc=None,
+                average_precision=None,
+                tpr_at_fpr=None,
+                fpr_grid=empty_grid,
+                tpr_grid=empty_grid,
+                precision_grid=empty_grid,
+                recall_grid=empty_grid,
+            ),
+            attempt_metrics={},
+            sample_metrics={},
+            category_results={},
+            bootstrap_cis={},
+            difficulty_stats=difficulty_stats,
+            verification_cost_stats=None,
+        )
+
+    def test_normal_averaging(self) -> None:
+        stats_a = self._make_difficulty_stats(
+            per_bucket_auroc={"easy": 0.9, "medium": 0.8, "hard": 0.7},
+            correlation=0.5,
+        )
+        stats_b = self._make_difficulty_stats(
+            per_bucket_auroc={"easy": 0.8, "medium": 0.7, "hard": 0.6},
+            correlation=0.3,
+        )
+        runs = [self._make_single_run(stats_a), self._make_single_run(stats_b)]
+        result = correctness_impl._aggregate_difficulty_stats(runs)
+        assert result is not None
+        assert result.per_bucket_auroc is not None
+        assert result.per_bucket_auroc["easy"] == pytest.approx(0.85)
+        assert result.per_bucket_auroc["medium"] == pytest.approx(0.75)
+        assert result.per_bucket_auroc["hard"] == pytest.approx(0.65)
+        assert result.difficulty_accuracy_rank_correlation == pytest.approx(0.4)
+
+    def test_runs_missing_data_skipped(self) -> None:
+        stats_with = self._make_difficulty_stats(
+            per_bucket_auroc={"easy": 0.9, "medium": 0.8, "hard": 0.7},
+            correlation=0.5,
+        )
+        runs = [self._make_single_run(stats_with), self._make_single_run(None)]
+        result = correctness_impl._aggregate_difficulty_stats(runs)
+        assert result is not None
+        assert result.per_bucket_auroc is not None
+        assert result.per_bucket_auroc["easy"] == pytest.approx(0.9)
+        assert result.difficulty_accuracy_rank_correlation == pytest.approx(0.5)
+
+    def test_all_none_returns_none(self) -> None:
+        runs = [self._make_single_run(None), self._make_single_run(None)]
+        result = correctness_impl._aggregate_difficulty_stats(runs)
+        assert result is None
+
+    def test_none_bucket_values_handled(self) -> None:
+        stats_a = self._make_difficulty_stats(
+            per_bucket_auroc={"easy": 0.9, "medium": None, "hard": 0.7},
+            correlation=None,
+        )
+        stats_b = self._make_difficulty_stats(
+            per_bucket_auroc={"easy": 0.8, "medium": 0.6, "hard": None},
+            correlation=None,
+        )
+        runs = [self._make_single_run(stats_a), self._make_single_run(stats_b)]
+        result = correctness_impl._aggregate_difficulty_stats(runs)
+        assert result is not None
+        assert result.per_bucket_auroc is not None
+        assert result.per_bucket_auroc["easy"] == pytest.approx(0.85)
+        assert result.per_bucket_auroc["medium"] == pytest.approx(0.6)
+        assert result.per_bucket_auroc["hard"] == pytest.approx(0.7)
+        assert result.difficulty_accuracy_rank_correlation is None
