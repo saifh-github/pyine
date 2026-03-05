@@ -116,7 +116,7 @@ _GLOB_CHARS = frozenset("*?[")
 def resolve_lmdb_paths(
     raw_paths: tuple[pathlib.Path, ...],
 ) -> list[pathlib.Path]:
-    """Resolve glob patterns, auto-discover rank subdirs, validate, and deduplicate LMDB paths.
+    """Resolve glob patterns, auto-discover subdirectories, validate, and deduplicate LMDB paths.
 
     All paths must ultimately point to LMDB directories (containing ``data.mdb``).
     Each input path is ``~``-expanded, then handled as follows:
@@ -125,6 +125,9 @@ def resolve_lmdb_paths(
       with ``recursive=True`` (supports ``**``). Raises if zero matches.
     - **Directory without** ``data.mdb`` **but with** ``rank_*/`` **subdirs**: auto-discovers
       those subdirs (common for multi-rank distributed exports).
+    - **Directory without** ``data.mdb`` **or** ``rank_*/`` **but with immediate subdirs
+      containing** ``data.mdb``: auto-discovers those subdirs (common for eval exports
+      with subset subdirectories like ``valid/``, ``test/``).
     - **Otherwise**: treated as a literal LMDB directory path.
 
     After expansion, each resolved path is validated (must exist, be a directory, and
@@ -153,12 +156,19 @@ def resolve_lmdb_paths(
             expanded.extend(matches)
         elif path.is_dir() and not (path / "data.mdb").is_file():
             rank_subdirs = sorted(path.glob("rank_*"))
-            if not rank_subdirs:
-                raise ValueError(
-                    f"path '{path}' is a directory but does not contain data.mdb or rank_* "
-                    "subdirectories; expected an LMDB directory or a parent of rank-specific exports"
+            if rank_subdirs:
+                expanded.extend(rank_subdirs)
+            else:
+                lmdb_subdirs = sorted(
+                    child for child in path.iterdir() if child.is_dir() and (child / "data.mdb").is_file()
                 )
-            expanded.extend(rank_subdirs)
+                if not lmdb_subdirs:
+                    raise ValueError(
+                        f"path '{path}' is a directory but does not contain data.mdb or any "
+                        "subdirectories with data.mdb; expected an LMDB directory or a parent "
+                        "of LMDB exports (e.g. rank_*/  or eval subset subdirectories)"
+                    )
+                expanded.extend(lmdb_subdirs)
         else:
             expanded.append(path)
     expanded = [path.expanduser().resolve() for path in expanded]

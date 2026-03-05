@@ -284,6 +284,36 @@ class TestResolveLmdbPaths:
         with pytest.raises(ValueError, match="data.mdb"):
             lmdb_io.resolve_lmdb_paths((empty_dir,))
 
+    def test_auto_discover_lmdb_subdirs(self, tmp_path: pathlib.Path) -> None:
+        parent = tmp_path / "benchmark_export"
+        parent.mkdir()
+        _make_lmdb_dir(parent, "valid")
+        _make_lmdb_dir(parent, "test")
+        result = lmdb_io.resolve_lmdb_paths((parent,))
+        assert len(result) == 2
+        resolved_names = {p.name for p in result}
+        assert resolved_names == {"valid", "test"}
+
+    def test_auto_discover_lmdb_subdirs_ignores_non_lmdb(self, tmp_path: pathlib.Path) -> None:
+        parent = tmp_path / "export"
+        parent.mkdir()
+        _make_lmdb_dir(parent, "valid")
+        (parent / "logs").mkdir()  # not an LMDB dir
+        result = lmdb_io.resolve_lmdb_paths((parent,))
+        assert len(result) == 1
+        assert result[0].name == "valid"
+
+    def test_rank_subdirs_take_priority_over_lmdb_subdirs(self, tmp_path: pathlib.Path) -> None:
+        parent = tmp_path / "output"
+        parent.mkdir()
+        _make_lmdb_dir(parent, "rank_0")
+        _make_lmdb_dir(parent, "rank_1")
+        _make_lmdb_dir(parent, "valid")  # also an LMDB dir, but rank_* should take priority
+        result = lmdb_io.resolve_lmdb_paths((parent,))
+        assert len(result) == 2
+        resolved_names = {p.name for p in result}
+        assert resolved_names == {"rank_0", "rank_1"}
+
     def test_duplicate_paths_deduplicated(self, tmp_path: pathlib.Path) -> None:
         lmdb_dir = _make_lmdb_dir(tmp_path)
         result = lmdb_io.resolve_lmdb_paths((lmdb_dir, lmdb_dir))

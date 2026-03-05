@@ -299,7 +299,7 @@ class TestResolveLmdbPaths:
     def test_auto_discover_no_subdirs_raises(self, tmp_path: pathlib.Path) -> None:
         parent = tmp_path / "empty_output"
         parent.mkdir()
-        with pytest.raises(ValueError, match="does not contain data.mdb or rank_"):
+        with pytest.raises(ValueError, match="does not contain data.mdb"):
             pyine.data.utils.lmdb_io.resolve_lmdb_paths((parent,))
 
     def test_nonexistent_path_raises(self, tmp_path: pathlib.Path) -> None:
@@ -310,7 +310,7 @@ class TestResolveLmdbPaths:
         """Directory exists but no data.mdb inside (and no rank_* subdirs)."""
         empty_dir = tmp_path / "empty"
         empty_dir.mkdir()
-        with pytest.raises(ValueError, match="does not contain data.mdb or rank_"):
+        with pytest.raises(ValueError, match="does not contain data.mdb"):
             pyine.data.utils.lmdb_io.resolve_lmdb_paths((empty_dir,))
 
     def test_duplicate_paths_deduplicated(self, tmp_path: pathlib.Path) -> None:
