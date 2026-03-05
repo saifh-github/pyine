@@ -30,6 +30,7 @@ class PromptedLLMGuardrailScorer:
     """
 
     def __init__(self, config: PromptedLLMGuardrailConfig) -> None:
+        """Initializes the scorer (constructing the LLM prompting chain)."""
         self._config = config
         self._llm = config.llm_provider.get_model()
         self._chain = pyine.prompts.manager.get_prompt_chain(
@@ -56,7 +57,7 @@ class PromptedLLMGuardrailScorer:
             max_workers=self._config.max_workers,
         ) as executor:
             future_to_idx = {executor.submit(self._score_single, record): idx for idx, record in enumerate(records)}
-            results: list[tuple[float, float] | None] = [None] * len(records)
+            results: list[tuple[float, float, str | None] | None] = [None] * len(records)
             completed = 0
             for future in concurrent.futures.as_completed(future_to_idx):
                 idx = future_to_idx[future]
@@ -67,22 +68,33 @@ class PromptedLLMGuardrailScorer:
 
         scores: list[float] = []
         costs: list[float] = []
-        for result_pair in results:
-            assert result_pair is not None, "all futures should have completed successfully"
-            scores.append(result_pair[0])
-            costs.append(result_pair[1])
+        attempt_metadata: dict[correctness_types.ScoredAttemptKey, dict[str, typing.Any]] = {}
+        assert len(results) == len(records), "expected as many results as records"
+        for res_idx, res_triplet in enumerate(results):
+            assert res_triplet is not None, "all futures should have completed successfully"
+            assert isinstance(res_triplet, tuple) and len(res_triplet) == 3, "expected (score, token_count, reasoning)"
+            scores.append(res_triplet[0])
+            costs.append(res_triplet[1])
+            reasoning = res_triplet[2] or ""
+            assert isinstance(reasoning, str)
+            scored_attempt_key = (records[res_idx].sample_id, records[res_idx].attempt_index, res_idx)
+            attempt_metadata[scored_attempt_key] = {
+                "reasoning": reasoning,
+                # if we had any extra metadata about each attempt to provide, this is where to put it
+            }
 
         self._total_scored += len(records)
         return correctness_types.ScoringResult(
             scores=scores,
             verification_costs=costs,
+            attempt_metadata=attempt_metadata,
         )
 
     def _score_single(
         self,
         record: correctness_types.EvalRecord,
-    ) -> tuple[float, float]:
-        """Score a single record via sync chain.invoke(). Returns (score, token_count).
+    ) -> tuple[float, float, str | None]:
+        """Score a single record via sync chain.invoke(). Returns (score, token_count, reasoning).
 
         Called from worker threads. Error counting is protected by a threading.Lock.
         """
@@ -96,13 +108,14 @@ class PromptedLLMGuardrailScorer:
         }
 
         handler = pyine.utils.langchain.CaptureLLMHandler()
+        reasoning: str | None = None
 
         try:
             result: typing.Any = self._chain.invoke(
                 input_vars,
                 config={"callbacks": [handler]},
             )
-            # Extract score from structured output (Pydantic model or dict)
+            # extract score from structured output (Pydantic model or dict)
             if hasattr(result, "score"):
                 score = float(result.score)
             elif isinstance(result, dict) and "score" in result:
@@ -110,17 +123,21 @@ class PromptedLLMGuardrailScorer:
                 score = float(result_dict["score"])
             else:
                 result_type_name = type(typing.cast("typing.Any", result)).__name__
-                logger.warning(
-                    "LLM returned unexpected format for %s: %s",
-                    record.sample_id,
-                    result_type_name,
-                )
+                logger.warning(f"LLM returned unexpected format for {record.sample_id}: {result_type_name}")
                 score = self._config.default_score_on_error
                 with self._error_lock:
                     self._error_count += 1
-
-            # Clamp to [0, 1]
             score = max(0.0, min(1.0, score))
+
+            # try to extract the reasoning from the structured output (there might not be any)
+            if hasattr(result, "reasoning") and result.reasoning is not None:  # type: ignore
+                reasoning = typing.cast("str", result.reasoning)  # type: ignore
+            elif isinstance(result, dict) and "reasoning" in result and result["reasoning"] is not None:
+                reasoning = typing.cast("str", result["reasoning"])
+            if reasoning is not None and not isinstance(reasoning, str):  # type: ignore
+                reasoning_type_name = type(reasoning).__name__
+                logger.warning(f"LLM returned unexpected type for reasoning: {reasoning_type_name}")
+                reasoning = None
 
         except Exception:
             logger.warning(
@@ -132,9 +149,8 @@ class PromptedLLMGuardrailScorer:
             with self._error_lock:
                 self._error_count += 1
 
-        # Extract token usage from handler
         token_count = self._extract_token_count(handler)
-        return score, token_count
+        return score, token_count, reasoning
 
     @staticmethod
     def _extract_token_count(
