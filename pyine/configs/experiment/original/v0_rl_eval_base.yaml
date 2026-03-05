@@ -5,18 +5,20 @@
 
 defaults:
   - original/v0_rl
-  - override /config/datamodule_config: shortcuts_TACO_10s10t_v1_part1to4
+  - override /config/datamodule_config: shortcuts_TACO_10s10t_v1_full
   - _self_
 
 runtime:
-  exp_name: original/v0_rl_eval_base
-  run_name: "${runtime.exp_name}"
+  exp_name: original/v0_rl_eval
+  run_name: "${now:%Y%m%d_%H%M%S}"
 
 config:
   grpo_config:
     do_train: False
     do_eval: False
     do_predict: True
+  datamodule_config:
+    eval_subset_names: ["valid", "test"]
   evals_config:
     vllm_provider_config:
       provider: vllm
