@@ -464,6 +464,203 @@ class TestComputeBinnedAccuracy:
         assert len(sample_counts) == 0
 
 
+class TestDifficultyExcludedFromCategories:
+    """Regression: difficulty stat keys must not create false categories."""
+
+    def test_difficulty_stat_keys_do_not_create_category(self) -> None:
+        """score_* keys under difficulty/ are excluded as metric-namespace keys."""
+        summary = {
+            "benchmark/test/code_type/original/accuracy_hard": 0.80,
+            "benchmark/test/code_type/original/sample_count": 50,
+            "benchmark/test/code_type/original/difficulty/score_mean": 0.5,
+            "benchmark/test/code_type/original/difficulty/score_median": 0.4,
+        }
+        run = MockWandBRun(summary=summary)
+        categories = pyine.evals.code_exec.analysis.extract_category_metrics(run, subset_name="test")
+        category_names = [cat.category for cat in categories]
+        assert "code_type/original" in category_names
+        assert "code_type/original/difficulty" not in category_names
+        assert len(categories) == 1
+
+    def test_real_difficulty_category_is_preserved(self) -> None:
+        """A real category named 'difficulty' with actual metrics is not excluded."""
+        summary = {
+            "benchmark/test/tags/difficulty/accuracy_hard": 0.70,
+            "benchmark/test/tags/difficulty/sample_count": 30,
+        }
+        run = MockWandBRun(summary=summary)
+        categories = pyine.evals.code_exec.analysis.extract_category_metrics(run, subset_name="test")
+        category_names = [cat.category for cat in categories]
+        assert "tags/difficulty" in category_names
+        assert len(categories) == 1
+        assert categories[0].accuracy["hard"].value == 0.70
+
+
+class TestEvalResultToSummary:
+    """Tests for eval_result_to_summary (code-exec pickle path)."""
+
+    @staticmethod
+    def _make_eval_result(
+        metrics: dict[str, typing.Any] | None = None,
+        eval_metadata: dict[str, typing.Any] | None = None,
+    ) -> pyine.evals.code_exec.analysis.pyine.evals.code_exec.utils.CodeExecEvalResult:
+        import pyine.evals.code_exec.utils
+
+        default_metrics: dict[str, typing.Any] = {
+            "accuracy_hard": 0.80,
+            "accuracy_hard_ci_lower": 0.72,
+            "accuracy_hard_ci_upper": 0.87,
+            "accuracy_soft": 0.85,
+            "sample_count": 100,
+            "attempt_count": 100,
+        }
+        if metrics:
+            default_metrics.update(metrics)
+        default_metadata: dict[str, typing.Any] = {
+            "eval_subset_name": "test",
+            "model_name": "test-model",
+        }
+        if eval_metadata:
+            default_metadata.update(eval_metadata)
+        return pyine.evals.code_exec.utils.CodeExecEvalResult(
+            metrics=default_metrics,
+            eval_metadata=default_metadata,
+            artifacts=[],
+            category_to_identifiers={},
+        )
+
+    def test_basic_summary_from_eval_result(self) -> None:
+        result = self._make_eval_result()
+        summary = pyine.evals.code_exec.analysis.eval_result_to_summary(result)
+        assert summary.run_info.accuracy["hard"].value == 0.80
+        assert summary.run_info.accuracy["hard"].ci_lower == pytest.approx(0.72)
+        assert summary.run_info.accuracy["hard"].ci_upper == pytest.approx(0.87)
+        assert summary.run_info.accuracy["soft"].value == 0.85
+        assert summary.run_info.sample_count == 100
+        assert summary.run_info.subset_name == "test"
+
+    def test_with_category_metrics(self) -> None:
+        metrics = {
+            "accuracy_hard": 0.80,
+            "sample_count": 100,
+            "code_type/original/accuracy_hard": 0.90,
+            "code_type/original/sample_count": 60,
+            "code_type/obfuscated/accuracy_hard": 0.65,
+            "code_type/obfuscated/sample_count": 40,
+        }
+        result = self._make_eval_result(metrics=metrics)
+        summary = pyine.evals.code_exec.analysis.eval_result_to_summary(result)
+        assert len(summary.category_metrics) == 2
+        cat_names = [cat.category for cat in summary.category_metrics]
+        assert "code_type/obfuscated" in cat_names
+        assert "code_type/original" in cat_names
+
+    def test_with_complexity_metrics(self) -> None:
+        import pyine.evals.constants
+        import pyine.utils.code.complexity_metrics
+
+        metrics: dict[str, typing.Any] = {"accuracy_hard": 0.80, "sample_count": 100}
+        for metric_name in pyine.utils.code.complexity_metrics.COMPLEXITY_METRICS:
+            for stat_name in pyine.evals.constants.AGGREGATION_STAT_NAMES:
+                metrics[f"complexity/{metric_name}_{stat_name}"] = 1.0
+        result = self._make_eval_result(metrics=metrics)
+        summary = pyine.evals.code_exec.analysis.eval_result_to_summary(result)
+        assert summary.complexity_metrics is not None
+
+    def test_label_overrides(self, tmp_path: "pyine.evals.code_exec.analysis.pathlib.Path") -> None:
+        source = tmp_path / "result.pkl"
+        source.write_bytes(b"dummy")
+        result = self._make_eval_result()
+        summary = pyine.evals.code_exec.analysis.eval_result_to_summary(
+            result, source_path=source, run_name="custom", run_group="grp"
+        )
+        assert summary.run_info.run_name == "custom"
+        assert summary.run_info.run_group == "grp"
+
+    def test_subset_name_mismatch_raises(self) -> None:
+        result = self._make_eval_result()
+        with pytest.raises(ValueError, match="does not match"):
+            pyine.evals.code_exec.analysis.eval_result_to_summary(result, subset_name="wrong")
+
+    def test_missing_subset_name_raises(self) -> None:
+        result = self._make_eval_result(eval_metadata={"eval_subset_name": None})
+        with pytest.raises(ValueError, match="must be provided"):
+            pyine.evals.code_exec.analysis.eval_result_to_summary(result)
+
+    def test_contract_with_wandb_extractors(self) -> None:
+        """Verify pickle path and prefixed-dict-via-adapter produce metric-equivalent summaries."""
+        import pyine.evals.constants
+        import pyine.utils.code.complexity_metrics
+
+        metrics: dict[str, typing.Any] = {
+            "accuracy_hard": 0.80,
+            "accuracy_hard_ci_lower": 0.72,
+            "accuracy_hard_ci_upper": 0.87,
+            "accuracy_soft": 0.85,
+            "sample_count": 100,
+            "attempt_count": 100,
+            "pass_at_1_hard": 0.79,
+            "pass_at_1_hard_ci_lower": 0.70,
+            "pass_at_1_hard_ci_upper": 0.86,
+            "majority_correct_hard": 0.75,
+            "code_type/original/accuracy_hard": 0.90,
+            "code_type/original/accuracy_hard_ci_lower": 0.82,
+            "code_type/original/accuracy_hard_ci_upper": 0.95,
+            "code_type/original/sample_count": 60,
+            "code_type/original/attempt_count": 60,
+            "code_type/original/pass_at_1_hard": 0.88,
+            "code_type/obfuscated/accuracy_hard": 0.65,
+            "code_type/obfuscated/sample_count": 40,
+        }
+        # add complexity metrics
+        for metric_name in pyine.utils.code.complexity_metrics.COMPLEXITY_METRICS:
+            for stat_name in pyine.evals.constants.AGGREGATION_STAT_NAMES:
+                metrics[f"complexity/{metric_name}_{stat_name}"] = 1.0
+        result = self._make_eval_result(metrics=metrics)
+        pickle_summary = pyine.evals.code_exec.analysis.eval_result_to_summary(result)
+        # build the same via mock W&B run with prefixed keys
+        prefixed = {f"benchmark/test/{key}": value for key, value in metrics.items()}
+        mock_run = MockWandBRun(summary=prefixed)
+        wandb_summary = pyine.evals.code_exec.analysis.fetch_eval_summary(mock_run, "test")
+        # compare run-level accuracy (all match types, including CIs)
+        for match_type in pickle_summary.run_info.accuracy:
+            pickle_acc = pickle_summary.run_info.accuracy[match_type]
+            wandb_acc = wandb_summary.run_info.accuracy[match_type]
+            assert pickle_acc.value == pytest.approx(wandb_acc.value), f"accuracy mismatch for {match_type}"
+            assert pickle_acc.ci_lower == wandb_acc.ci_lower, f"ci_lower mismatch for {match_type}"
+            assert pickle_acc.ci_upper == wandb_acc.ci_upper, f"ci_upper mismatch for {match_type}"
+        assert set(pickle_summary.run_info.accuracy.keys()) == set(wandb_summary.run_info.accuracy.keys())
+        # compare pass@k
+        assert set(pickle_summary.run_info.pass_at_k.keys()) == set(wandb_summary.run_info.pass_at_k.keys())
+        for k_val in pickle_summary.run_info.pass_at_k:
+            for mt in pickle_summary.run_info.pass_at_k[k_val]:
+                pickle_pak = pickle_summary.run_info.pass_at_k[k_val][mt]
+                wandb_pak = wandb_summary.run_info.pass_at_k[k_val][mt]
+                assert pickle_pak.value == pytest.approx(wandb_pak.value), f"pass@{k_val}/{mt} mismatch"
+        # compare extra metrics
+        assert set(pickle_summary.run_info.extra_metrics.keys()) == set(wandb_summary.run_info.extra_metrics.keys())
+        for metric_name in pickle_summary.run_info.extra_metrics:
+            assert pickle_summary.run_info.extra_metrics[metric_name].value == pytest.approx(
+                wandb_summary.run_info.extra_metrics[metric_name].value
+            ), f"extra_metrics mismatch for {metric_name}"
+        # compare sample/attempt counts
+        assert pickle_summary.run_info.sample_count == wandb_summary.run_info.sample_count
+        assert pickle_summary.run_info.attempt_count == wandb_summary.run_info.attempt_count
+        # compare category metrics
+        pickle_cats = sorted(pickle_summary.category_metrics, key=lambda c: c.category)
+        wandb_cats = sorted(wandb_summary.category_metrics, key=lambda c: c.category)
+        assert len(pickle_cats) == len(wandb_cats)
+        for pickle_cat, wandb_cat in zip(pickle_cats, wandb_cats, strict=True):
+            assert pickle_cat.category == wandb_cat.category
+            assert pickle_cat.sample_count == wandb_cat.sample_count
+            for mt in pickle_cat.accuracy:
+                assert pickle_cat.accuracy[mt].value == pytest.approx(wandb_cat.accuracy[mt].value), (
+                    f"category {pickle_cat.category} accuracy/{mt} mismatch"
+                )
+        # compare complexity metrics presence
+        assert (pickle_summary.complexity_metrics is not None) == (wandb_summary.complexity_metrics is not None)
+
+
 class MockWandBFile:
     """Mock wandb File object for testing fetch_sample_metrics_table."""
 

@@ -10,6 +10,7 @@ This module provides functions to:
 from __future__ import annotations
 
 import logging
+import pathlib  # noqa: TC003
 import re
 import typing
 
@@ -21,6 +22,8 @@ import pandas as pd
 import pydantic
 
 import pyine.evals.analysis_common
+import pyine.evals.correctness
+import pyine.evals.correctness.metrics as correctness_metrics
 import pyine.evals.correctness.types as correctness_types
 
 if typing.TYPE_CHECKING:
@@ -244,8 +247,6 @@ def _extract_fpr_metrics(
     fpr_values: list[float],
 ) -> tuple[dict[float, dict[str, MetricWithCI]], dict[float, dict[str, MetricWithCI]]]:
     """Extract attempt-level and sample-level metrics for each FPR target."""
-    import pyine.evals.correctness.metrics as correctness_metrics
-
     attempt_metrics: dict[float, dict[str, MetricWithCI]] = {}
     sample_metrics: dict[float, dict[str, MetricWithCI]] = {}
     for fpr_val in fpr_values:
@@ -494,6 +495,251 @@ def summarize_correctness_runs_to_dataframe(
                 row[f"unsafe_slip_rate@fpr={fpr_val}"] = unsafe.value
         rows.append(row)
     return pd.DataFrame(rows)
+
+
+# ---- Pickle-to-Summary Helpers ----
+
+
+def _metric_with_ci_from_aggregated(
+    cross_run_mean: dict[str, float],
+    hierarchical_cis: dict[str, typing.Any],
+    key: str,
+) -> MetricWithCI:
+    """Build a ``MetricWithCI`` from cross-run mean and hierarchical CIs."""
+    value = cross_run_mean.get(key)
+    ci_obj = hierarchical_cis.get(key)
+    ci_lower = ci_obj.lower_bound if ci_obj is not None else None
+    ci_upper = ci_obj.upper_bound if ci_obj is not None else None
+    return MetricWithCI(
+        value=float(value) if value is not None else None,
+        ci_lower=float(ci_lower) if ci_lower is not None else None,
+        ci_upper=float(ci_upper) if ci_upper is not None else None,
+    )
+
+
+def _build_safe_cat_reverse_map(
+    category_results: dict[str, correctness_types.CategoryResult],
+) -> dict[str, str]:
+    """Build a sanitized name -> original name mapping, raising on collision.
+
+    Args:
+        category_results: Per-category results from a ``SingleRunResult``.
+
+    Returns:
+        Dict mapping sanitized category names to original names.
+
+    Raises:
+        ValueError: If two original names collide to the same sanitized key.
+    """
+    reverse_map: dict[str, str] = {}
+    for original_name in category_results:
+        safe_name = original_name.replace("/", "_")
+        if safe_name in reverse_map:
+            raise ValueError(
+                f"category name collision: {original_name!r} and {reverse_map[safe_name]!r} "
+                f"both sanitize to {safe_name!r}"
+            )
+        reverse_map[safe_name] = original_name
+    return reverse_map
+
+
+def _validate_cross_run_categories(
+    per_run: list[correctness_types.SingleRunResult],
+) -> None:
+    """Validate that all runs have the same category set and per-category counts.
+
+    Args:
+        per_run: List of per-run results.
+
+    Raises:
+        ValueError: If category sets or per-category counts disagree across runs.
+    """
+    if len(per_run) <= 1:
+        return
+    reference_cats = set(per_run[0].category_results.keys())
+    for run_idx, run_result in enumerate(per_run[1:], start=1):
+        run_cats = set(run_result.category_results.keys())
+        if run_cats != reference_cats:
+            raise ValueError(
+                f"category set mismatch between run 0 and run {run_idx}: "
+                f"extra={run_cats - reference_cats}, missing={reference_cats - run_cats}"
+            )
+        for cat_name in reference_cats:
+            ref_cat = per_run[0].category_results[cat_name]
+            run_cat = run_result.category_results[cat_name]
+            if ref_cat.record_count != run_cat.record_count or ref_cat.sample_count != run_cat.sample_count:
+                raise ValueError(
+                    f"count mismatch for category {cat_name!r} between run 0 and run {run_idx}: "
+                    f"run 0 has (record_count={ref_cat.record_count}, sample_count={ref_cat.sample_count}), "
+                    f"run {run_idx} has (record_count={run_cat.record_count}, sample_count={run_cat.sample_count})"
+                )
+
+
+def eval_result_to_summary(
+    eval_result: pyine.evals.correctness.CorrectnessEvalResult,
+    *,
+    subset_name: str | None = None,
+    source_path: pathlib.Path | None = None,
+    run_name: str | None = None,
+    run_group: str | None = None,
+    guardrail_type_name: str | None = None,
+) -> CorrectnessRunSummary:
+    """Build a ``CorrectnessRunSummary`` from a local ``CorrectnessEvalResult`` pickle.
+
+    Maps directly from the structured types in ``eval_result.aggregated`` to populate the summary
+    models, avoiding the need for W&B.
+
+    Args:
+        eval_result: The correctness eval result loaded from a pickle.
+        subset_name: Evaluation subset name. Validated against ``eval_metadata["eval_subset_name"]``.
+        source_path: Optional path to the pickle file (for run info fallbacks).
+        run_name: Optional override for the run name.
+        run_group: Optional override for the run group.
+        guardrail_type_name: Optional guardrail type name override.
+
+    Returns:
+        A ``CorrectnessRunSummary`` with run-level and category metrics.
+
+    Raises:
+        ValueError: If subset_name or guardrail_type_name mismatches metadata, or if category
+            names collide after sanitization, or if cross-run categories are inconsistent.
+    """
+    aggregated = eval_result.aggregated
+    eval_metadata = eval_result.eval_metadata
+    # resolve subset name
+    metadata_subset = eval_metadata.get("eval_subset_name")
+    if subset_name is not None and metadata_subset is not None and subset_name != metadata_subset:
+        raise ValueError(
+            f"subset_name={subset_name!r} does not match eval_metadata['eval_subset_name']={metadata_subset!r}"
+        )
+    resolved_subset = subset_name or metadata_subset
+    if not resolved_subset:
+        raise ValueError("subset_name must be provided or present in eval_metadata['eval_subset_name']")
+    # resolve guardrail type name
+    metadata_type = eval_metadata.get("guardrail_type_name")
+    if guardrail_type_name is not None and metadata_type is not None and guardrail_type_name != metadata_type:
+        raise ValueError(
+            f"guardrail_type_name={guardrail_type_name!r} does not match "
+            f"eval_metadata['guardrail_type_name']={metadata_type!r}"
+        )
+    resolved_type = guardrail_type_name or metadata_type
+    # build run info
+    run_info = pyine.evals.analysis_common.build_run_info_from_metadata(
+        eval_metadata,
+        resolved_subset,
+        source_path=source_path,
+        run_name=run_name,
+        run_group=run_group,
+    )
+    cross_run_mean = aggregated.cross_run_mean
+    hierarchical_cis = aggregated.hierarchical_cis
+    # global metrics
+    auroc = _metric_with_ci_from_aggregated(cross_run_mean, hierarchical_cis, "auroc")
+    average_precision = _metric_with_ci_from_aggregated(cross_run_mean, hierarchical_cis, "average_precision")
+    # tpr_at_fpr
+    tpr_at_fpr: dict[float, MetricWithCI] = {}
+    for key in cross_run_mean:
+        if key.startswith("tpr_at_fpr_"):
+            fpr_str = key[len("tpr_at_fpr_") :]
+            fpr_val = _parse_fpr_capture(fpr_str)
+            tpr_at_fpr[fpr_val] = _metric_with_ci_from_aggregated(cross_run_mean, hierarchical_cis, key)
+    # detect FPR values from cross_run_mean keys
+    fpr_values: set[float] = set()
+    fpr_prefix_re = re.compile(r"^fpr_" + _FPR_FRAGMENT_RE + r"/")
+    for key in cross_run_mean:
+        match = fpr_prefix_re.match(key)
+        if match:
+            fpr_values.add(_parse_fpr_capture(match.group(1)))
+    sorted_fpr_values = sorted(fpr_values)
+    # attempt and sample metrics (whitelisted)
+    attempt_metrics: dict[float, dict[str, MetricWithCI]] = {}
+    sample_metrics: dict[float, dict[str, MetricWithCI]] = {}
+    for fpr_val in sorted_fpr_values:
+        fpr_key = correctness_metrics.format_fpr_key(fpr_val)
+        attempt_dict: dict[str, MetricWithCI] = {}
+        for metric_name in _ATTEMPT_METRIC_NAMES:
+            full_key = f"{fpr_key}/{metric_name}"
+            attempt_dict[metric_name] = _metric_with_ci_from_aggregated(cross_run_mean, hierarchical_cis, full_key)
+        attempt_metrics[fpr_val] = attempt_dict
+        sample_dict: dict[str, MetricWithCI] = {}
+        for metric_name in _SAMPLE_METRIC_NAMES:
+            full_key = f"{fpr_key}/{metric_name}"
+            sample_dict[metric_name] = _metric_with_ci_from_aggregated(cross_run_mean, hierarchical_cis, full_key)
+        sample_metrics[fpr_val] = sample_dict
+    # class balance and counts
+    overall_positive_rate = aggregated.class_balance.overall_positive_rate
+    sample_count = len(aggregated.class_balance.per_sample_positive_rates)
+    # record_count from split_summary with subset-sensitive key
+    stripped_subset = resolved_subset
+    if stripped_subset.startswith("guardrail_"):
+        stripped_subset = stripped_subset[len("guardrail_") :]
+    record_count_key = f"{stripped_subset}_record_count"
+    if record_count_key not in aggregated.split_summary:
+        raise ValueError(
+            f"split_summary missing expected key {record_count_key!r}; "
+            f"available keys: {sorted(aggregated.split_summary.keys())}"
+        )
+    record_count = int(aggregated.split_summary[record_count_key])
+    run_metrics = CorrectnessRunMetrics(
+        run_id=run_info.run_id,
+        run_name=run_info.run_name,
+        run_group=run_info.run_group,
+        project=run_info.project,
+        entity=run_info.entity,
+        created_at=run_info.created_at,
+        subset_name=run_info.subset_name,
+        guardrail_type_name=resolved_type,
+        auroc=auroc,
+        average_precision=average_precision,
+        tpr_at_fpr=tpr_at_fpr,
+        attempt_metrics=attempt_metrics,
+        sample_metrics=sample_metrics,
+        overall_positive_rate=overall_positive_rate,
+        sample_count=sample_count,
+        record_count=record_count,
+    )
+    # category metrics
+    _validate_cross_run_categories(aggregated.per_run)
+    reference_run = aggregated.per_run[0]
+    safe_cat_map = _build_safe_cat_reverse_map(reference_run.category_results)
+    category_metrics_list: list[CorrectnessCategoryMetrics] = []
+    for safe_cat in sorted(safe_cat_map.keys()):
+        original_cat = safe_cat_map[safe_cat]
+        cat_result = reference_run.category_results[original_cat]
+        cat_auroc_key = f"category/{safe_cat}/auroc"
+        cat_auroc = _metric_with_ci_from_aggregated(cross_run_mean, hierarchical_cis, cat_auroc_key)
+        cat_attempt_metrics: dict[float, dict[str, MetricWithCI]] = {}
+        cat_sample_metrics: dict[float, dict[str, MetricWithCI]] = {}
+        for fpr_val in sorted_fpr_values:
+            fpr_key = correctness_metrics.format_fpr_key(fpr_val)
+            cat_attempt_dict: dict[str, MetricWithCI] = {}
+            for metric_name in _ATTEMPT_METRIC_NAMES:
+                full_key = f"category/{safe_cat}/{fpr_key}/{metric_name}"
+                cat_attempt_dict[metric_name] = _metric_with_ci_from_aggregated(
+                    cross_run_mean, hierarchical_cis, full_key
+                )
+            cat_attempt_metrics[fpr_val] = cat_attempt_dict
+            cat_sample_dict: dict[str, MetricWithCI] = {}
+            for metric_name in _SAMPLE_METRIC_NAMES:
+                full_key = f"category/{safe_cat}/{fpr_key}/{metric_name}"
+                cat_sample_dict[metric_name] = _metric_with_ci_from_aggregated(
+                    cross_run_mean, hierarchical_cis, full_key
+                )
+            cat_sample_metrics[fpr_val] = cat_sample_dict
+        category_metrics_list.append(
+            CorrectnessCategoryMetrics(
+                category=safe_cat,
+                record_count=cat_result.record_count,
+                sample_count=cat_result.sample_count,
+                auroc=cat_auroc,
+                attempt_metrics=cat_attempt_metrics,
+                sample_metrics=cat_sample_metrics,
+            )
+        )
+    return CorrectnessRunSummary(
+        run_info=run_metrics,
+        category_metrics=category_metrics_list,
+    )
 
 
 # ---- Plotting Functions ----

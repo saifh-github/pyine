@@ -9,6 +9,7 @@ This module provides functions to:
 """
 # pyright: reportUnknownMemberType=false, reportUnknownArgumentType=false, reportUnknownVariableType=false
 
+import pathlib
 import re
 import typing
 
@@ -335,7 +336,7 @@ def extract_category_metrics(
     category_pattern = re.compile(rf"^{re.escape(prefix)}(.+)/([^/]+)$")
     # metric namespace segments that indicate non-category keys when they appear as the last
     # segment of the category path. only the last segment is checked so that legitimate
-    # categories like "difficulty/complexity/high" are not excluded --only paths where the
+    # categories like "difficulty/complexity/high" are not excluded -- only paths where the
     # namespace IS the leaf (e.g. "code_type/python/complexity" or "attempt_token_usage").
     _excluded_leaf_segments = frozenset(
         {
@@ -346,6 +347,10 @@ def extract_category_metrics(
             "sample_token_usage",
         }
     )
+    # "difficulty" is special: it's excluded only when the metric name matches the stat-pattern
+    # (score_{stat}) produced by compute_aggregated_difficulty_stats, so that real categories
+    # coincidentally named "difficulty" (e.g. "tags/difficulty") are not dropped.
+    _difficulty_metric_pattern = re.compile(r"^score_(mean|median|std|min|max)$")
     categories: dict[str, dict[str, float | int | None]] = {}
     try:
         summary_items = summary.items()  # type: ignore[reportAttributeAccessIssue]
@@ -361,6 +366,8 @@ def extract_category_metrics(
         # exclude non-category metric namespaces by checking the last path segment
         category_segments = category.split("/")
         if category_segments[-1] in _excluded_leaf_segments:
+            continue
+        if category_segments[-1] == "difficulty" and _difficulty_metric_pattern.match(metric):
             continue
         if category not in categories:
             categories[category] = {}
@@ -490,6 +497,82 @@ def fetch_eval_summary(
         run_info=extract_run_metrics(run, subset_name),
         category_metrics=extract_category_metrics(run, subset_name),
         complexity_metrics=extract_complexity_metrics(run, subset_name),
+    )
+
+
+class _LocalRunAdapter:
+    """Dict-backed adapter mimicking the W&B Run interface for local pickle analysis.
+
+    Allows ``extract_run_metrics``, ``extract_category_metrics``, and ``extract_complexity_metrics``
+    to operate on a prefixed metrics dict without any W&B dependency.
+    """
+
+    def __init__(
+        self,
+        summary: dict[str, typing.Any],
+        run_info: pyine.evals.analysis_common.BaseRunInfo,
+    ) -> None:
+        self.summary = summary
+        self.id = run_info.run_id
+        self.name = run_info.run_name
+        self.group = run_info.run_group
+        self.project = run_info.project
+        self.entity = run_info.entity
+        self.created_at = run_info.created_at
+
+
+def eval_result_to_summary(
+    eval_result: pyine.evals.code_exec.utils.CodeExecEvalResult,
+    *,
+    subset_name: str | None = None,
+    source_path: pathlib.Path | None = None,
+    run_name: str | None = None,
+    run_group: str | None = None,
+) -> EvalRunSummary:
+    """Build an ``EvalRunSummary`` from a local ``CodeExecEvalResult`` pickle.
+
+    Prefixes bare metric keys with ``benchmark/{subset}/`` and reuses the existing W&B
+    extraction functions via a dict-backed adapter, eliminating parser duplication.
+
+    Args:
+        eval_result: The code-exec eval result loaded from a pickle.
+        subset_name: Evaluation subset name. Validated against ``eval_metadata["eval_subset_name"]``
+            when both are present. Defaults to the metadata value if not provided.
+        source_path: Optional path to the pickle file (used for run info fallbacks).
+        run_name: Optional override for the run name in the summary.
+        run_group: Optional override for the run group in the summary.
+
+    Returns:
+        An ``EvalRunSummary`` that is schema-compatible and metric-equivalent to what
+        ``fetch_eval_summary`` would produce (metadata identity fields like ``run_id`` may differ).
+
+    Raises:
+        ValueError: If ``subset_name`` is missing/empty or mismatches the metadata.
+    """
+    metadata_subset = eval_result.eval_metadata.get("eval_subset_name")
+    if subset_name is not None and metadata_subset is not None and subset_name != metadata_subset:
+        raise ValueError(
+            f"subset_name={subset_name!r} does not match eval_metadata['eval_subset_name']={metadata_subset!r}"
+        )
+    resolved_subset = subset_name or metadata_subset
+    if not resolved_subset:
+        raise ValueError("subset_name must be provided or present in eval_metadata['eval_subset_name']")
+    # build prefixed summary dict
+    prefixed: dict[str, typing.Any] = {
+        f"benchmark/{resolved_subset}/{key}": value for key, value in eval_result.metrics.items()
+    }
+    run_info = pyine.evals.analysis_common.build_run_info_from_metadata(
+        eval_result.eval_metadata,
+        resolved_subset,
+        source_path=source_path,
+        run_name=run_name,
+        run_group=run_group,
+    )
+    adapter = _LocalRunAdapter(summary=prefixed, run_info=run_info)
+    return EvalRunSummary(
+        run_info=extract_run_metrics(adapter, resolved_subset),  # type: ignore[arg-type]
+        category_metrics=extract_category_metrics(adapter, resolved_subset),  # type: ignore[arg-type]
+        complexity_metrics=extract_complexity_metrics(adapter, resolved_subset),  # type: ignore[arg-type]
     )
 
 

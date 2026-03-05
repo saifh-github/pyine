@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import typing
 
+import numpy as np
 import pytest
 
+import pyine.evals.correctness
 import pyine.evals.correctness.analysis
+import pyine.evals.correctness.types as correctness_types
 
 
 class _MockSummary(dict[str, typing.Any]):
@@ -427,6 +430,373 @@ class TestSummarizeCorrectnessRunsToDataframe:
 
 
 # ---- FPR Parsing Tests ----
+
+
+class TestEvalResultToSummary:
+    """Tests for eval_result_to_summary (correctness pickle path)."""
+
+    @staticmethod
+    def _make_single_run_result(
+        category_results: dict[str, correctness_types.CategoryResult] | None = None,
+        fpr_values: list[float] | None = None,
+    ) -> correctness_types.SingleRunResult:
+        fpr_values = fpr_values or [0.01]
+        attempt_metrics: dict[float, correctness_types.ThresholdedMetrics] = {}
+        sample_metrics: dict[float, correctness_types.SampleLevelMetrics] = {}
+        for fpr_val in fpr_values:
+            attempt_metrics[fpr_val] = correctness_types.ThresholdedMetrics(
+                target_fpr=fpr_val,
+                threshold=0.5,
+                tp=40,
+                fp=2,
+                tn=198,
+                fn=10,
+                tpr=0.8,
+                fpr=0.01,
+                fnr=0.2,
+                precision=40 / 42,
+                npv=198 / 208,
+            )
+            sample_metrics[fpr_val] = correctness_types.SampleLevelMetrics(
+                target_fpr=fpr_val,
+                base_pass_rate=0.9,
+                guarded_pass_rate=0.88,
+                unsafe_slip_rate=0.05,
+                total_block_rate=0.02,
+                best_of_k_success_rate=0.95,
+                cons_pass_rate=0.7,
+                cons_unsafe_slip_rate=0.03,
+                cons_justified_reject_rate=0.8,
+            )
+        cat_results = category_results or {
+            "regular": correctness_types.CategoryResult(
+                category="regular",
+                record_count=400,
+                sample_count=80,
+                class_balance=correctness_types.ClassBalanceStats(
+                    overall_positive_rate=0.6,
+                    per_sample_positive_rates=[0.6] * 80,
+                    num_all_correct_samples=0,
+                    num_all_incorrect_samples=0,
+                    code_type_proportions={"original": 1.0},
+                    predict_type_proportions={},
+                ),
+                threshold_free=correctness_types.ThresholdFreeMetrics(
+                    auroc=0.94,
+                    average_precision=0.90,
+                    tpr_at_fpr={0.01: 0.75},
+                    fpr_grid=np.linspace(0, 1, 10),
+                    tpr_grid=np.linspace(0, 1, 10),
+                    precision_grid=np.linspace(1, 0.5, 10),
+                    recall_grid=np.linspace(0, 1, 10),
+                ),
+                attempt_metrics=attempt_metrics,
+                sample_metrics=sample_metrics,
+            ),
+        }
+        return correctness_types.SingleRunResult(
+            guardrail_metadata={"name": "test"},
+            threshold_free=correctness_types.ThresholdFreeMetrics(
+                auroc=0.92,
+                average_precision=0.87,
+                tpr_at_fpr={0.01: 0.72},
+                fpr_grid=np.linspace(0, 1, 10),
+                tpr_grid=np.linspace(0, 1, 10),
+                precision_grid=np.linspace(1, 0.5, 10),
+                recall_grid=np.linspace(0, 1, 10),
+            ),
+            attempt_metrics=attempt_metrics,
+            sample_metrics=sample_metrics,
+            category_results=cat_results,
+            bootstrap_cis={},
+            difficulty_stats=None,
+            verification_cost_stats=None,
+        )
+
+    @staticmethod
+    def _make_eval_result(
+        per_run: list[correctness_types.SingleRunResult] | None = None,
+        eval_metadata: dict[str, typing.Any] | None = None,
+        cross_run_mean: dict[str, float] | None = None,
+        split_summary: dict[str, typing.Any] | None = None,
+    ) -> pyine.evals.correctness.CorrectnessEvalResult:
+        import pyine.evals.correctness
+
+        default_cross_run_mean: dict[str, float] = {
+            "auroc": 0.92,
+            "average_precision": 0.87,
+            "tpr_at_fpr_0_01": 0.72,
+            "fpr_0_01/tpr": 0.80,
+            "fpr_0_01/fpr": 0.01,
+            "fpr_0_01/fnr": 0.20,
+            "fpr_0_01/precision": 40 / 42,
+            "fpr_0_01/npv": 198 / 208,
+            "fpr_0_01/guarded_pass_rate": 0.88,
+            "fpr_0_01/unsafe_slip_rate": 0.05,
+            "fpr_0_01/base_pass_rate": 0.9,
+            "fpr_0_01/total_block_rate": 0.02,
+            "fpr_0_01/best_of_k_success_rate": 0.95,
+            "fpr_0_01/cons_pass_rate": 0.7,
+            "fpr_0_01/cons_unsafe_slip_rate": 0.03,
+            "fpr_0_01/cons_justified_reject_rate": 0.8,
+            # category keys: no /mean suffix (matches real AggregatedResult cross_run_mean)
+            "category/regular/auroc": 0.94,
+            "category/regular/fpr_0_01/tpr": 0.75,
+            "category/regular/fpr_0_01/fpr": 0.009,
+            "category/regular/fpr_0_01/guarded_pass_rate": 0.86,
+            "category/regular/fpr_0_01/unsafe_slip_rate": 0.04,
+        }
+        if cross_run_mean:
+            default_cross_run_mean.update(cross_run_mean)
+        default_metadata: dict[str, typing.Any] = {
+            "eval_subset_name": "guardrail_test",
+            "model_name": "test-guardrail",
+        }
+        if eval_metadata:
+            default_metadata.update(eval_metadata)
+        aggregated = correctness_types.AggregatedResult(
+            split_summary=split_summary or {"test_record_count": 500},
+            class_balance=correctness_types.ClassBalanceStats(
+                overall_positive_rate=0.6,
+                per_sample_positive_rates=[0.6] * 100,
+                num_all_correct_samples=0,
+                num_all_incorrect_samples=0,
+                code_type_proportions={"original": 1.0},
+                predict_type_proportions={},
+            ),
+            per_run=per_run or [TestEvalResultToSummary._make_single_run_result()],
+            cross_run_mean=default_cross_run_mean,
+            cross_run_std={},
+            cross_run_p5={},
+            cross_run_num_valid={},
+            hierarchical_cis={},
+            difficulty_stats=None,
+            verification_cost_stats=None,
+        )
+        return pyine.evals.correctness.CorrectnessEvalResult(
+            metrics={},
+            eval_metadata=default_metadata,
+            aggregated=aggregated,
+        )
+
+    def test_basic_summary(self) -> None:
+        result = self._make_eval_result()
+        summary = pyine.evals.correctness.analysis.eval_result_to_summary(result)
+        assert summary.run_info.auroc.value == pytest.approx(0.92)
+        assert summary.run_info.average_precision.value == pytest.approx(0.87)
+        assert summary.run_info.sample_count == 100
+        assert summary.run_info.record_count == 500
+        assert summary.run_info.overall_positive_rate == pytest.approx(0.6)
+
+    def test_tpr_at_fpr_extraction(self) -> None:
+        result = self._make_eval_result()
+        summary = pyine.evals.correctness.analysis.eval_result_to_summary(result)
+        assert 0.01 in summary.run_info.tpr_at_fpr
+        assert summary.run_info.tpr_at_fpr[0.01].value == pytest.approx(0.72)
+
+    def test_per_fpr_metrics(self) -> None:
+        result = self._make_eval_result()
+        summary = pyine.evals.correctness.analysis.eval_result_to_summary(result)
+        assert 0.01 in summary.run_info.attempt_metrics
+        assert summary.run_info.attempt_metrics[0.01]["tpr"].value == pytest.approx(0.80)
+        assert 0.01 in summary.run_info.sample_metrics
+        assert summary.run_info.sample_metrics[0.01]["guarded_pass_rate"].value == pytest.approx(0.88)
+
+    def test_category_metrics(self) -> None:
+        result = self._make_eval_result()
+        summary = pyine.evals.correctness.analysis.eval_result_to_summary(result)
+        assert len(summary.category_metrics) == 1
+        cat = summary.category_metrics[0]
+        assert cat.category == "regular"
+        assert cat.record_count == 400
+        assert cat.sample_count == 80
+        # verify extracted category metric values (not just counts)
+        assert cat.auroc.value == pytest.approx(0.94)
+        assert 0.01 in cat.attempt_metrics
+        assert cat.attempt_metrics[0.01]["tpr"].value == pytest.approx(0.75)
+        assert cat.attempt_metrics[0.01]["fpr"].value == pytest.approx(0.009)
+        assert 0.01 in cat.sample_metrics
+        assert cat.sample_metrics[0.01]["guarded_pass_rate"].value == pytest.approx(0.86)
+        assert cat.sample_metrics[0.01]["unsafe_slip_rate"].value == pytest.approx(0.04)
+
+    def test_guardrail_type_name_passthrough(self) -> None:
+        result = self._make_eval_result()
+        summary = pyine.evals.correctness.analysis.eval_result_to_summary(result, guardrail_type_name="my_type")
+        assert summary.run_info.guardrail_type_name == "my_type"
+
+    def test_guardrail_type_from_metadata(self) -> None:
+        result = self._make_eval_result(eval_metadata={"guardrail_type_name": "meta_type"})
+        summary = pyine.evals.correctness.analysis.eval_result_to_summary(result)
+        assert summary.run_info.guardrail_type_name == "meta_type"
+
+    def test_guardrail_type_mismatch_raises(self) -> None:
+        result = self._make_eval_result(eval_metadata={"guardrail_type_name": "meta_type"})
+        with pytest.raises(ValueError, match="does not match"):
+            pyine.evals.correctness.analysis.eval_result_to_summary(result, guardrail_type_name="other_type")
+
+    def test_category_with_slash_in_name(self) -> None:
+        cat_results = {
+            "biasing/misleading": correctness_types.CategoryResult(
+                category="biasing/misleading",
+                record_count=100,
+                sample_count=20,
+                class_balance=correctness_types.ClassBalanceStats(
+                    overall_positive_rate=0.5,
+                    per_sample_positive_rates=[0.5] * 20,
+                    num_all_correct_samples=0,
+                    num_all_incorrect_samples=0,
+                    code_type_proportions={"misleading": 1.0},
+                    predict_type_proportions={},
+                ),
+                threshold_free=correctness_types.ThresholdFreeMetrics(
+                    auroc=0.85,
+                    average_precision=0.80,
+                    tpr_at_fpr={0.01: 0.60},
+                    fpr_grid=np.linspace(0, 1, 10),
+                    tpr_grid=np.linspace(0, 1, 10),
+                    precision_grid=np.linspace(1, 0.5, 10),
+                    recall_grid=np.linspace(0, 1, 10),
+                ),
+                attempt_metrics={},
+                sample_metrics={},
+            ),
+        }
+        run_result = self._make_single_run_result(category_results=cat_results)
+        result = self._make_eval_result(
+            per_run=[run_result],
+            cross_run_mean={
+                "auroc": 0.92,
+                "average_precision": 0.87,
+                "category/biasing_misleading/auroc": 0.85,
+            },
+        )
+        summary = pyine.evals.correctness.analysis.eval_result_to_summary(result)
+        assert len(summary.category_metrics) == 1
+        assert summary.category_metrics[0].category == "biasing_misleading"
+        assert summary.category_metrics[0].record_count == 100
+        assert summary.category_metrics[0].auroc.value == pytest.approx(0.85)
+
+    def test_safe_name_collision_raises(self) -> None:
+        """Two original names colliding to the same sanitized key should raise."""
+        cat_results = {}
+        for cat_name in ("a/b_c", "a_b/c"):
+            cat_results[cat_name] = correctness_types.CategoryResult(
+                category=cat_name,
+                record_count=50,
+                sample_count=10,
+                class_balance=correctness_types.ClassBalanceStats(
+                    overall_positive_rate=0.5,
+                    per_sample_positive_rates=[0.5] * 10,
+                    num_all_correct_samples=0,
+                    num_all_incorrect_samples=0,
+                    code_type_proportions={},
+                    predict_type_proportions={},
+                ),
+                threshold_free=correctness_types.ThresholdFreeMetrics(
+                    auroc=0.85,
+                    average_precision=0.80,
+                    tpr_at_fpr={0.01: 0.60},
+                    fpr_grid=np.linspace(0, 1, 10),
+                    tpr_grid=np.linspace(0, 1, 10),
+                    precision_grid=np.linspace(1, 0.5, 10),
+                    recall_grid=np.linspace(0, 1, 10),
+                ),
+                attempt_metrics={},
+                sample_metrics={},
+            )
+        run_result = self._make_single_run_result(category_results=cat_results)
+        result = self._make_eval_result(per_run=[run_result])
+        with pytest.raises(ValueError, match="collision"):
+            pyine.evals.correctness.analysis.eval_result_to_summary(result)
+
+    def test_cross_run_category_mismatch_raises(self) -> None:
+        run1 = self._make_single_run_result()
+        # run2 has different categories
+        cat_results2 = {
+            "other_cat": correctness_types.CategoryResult(
+                category="other_cat",
+                record_count=400,
+                sample_count=80,
+                class_balance=correctness_types.ClassBalanceStats(
+                    overall_positive_rate=0.6,
+                    per_sample_positive_rates=[0.6] * 80,
+                    num_all_correct_samples=0,
+                    num_all_incorrect_samples=0,
+                    code_type_proportions={},
+                    predict_type_proportions={},
+                ),
+                threshold_free=correctness_types.ThresholdFreeMetrics(
+                    auroc=0.94,
+                    average_precision=0.90,
+                    tpr_at_fpr={0.01: 0.75},
+                    fpr_grid=np.linspace(0, 1, 10),
+                    tpr_grid=np.linspace(0, 1, 10),
+                    precision_grid=np.linspace(1, 0.5, 10),
+                    recall_grid=np.linspace(0, 1, 10),
+                ),
+                attempt_metrics={},
+                sample_metrics={},
+            ),
+        }
+        run2 = self._make_single_run_result(category_results=cat_results2)
+        result = self._make_eval_result(per_run=[run1, run2])
+        with pytest.raises(ValueError, match="category set mismatch"):
+            pyine.evals.correctness.analysis.eval_result_to_summary(result)
+
+    def test_cost_keys_not_in_attempt_metrics(self) -> None:
+        """fpr_*/cost_* keys should not leak into attempt/sample metrics."""
+        result = self._make_eval_result(
+            cross_run_mean={
+                "auroc": 0.92,
+                "average_precision": 0.87,
+                "fpr_0_01/tpr": 0.80,
+                "fpr_0_01/cost_total": 1000.0,
+            },
+        )
+        summary = pyine.evals.correctness.analysis.eval_result_to_summary(result)
+        # FPR 0.01 must be detected (otherwise the exclusion check is vacuous)
+        assert 0.01 in summary.run_info.attempt_metrics
+        assert "cost_total" not in summary.run_info.attempt_metrics[0.01]
+        assert 0.01 in summary.run_info.sample_metrics
+        assert "cost_total" not in summary.run_info.sample_metrics[0.01]
+
+    def test_subset_name_mismatch_raises(self) -> None:
+        result = self._make_eval_result()
+        with pytest.raises(ValueError, match="does not match"):
+            pyine.evals.correctness.analysis.eval_result_to_summary(result, subset_name="wrong_subset")
+
+    def test_record_count_subset_sensitive(self) -> None:
+        """test subset uses test_record_count, valid uses valid_record_count."""
+        result = self._make_eval_result(
+            eval_metadata={"eval_subset_name": "guardrail_test"},
+            split_summary={"test_record_count": 500},
+        )
+        summary = pyine.evals.correctness.analysis.eval_result_to_summary(result)
+        assert summary.run_info.record_count == 500
+
+    def test_record_count_valid_subset(self) -> None:
+        result = self._make_eval_result(
+            eval_metadata={"eval_subset_name": "guardrail_valid"},
+            split_summary={"valid_record_count": 200},
+        )
+        summary = pyine.evals.correctness.analysis.eval_result_to_summary(result)
+        assert summary.run_info.record_count == 200
+
+    def test_record_count_missing_key_raises(self) -> None:
+        result = self._make_eval_result(
+            eval_metadata={"eval_subset_name": "test"},
+            split_summary={"other_key": 100},
+        )
+        with pytest.raises(ValueError, match="split_summary missing"):
+            pyine.evals.correctness.analysis.eval_result_to_summary(result)
+
+    def test_multiple_per_run_consistent(self) -> None:
+        """Multiple per_run with same categories should succeed."""
+        run1 = self._make_single_run_result()
+        run2 = self._make_single_run_result()
+        result = self._make_eval_result(per_run=[run1, run2])
+        summary = pyine.evals.correctness.analysis.eval_result_to_summary(result)
+        assert summary.run_info.auroc.value == pytest.approx(0.92)
 
 
 class TestParseFprCapture:

@@ -8,6 +8,9 @@ This module provides common building blocks used by both ``code_exec.analysis`` 
 from __future__ import annotations
 
 import datetime
+import hashlib
+import logging
+import pathlib  # noqa: TC003
 import re
 import typing
 
@@ -22,6 +25,8 @@ if typing.TYPE_CHECKING:
     import numpy as np
     import wandb.apis.public
     from numpy.typing import NDArray
+
+logger = logging.getLogger(__name__)
 
 
 class MetricWithCI(typing.NamedTuple):
@@ -131,6 +136,87 @@ def filter_runs_by_date(
         if (start_dt is None or _parse_created_at(run.created_at) >= start_dt)
         and (end_dt is None or _parse_created_at(run.created_at) <= end_dt)
     ]
+
+
+# -- Pickle-to-summary helpers --
+
+
+def build_run_info_from_metadata(
+    eval_metadata: dict[str, typing.Any],
+    subset_name: str,
+    *,
+    source_path: pathlib.Path | None = None,
+    run_name: str | None = None,
+    run_group: str | None = None,
+) -> BaseRunInfo:
+    """Construct a ``BaseRunInfo`` from an ``EvalResult``'s eval_metadata dict.
+
+    Provides deterministic fallback chains for each field so that pickle-only
+    analysis notebooks can build the same summary models used by W&B extraction.
+
+    Args:
+        eval_metadata: The ``eval_metadata`` dict from an ``EvalResult``.
+        subset_name: Evaluation subset name (e.g. ``"test"``, ``"guardrail_test"``).
+        source_path: Optional path to the pickle file (used for fallback labels and mtime).
+        run_name: Optional override for the run name.
+        run_group: Optional override for the run group.
+
+    Returns:
+        A ``BaseRunInfo`` populated from the metadata with fallback defaults.
+
+    Raises:
+        ValueError: If ``subset_name`` is empty.
+        FileNotFoundError: If ``source_path`` is provided but does not exist.
+    """
+    if not subset_name:
+        raise ValueError("subset_name must be non-empty")
+    if source_path is not None and not source_path.exists():
+        raise FileNotFoundError(f"source_path does not exist: {source_path}")
+    # resolve run_name: override > model_name > source_path stem > "local"
+    resolved_run_name = run_name
+    if resolved_run_name is None:
+        resolved_run_name = eval_metadata.get("model_name")
+    if resolved_run_name is None and source_path is not None:
+        resolved_run_name = source_path.stem
+    if resolved_run_name is None:
+        logger.debug("no run_name available, falling back to 'local'")
+        resolved_run_name = "local"
+    # resolve run_group: override > source_path parent name > "local"
+    resolved_run_group = run_group
+    if resolved_run_group is None and source_path is not None:
+        resolved_run_group = source_path.parent.name
+    if resolved_run_group is None:
+        logger.debug("no run_group available, falling back to 'local'")
+        resolved_run_group = "local"
+    # resolve created_at (ISO 8601): time_since_epoch > source_path mtime > now
+    created_at: str | None = None
+    reprod_metadata = eval_metadata.get("reprod_metadata")
+    if isinstance(reprod_metadata, dict):
+        time_since_epoch = reprod_metadata.get("time_since_epoch")
+        if time_since_epoch is not None:
+            created_at = datetime.datetime.fromtimestamp(float(time_since_epoch), tz=datetime.UTC).isoformat()
+    if created_at is None and source_path is not None:
+        mtime = source_path.stat().st_mtime
+        created_at = datetime.datetime.fromtimestamp(mtime, tz=datetime.UTC).isoformat()
+    if created_at is None:
+        created_at = datetime.datetime.now(tz=datetime.UTC).isoformat()
+    # derive a unique run_id: when source_path is available, hash resolved path + mtime_ns + size
+    # for collision resistance; otherwise fall back to run_name
+    if source_path is not None:
+        stat = source_path.stat()
+        id_input = f"{source_path.resolve()}:{stat.st_mtime_ns}:{stat.st_size}"
+        run_id = hashlib.sha256(id_input.encode()).hexdigest()[:12]
+    else:
+        run_id = resolved_run_name
+    return BaseRunInfo(
+        run_id=run_id,
+        run_name=resolved_run_name,
+        run_group=resolved_run_group,
+        project="local",
+        entity=None,
+        created_at=created_at,
+        subset_name=subset_name,
+    )
 
 
 # -- Matplotlib helpers (plotting only, excluded from coverage) --

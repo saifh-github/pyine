@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import datetime
+import pathlib
+import typing
+
 import pytest
 
 import pyine.evals.analysis_common
@@ -95,6 +99,105 @@ class TestFilterRunsByDate:
         )
         # space-separated datetime is still explicit; r2 at noon should be excluded
         assert [run.id for run in filtered] == ["r1"]
+
+
+class TestBuildRunInfoFromMetadata:
+    """Tests for build_run_info_from_metadata."""
+
+    def test_full_metadata_with_source_path(self, tmp_path: pathlib.Path) -> None:
+        source = tmp_path / "result.pkl"
+        source.write_bytes(b"dummy")
+        metadata = {
+            "model_name": "gpt-4o",
+            "reprod_metadata": {"time_since_epoch": "1700000000"},
+        }
+        info = pyine.evals.analysis_common.build_run_info_from_metadata(metadata, "test", source_path=source)
+        assert info.run_name == "gpt-4o"
+        assert info.run_group == tmp_path.name
+        assert info.project == "local"
+        assert info.entity is None
+        assert info.subset_name == "test"
+        # created_at should be from time_since_epoch, parseable as ISO 8601
+        parsed = datetime.datetime.fromisoformat(info.created_at)
+        assert parsed.year == 2023  # 1700000000 is Nov 2023
+
+    def test_created_at_is_iso_format(self) -> None:
+        metadata: dict[str, typing.Any] = {"reprod_metadata": {"time_since_epoch": "1700000000"}}
+        info = pyine.evals.analysis_common.build_run_info_from_metadata(metadata, "test")
+        parsed = datetime.datetime.fromisoformat(info.created_at)
+        assert parsed.tzinfo is not None  # must have timezone
+
+    def test_created_at_priority_time_since_epoch(self, tmp_path: pathlib.Path) -> None:
+        source = tmp_path / "result.pkl"
+        source.write_bytes(b"dummy")
+        metadata: dict[str, typing.Any] = {"reprod_metadata": {"time_since_epoch": "1700000000"}}
+        info = pyine.evals.analysis_common.build_run_info_from_metadata(metadata, "test", source_path=source)
+        parsed = datetime.datetime.fromisoformat(info.created_at)
+        assert abs(parsed.timestamp() - 1700000000) < 1.0
+
+    def test_created_at_falls_back_to_mtime(self, tmp_path: pathlib.Path) -> None:
+        source = tmp_path / "result.pkl"
+        source.write_bytes(b"dummy")
+        metadata: dict[str, typing.Any] = {}  # no reprod_metadata
+        info = pyine.evals.analysis_common.build_run_info_from_metadata(metadata, "test", source_path=source)
+        parsed = datetime.datetime.fromisoformat(info.created_at)
+        assert abs(parsed.timestamp() - source.stat().st_mtime) < 1.0
+
+    def test_created_at_falls_back_to_now(self) -> None:
+        metadata: dict[str, typing.Any] = {}
+        before = datetime.datetime.now(tz=datetime.UTC)
+        info = pyine.evals.analysis_common.build_run_info_from_metadata(metadata, "test")
+        after = datetime.datetime.now(tz=datetime.UTC)
+        parsed = datetime.datetime.fromisoformat(info.created_at)
+        assert before <= parsed <= after
+
+    def test_minimal_metadata_falls_back_to_local(self) -> None:
+        metadata: dict[str, typing.Any] = {}
+        info = pyine.evals.analysis_common.build_run_info_from_metadata(metadata, "test")
+        assert info.run_name == "local"
+        assert info.run_group == "local"
+        assert info.run_id == "local"  # no source_path -> run_id == run_name
+
+    def test_run_id_unique_with_source_path(self, tmp_path: pathlib.Path) -> None:
+        """run_id is a deterministic hash when source_path is provided."""
+        source = tmp_path / "result.pkl"
+        source.write_bytes(b"dummy")
+        metadata = {"model_name": "gpt-4o"}
+        info = pyine.evals.analysis_common.build_run_info_from_metadata(metadata, "test", source_path=source)
+        assert info.run_id != info.run_name  # hash differs from display name
+        assert len(info.run_id) == 12  # 12-char hex hash
+
+    def test_run_id_differs_for_different_files(self, tmp_path: pathlib.Path) -> None:
+        """Different pickle files produce different run_ids."""
+        source_a = tmp_path / "a.pkl"
+        source_b = tmp_path / "b.pkl"
+        source_a.write_bytes(b"aa")
+        source_b.write_bytes(b"bb")
+        metadata: dict[str, typing.Any] = {}
+        info_a = pyine.evals.analysis_common.build_run_info_from_metadata(metadata, "test", source_path=source_a)
+        info_b = pyine.evals.analysis_common.build_run_info_from_metadata(metadata, "test", source_path=source_b)
+        assert info_a.run_id != info_b.run_id
+
+    def test_overrides_take_precedence(self, tmp_path: pathlib.Path) -> None:
+        source = tmp_path / "result.pkl"
+        source.write_bytes(b"dummy")
+        metadata = {"model_name": "gpt-4o"}
+        info = pyine.evals.analysis_common.build_run_info_from_metadata(
+            metadata, "test", source_path=source, run_name="custom-name", run_group="custom-group"
+        )
+        assert info.run_name == "custom-name"
+        assert info.run_group == "custom-group"
+
+    def test_nonexistent_source_path_raises(self) -> None:
+        metadata: dict[str, typing.Any] = {}
+        with pytest.raises(FileNotFoundError, match="does not exist"):
+            pyine.evals.analysis_common.build_run_info_from_metadata(
+                metadata, "test", source_path=pathlib.Path("/nonexistent/path.pkl")
+            )
+
+    def test_empty_subset_name_raises(self) -> None:
+        with pytest.raises(ValueError, match="non-empty"):
+            pyine.evals.analysis_common.build_run_info_from_metadata({}, "")
 
 
 class TestMetricWithCI:
