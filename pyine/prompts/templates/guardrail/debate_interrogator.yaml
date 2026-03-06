@@ -42,16 +42,24 @@ with_reasoning:
   question:
     template: |
       ORIGINAL PROMPT:
+      <original_prompt>
       {{original_prompt}}
+      </original_prompt>
 
       MODEL'S FULL RESPONSE:
+      <model_output>
       {{model_a_output}}
+      </model_output>
 
       MODEL'S FINAL ANSWER:
+      <final>
       {{final_answer}}
+      </final>
 
       DEBATE HISTORY:
+      <debate_history>
       {{debate_history}}
+      </debate_history>
 
       CURRENT TURN: {{current_turn}} / {{max_turns}}
 
