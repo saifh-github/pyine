@@ -1,7 +1,5 @@
-import logging
 import os
 import pathlib
-import time
 import uuid
 
 import pytest
@@ -9,41 +7,7 @@ import wandb
 
 import pyine.evals.code_exec.analysis as analysis
 import tests.env_checks
-
-logger = logging.getLogger(__name__)
-
-_POLL_INTERVAL_SECONDS = 2.0
-_POLL_TIMEOUT_SECONDS = 60.0
-
-
-def _wait_for_run(
-    project: str,
-    entity: str | None,
-    run_name: str,
-) -> wandb.apis.public.Run:
-    """Polls wandb until the newly-created run is visible via the public API."""
-    deadline = time.time() + _POLL_TIMEOUT_SECONDS
-    while time.time() < deadline:
-        runs = analysis.fetch_runs(
-            project=project,
-            entity=entity,
-            filters={"displayName": run_name},
-            per_page=5,
-        )
-        if runs:
-            return runs[0]
-        time.sleep(_POLL_INTERVAL_SECONDS)
-    pytest.fail(f"timed out waiting for wandb run '{run_name}' to materialize")
-
-
-def _delete_run(run: wandb.apis.public.Run) -> None:
-    """Attempts to delete the test run to keep the project tidy."""
-    try:
-        api = wandb.Api()
-        api_run = api.run(f"{run.entity}/{run.project}/{run.id}")
-        api_run.delete()
-    except Exception as exc:
-        logger.debug("unable to delete test wandb run %s/%s/%s: %s", run.entity, run.project, run.id, exc)
+import tests.evals.integration.wandb_helpers
 
 
 @pytest.mark.integration
@@ -83,7 +47,7 @@ def test_analysis_helpers_round_trip(monkeypatch: pytest.MonkeyPatch, tmp_path: 
     ) as run:
         run.summary.update(summary_payload)
         run.log({"benchmark/test/metrics_table": 1})
-    fetched_run = _wait_for_run(project, entity, run_name)
+    fetched_run = tests.evals.integration.wandb_helpers.wait_for_run(project, entity, run_name)
     try:
         summary = analysis.fetch_eval_summary(fetched_run, subset_name="test")
         assert summary.run_info.run_name == run_name
@@ -106,4 +70,4 @@ def test_analysis_helpers_round_trip(monkeypatch: pytest.MonkeyPatch, tmp_path: 
         assert float(df.loc[0, "accuracy_hard"]) == pytest.approx(0.6)
         assert float(df.loc[0, "accuracy_soft"]) == pytest.approx(0.75)
     finally:
-        _delete_run(fetched_run)
+        tests.evals.integration.wandb_helpers.delete_run(fetched_run)

@@ -2,17 +2,26 @@
 
 from __future__ import annotations
 
+import asyncio
+import dataclasses
 import pathlib
+import shutil
+import tempfile
 import typing
 
 import pytest
 
+import pyine.evals.code_exec._impl as code_exec_impl
+import pyine.evals.code_exec.configs as code_exec_configs
+import pyine.evals.code_exec.utils as code_exec_utils
+import pyine.evals.common
 import pyine.evals.correctness.datamodule as correctness_datamodule
 import pyine.evals.correctness.datamodule_configs as correctness_datamodule_configs
 import pyine.evals.correctness.splits as correctness_splits
 import pyine.evals.correctness.types as correctness_types
 import pyine.organisms.datamodules.samples.common as samples_common
 import pyine.utils.code.complexity_metrics
+import tests.evals.integration.fake_models as fake_models
 
 _FAKE_LMDB_PATH = pathlib.Path("/fake/lmdb")
 _ZERO_COMPLEXITY_METRICS: dict[str, float | int] = dict.fromkeys(
@@ -190,3 +199,124 @@ def correctness_eval_records() -> tuple[list[correctness_types.EvalRecord], list
                 )
             )
     return valid_records, test_records
+
+
+# ---------------------------------------------------------------------------
+# TACO-format sample factory (for round-trip tests)
+# ---------------------------------------------------------------------------
+
+_NUM_TACO_SAMPLES = 20
+_NUM_ATTEMPTS = 3
+_PASS_AT_K_VALUES = [1, 3]
+
+
+def make_taco_sample_data(
+    count: int = _NUM_TACO_SAMPLES,
+) -> list[samples_common.SampleData]:
+    """Build ``SampleData`` instances with TACO-format identifiers.
+
+    These identifiers are parseable by ``extract_problem_id()`` ->
+    ``TraceIdentifier.from_string()``, enabling end-to-end round-trips
+    through the correctness pipeline without monkeypatching the parser.
+    """
+    return [
+        make_sample_data(
+            identifier=f"TACO/TRAIN/p{idx:06d}/s0000/t0000",
+            expected_output=f"result_{idx}",
+        )
+        for idx in range(count)
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Pipeline output containers
+# ---------------------------------------------------------------------------
+
+
+@dataclasses.dataclass(frozen=True)
+class CodeExecPipelineOutput:
+    """Holds the output of a full code exec pipeline run for round-trip tests."""
+
+    result: code_exec_utils.CodeExecEvalResult
+    lmdb_path: pathlib.Path
+    pickle_path: pathlib.Path | None
+    samples: list[samples_common.SampleData]
+    tmp_dir: pathlib.Path
+
+
+def _run_code_exec_pipeline(
+    chain: typing.Any,
+    samples: list[samples_common.SampleData],
+    *,
+    enable_pickle: bool = True,
+    store_aggregated_metrics: bool = True,
+) -> CodeExecPipelineOutput:
+    """Run the code exec pipeline synchronously with real ``disk_export_config``.
+
+    Fake chains in ``fake_models`` fire ``on_chat_model_start`` on any callbacks passed via the
+    LangChain ``config`` dict, so the real prompt-capture + LMDB-export path inside
+    ``evaluate_runnable_model`` works end-to-end.
+    """
+    tmp_dir = pathlib.Path(tempfile.mkdtemp(prefix="roundtrip_"))
+    lmdb_base = tmp_dir / "lmdb_export"
+    pickle_dir = tmp_dir / "pickle" if enable_pickle else None
+    eval_config = code_exec_configs.CodeExecEvalsConfig(
+        eval_runnable_config=pyine.evals.common.RunnableEvalConfig(parallel=False),
+        num_attempts_per_sample=_NUM_ATTEMPTS,
+        pass_at_k_values=_PASS_AT_K_VALUES,
+        result_dump_dir=pickle_dir,
+        disk_export_config=pyine.evals.common.EvalExportConfig(
+            output_path=lmdb_base,
+            store_aggregated_metrics=store_aggregated_metrics,
+        ),
+    )
+    result = asyncio.run(
+        code_exec_impl.evaluate_runnable_model(
+            eval_config=eval_config,
+            chain=chain,
+            datamodule=FakeConversationDataModule(samples),  # type: ignore[arg-type]
+            eval_subset_name="test",
+        )
+    )
+    lmdb_path = lmdb_base / "test"
+    pickle_path: pathlib.Path | None = None
+    if pickle_dir is not None:
+        pickle_path = pickle_dir / "test.pkl"
+    return CodeExecPipelineOutput(
+        result=result,
+        lmdb_path=lmdb_path,
+        pickle_path=pickle_path,
+        samples=samples,
+        tmp_dir=tmp_dir,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Module-scoped pipeline fixtures (run once, shared across tests)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def oracle_code_exec_output() -> typing.Generator[CodeExecPipelineOutput]:
+    """Run the code exec pipeline with ``OracleCodeExecChain`` (deterministic, 100% accuracy)."""
+    samples = make_taco_sample_data()
+    output = _run_code_exec_pipeline(fake_models.OracleCodeExecChain(), samples)
+    yield output
+    shutil.rmtree(output.tmp_dir, ignore_errors=True)
+
+
+@pytest.fixture(scope="module")
+def random_code_exec_output() -> typing.Generator[CodeExecPipelineOutput]:
+    """Run the code exec pipeline with ``RandomCodeExecChain`` (seeded ~50% accuracy).
+
+    Only LMDB export is enabled (no pickle); this fixture exists to provide mixed-label
+    data for correctness pipeline tests.
+    """
+    samples = make_taco_sample_data()
+    output = _run_code_exec_pipeline(
+        fake_models.RandomCodeExecChain(seed=42),
+        samples,
+        enable_pickle=False,
+    )
+    yield output
+    shutil.rmtree(output.tmp_dir, ignore_errors=True)

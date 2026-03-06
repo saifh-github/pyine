@@ -164,7 +164,7 @@ def test_v0_rl_eval_base_uses_vllm_and_respects_runtime_dry_run(
     )
     payload = job.return_value
     assert payload["runtime_dry_run"] is True
-    assert payload["lmdb_paths_count"] == 4
+    assert payload["lmdb_paths_count"] == 26
     assert payload["vllm_provider"] == "vllm"
     assert payload["vllm_model"] == payload["base_model"]
     assert payload["vllm_max_tokens"] == payload["eval_max_tokens"]

@@ -8,11 +8,41 @@ from __future__ import annotations
 
 import typing
 
+import langchain_core.callbacks
 import langchain_core.messages
 import numpy as np
 
 import pyine.evals.common
 import pyine.evals.correctness.types as correctness_types
+
+
+def _fire_callbacks(
+    chain_class_name: str,
+    sample_dict: dict[str, typing.Any],
+    config: dict[str, typing.Any] | None,
+) -> None:
+    """Fire ``on_chat_model_start`` on any callbacks passed via the LangChain config dict.
+
+    The real pipeline passes ``config={"callbacks": [handler]}`` when prompt capture is enabled
+    (``disk_export_config is not None``).  Duck-typed fake chains don't go through LangChain's
+    dispatch machinery, so we manually invoke the handler here so that prompt stores are populated
+    for the LMDB export path.
+    """
+    if config is None:
+        return
+    callbacks = config.get("callbacks")
+    if not callbacks:
+        return
+    fake_message = langchain_core.messages.HumanMessage(
+        content=str(sample_dict.get("code", "")),
+    )
+    for callback in callbacks:
+        if isinstance(callback, langchain_core.callbacks.BaseCallbackHandler):
+            callback.on_chat_model_start(
+                serialized={"name": chain_class_name},
+                messages=[[fake_message]],
+            )
+
 
 # ---------------------------------------------------------------------------
 # CODE_EXEC fake chains (duck-typed LangChain Runnables)
@@ -30,6 +60,7 @@ class OracleCodeExecChain:
         sample_dict: dict[str, typing.Any],
         **kwargs: typing.Any,
     ) -> langchain_core.messages.AIMessage:
+        _fire_callbacks(type(self).__name__, sample_dict, kwargs.get("config"))
         return langchain_core.messages.AIMessage(
             content=str(sample_dict["expected_output"]),
             usage_metadata={"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
@@ -46,6 +77,7 @@ class InverseOracleCodeExecChain:
         sample_dict: dict[str, typing.Any],
         **kwargs: typing.Any,
     ) -> langchain_core.messages.AIMessage:
+        _fire_callbacks(type(self).__name__, sample_dict, kwargs.get("config"))
         return langchain_core.messages.AIMessage(
             content=str(sample_dict["expected_output"]) + "_WRONG",
             usage_metadata={"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
@@ -65,6 +97,7 @@ class RandomCodeExecChain:
         sample_dict: dict[str, typing.Any],
         **kwargs: typing.Any,
     ) -> langchain_core.messages.AIMessage:
+        _fire_callbacks(type(self).__name__, sample_dict, kwargs.get("config"))
         expected = str(sample_dict["expected_output"])
         content = expected if self._rng.random() < 0.5 else expected + "_WRONG"
         return langchain_core.messages.AIMessage(

@@ -35,6 +35,16 @@ logger = logging.getLogger(__name__)
 MetricWithCI = pyine.evals.analysis_common.MetricWithCI
 
 
+def _get_summary_string_keys(summary: typing.Any) -> list[str]:
+    """Return a snapshot of string-typed keys from a W&B Summary object.
+
+    The W&B ``Summary.__iter__`` can yield non-string keys (e.g. integers from internal
+    tracking), and its ``__getitem__`` raises ``KeyError`` for them.  Iterating via
+    ``.keys()`` and filtering to strings avoids the crash.
+    """
+    return [key for key in summary.keys() if isinstance(key, str)]  # noqa: SIM118
+
+
 # ---- Data Models ----
 
 
@@ -133,17 +143,18 @@ def detect_guardrail_type_names(
     """
     summary = run.summary
     prefix = f"benchmark/{subset_name}/"
+    summary_keys = _get_summary_string_keys(summary)
     # primary strategy: explicit metadata
     metadata_key = f"{prefix}_guardrail_type_names"
-    if metadata_key in summary:
+    if metadata_key in summary_keys:
         type_names = summary[metadata_key]
         if isinstance(type_names, list) and type_names:
             return sorted(type_names)
     # fallback: heuristic scan
     anchor_suffixes = ["auroc/mean", "average_precision/mean", "sample_count", "record_count"]
     candidates: set[str] = set()
-    for key in summary:
-        if not isinstance(key, str) or not key.startswith(prefix):
+    for key in summary_keys:
+        if not key.startswith(prefix):
             continue
         relative = key[len(prefix) :]
         parts = relative.split("/")
@@ -219,9 +230,7 @@ def _detect_fpr_keys(
     """Detect FPR target values from W&B summary keys."""
     fpr_re = re.compile(re.escape(prefix) + r"fpr_" + _FPR_FRAGMENT_RE + r"/")
     fpr_values: set[float] = set()
-    for key in summary:
-        if not isinstance(key, str):
-            continue
+    for key in _get_summary_string_keys(summary):
         match = fpr_re.match(key)
         if match:
             fpr_values.add(_parse_fpr_capture(match.group(1)))
@@ -341,9 +350,7 @@ def extract_correctness_metrics(
     # TPR@FPR
     tpr_at_fpr: dict[float, MetricWithCI] = {}
     tpr_at_re = re.compile(re.escape(prefix) + r"tpr_at_(fpr_" + _FPR_FRAGMENT_RE + r")/mean")
-    for key in summary:
-        if not isinstance(key, str):
-            continue
+    for key in _get_summary_string_keys(summary):
         match = tpr_at_re.match(key)
         if match:
             fpr_key = match.group(1)  # e.g. "fpr_0_01" or "fpr_1e-05"
@@ -403,8 +410,8 @@ def extract_correctness_category_metrics(
     cat_prefix = f"{prefix}category/"
     # discover category names
     category_names: set[str] = set()
-    for key in summary:
-        if not isinstance(key, str) or not key.startswith(cat_prefix):
+    for key in _get_summary_string_keys(summary):
+        if not key.startswith(cat_prefix):
             continue
         relative = key[len(cat_prefix) :]
         parts = relative.split("/")
