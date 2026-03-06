@@ -20,6 +20,10 @@ config:
   datamodule_config:
     eval_subset_names: ["valid", "test"]
   evals_config:
+    eval_runnable_config:
+      max_workers: 256
+      max_in_flight_jobs: 256
+      async_metrics_compute_rate: 1024
     vllm_provider_config:
       provider: vllm
       model_kwargs:
