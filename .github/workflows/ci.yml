@@ -1,14 +1,17 @@
-name: Base (template-defined) CI
+name: CI (quick)
 
 on:
-  push:
-    branches: [main, master]
   pull_request:
     branches: [main, master]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
 
 jobs:
   quality-checks:
     runs-on: ubuntu-latest
+
+    permissions:
+      pull-requests: write
+      contents: write
 
     env:
       NODE_OPTIONS: --max-old-space-size=4096  # increase default to 4GB for all steps in this job
@@ -53,7 +56,23 @@ jobs:
       run: uv run make lint
 
     - name: Run fast tests with coverage
-      run: uv run make coverage
+      run: uv run make coverage-fast
+
+    - name: Coverage comment
+      if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false
+      uses: py-cov-action/python-coverage-comment-action@v3
+      continue-on-error: true
+      with:
+        GITHUB_TOKEN: ${{ github.token }}
+        MERGE_COVERAGE_FILES: true
+
+    - name: Run integration tests (label-gated)
+      if: contains(github.event.pull_request.labels.*.name, 'integration')
+      run: uv run make test-integration
+
+    - name: Run slow tests (label-gated)
+      if: contains(github.event.pull_request.labels.*.name, 'slow')
+      run: uv run make test-slow
 
     - name: Upload coverage artifacts
       if: always() && hashFiles('logs/coverage/**') != ''
@@ -61,11 +80,3 @@ jobs:
       with:
         name: coverage-report-${{ matrix.python-version }}
         path: logs/coverage/
-
-    - name: Run integration tests
-      if: contains(github.event.pull_request.labels.*.name, 'integration')
-      run: uv run make test-integration
-
-    - name: Run slow tests
-      if: contains(github.event.pull_request.labels.*.name, 'slow')
-      run: uv run make test-slow

@@ -19,7 +19,8 @@ Use `uv sync --extra dev` after creating a virtual environment with `uv venv` (o
 `make install` to set up everything automatically). Run `make info` to discover helper tasks.
 `make check` executes the full pre-commit suite, while `make test` runs the default pytest
 selection (`-m "not (slow or integration)"`). Use `make test-all` for exhaustive runs and
-`make coverage` when you need HTML and XML coverage artifacts under `logs/coverage/`.
+`make coverage-fast` for fast-only coverage or `make coverage` for full coverage; both
+produce HTML and XML artifacts under `logs/coverage/`.
 
 ## Coding Style & Naming Conventions
 

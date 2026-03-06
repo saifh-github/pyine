@@ -43,13 +43,15 @@ For project setup instructions, refer to the top-level [README](./README.md).
    - Run a single test file or pattern:
      - `pytest tests/path/to/test_file.py -q`
      - `pytest -k "token or expression" -q`
-   - Coverage (optional, to make sure it stays adequate): `make coverage`
+   - Fast coverage (optional, mirrors what PR CI runs): `make coverage-fast`
+   - Full coverage (optional, mirrors what post-merge CI runs): `make coverage`
 
 5. Open a PR:
 
    - Summarize your changes and motivation, and link to the relevant issue(s).
    - Describe any breaking changes or migrations.
    - Keep PR descriptions technical and reproducible. If relevant, add performance or behavioral comparisons before/after.
+   - Add the `integration` and/or `slow` label if you want PR CI to run the corresponding heavier test slices before merge.
 
 ### Coding conventions
 

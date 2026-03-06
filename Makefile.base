@@ -12,7 +12,7 @@ export UV_PREVIEW_FEATURES
 .PHONY: info help clean check-uv install install-all lock lock-deps stats setup-nbstripout setup-nbstripout-tool check-notebooks
 .PHONY: lint lint-precommit lint-ruff lint-pyright format
 .PHONY: test tests test-integration tests-integration test-slow tests-slow test-all tests-all test-full tests-full
-.PHONY: check coverage cov
+.PHONY: check coverage cov coverage-fast cov-fast
 
 info help: ## Shows the commands + comments below
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z_-]+.*:.*##/ {printf "\033[36m%-30s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -238,6 +238,17 @@ check: lint test ## Runs quality control checks (linting + tests)
 coverage cov: check-uv ## Runs all tests with coverage; artifacts saved under logs/coverage
 	mkdir -p logs/coverage
 	uv run pytest $(TEST_DIR) -v \
+		--cov=$(SRC_DIR) \
+		--cov-branch \
+		--cov-report=term-missing \
+		--cov-report=html:logs/coverage/html \
+		--cov-report=xml:logs/coverage/coverage.xml \
+		2>&1 | tee logs/coverage/coverage.log
+
+coverage-fast cov-fast: check-uv ## Runs fast tests with coverage; artifacts saved under logs/coverage
+	mkdir -p logs/coverage
+	uv run pytest $(TEST_DIR) -v \
+		-m "not (slow or integration)" \
 		--cov=$(SRC_DIR) \
 		--cov-branch \
 		--cov-report=term-missing \

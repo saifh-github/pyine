@@ -127,6 +127,7 @@ filterwarnings = [
 [tool.coverage.run]
 branch = true
 parallel = true
+relative_files = true
 source = ["pyine"]
 data_file = "logs/coverage/.coverage"
 omit = [

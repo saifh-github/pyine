@@ -156,12 +156,18 @@ development environment with all dev dependencies and pre-commit hooks.
 Once installed, you can use the following commands to verify your changes:
 
 ```shell
-make check     # Runs linting (pre-commit, ruff, pyright) + quick tests
-make test      # Runs quick tests only (excludes slow and integration tests)
-make test-all  # Runs all tests including slow and integration tests
-make format    # Auto-formats code with ruff
-make coverage  # Runs tests with coverage report (saved to logs/coverage/)
+make check          # Runs linting (pre-commit, ruff, pyright) + quick tests
+make test           # Runs quick tests only (excludes slow and integration tests)
+make test-all       # Runs all tests including slow and integration tests
+make format         # Auto-formats code with ruff
+make coverage-fast  # Runs fast tests with coverage report (saved to logs/coverage/)
+make coverage       # Runs all tests with coverage report (saved to logs/coverage/)
 ```
+
+CI is split into two workflows: a **quick** workflow (`ci.yml`) runs on pull requests with
+linting and fast tests (`make coverage-fast`), with optional label-gated heavier checks
+(`integration` and `slow` labels), while a **full** workflow (`ci-full.yml`) runs on merges
+to `master`/`main` and on manual dispatch with the complete test suite (`make coverage`).
 
 Additional useful commands:
 
