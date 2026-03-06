@@ -6,6 +6,7 @@ import asyncio
 import dataclasses
 import typing
 
+import langchain_core.exceptions
 import langchain_core.messages
 import pytest
 
@@ -73,6 +74,34 @@ def partial_match_grader() -> MockGraderChain:
     return MockGraderChain(
         scorer=lambda exp, pred: EXACT_MATCH_SCORE if exp.strip() == pred.strip() else PARTIAL_MATCH_SCORE
     )
+
+
+class FailingMockGraderChain:
+    """Mock grader that always raises OutputParserException."""
+
+    def invoke(
+        self,
+        predicted: typing.Any,
+        expected: typing.Any,
+        predict_type: str = "unknown",
+        **invoke_kwargs: typing.Any,
+    ) -> float:
+        raise langchain_core.exceptions.OutputParserException("mock parser failure")
+
+    async def ainvoke(
+        self,
+        predicted: typing.Any,
+        expected: typing.Any,
+        predict_type: str = "unknown",
+        **invoke_kwargs: typing.Any,
+    ) -> float:
+        raise langchain_core.exceptions.OutputParserException("mock parser failure")
+
+
+@pytest.fixture
+def failing_grader() -> FailingMockGraderChain:
+    """Grader that always raises OutputParserException."""
+    return FailingMockGraderChain()
 
 
 @pytest.fixture

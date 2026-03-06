@@ -6,7 +6,10 @@ import logging
 import typing
 import uuid
 
+import langchain_core.exceptions
+import langchain_core.runnables
 import numpy as np
+import openai
 
 import pyine.data.utils.filter_rules
 import pyine.evals.code_exec.utils
@@ -17,12 +20,17 @@ import pyine.utils.llm_providers
 import pyine.utils.metrics.confidence
 import pyine.utils.metrics.multi_sample
 
-if typing.TYPE_CHECKING:
-    import langchain_core.runnables
-
 logger = logging.getLogger(__name__)
 
 _MATCH_TYPES = pyine.evals.code_exec.utils.DETERMINISTIC_MATCH_TYPES
+
+_GRADER_RECOVERABLE_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    langchain_core.exceptions.OutputParserException,
+    openai.APITimeoutError,
+    openai.APIConnectionError,
+    openai.RateLimitError,
+    openai.InternalServerError,
+)
 
 
 def _groups_to_summaries(
@@ -182,6 +190,8 @@ class OutcomeEvaluator:
         self.use_async_llm_grader = use_async_llm_grader
         self.add_idempotency_header = add_idempotency_header
         self.results: list[pyine.evals.code_exec.utils.SampleEval] = []
+        self._grader_error_count: int = 0
+        self._grader_clamped_count: int = 0
 
     @property
     def llm_grader_available(self) -> bool:
@@ -205,6 +215,7 @@ class OutcomeEvaluator:
         for match_type in pyine.evals.code_exec.utils.MATCH_TYPES:
             names.extend(_with_ci(f"accuracy_{match_type}"))
         names.extend(pyine.evals.code_exec.utils.AggregatedGraderMetricNames)
+        names.extend(["grader_error_count", "grader_clamped_count"])
         if pass_at_k_values is not None:
             for k in pass_at_k_values:
                 for match_type in _MATCH_TYPES:
@@ -229,6 +240,8 @@ class OutcomeEvaluator:
                 "accuracy_grader_ci_lower",
                 "accuracy_grader_ci_upper",
                 *pyine.evals.code_exec.utils.AggregatedGraderMetricNames,
+                "grader_error_count",
+                "grader_clamped_count",
             }
             return [n for n in all_names if n not in grader_names]
         return all_names
@@ -287,13 +300,21 @@ class OutcomeEvaluator:
         if self.add_idempotency_header:
             # make the request unique so that if it is retried while a response is in-flight, it won't cause issues
             invoke_kwargs["extra_headers"] = {"Idempotency-Key": str(uuid.uuid4())}
-        response = await self._llm_grader_chain_config.ainvoke(
-            predicted=predicted,
-            expected=expected,
-            predict_type=predict_type,
-            **invoke_kwargs,
-        )
-        return _decode_response(typing.cast("pyine.evals.code_exec.utils.LLMGraderResponse", response))
+        try:
+            response = await self._llm_grader_chain_config.ainvoke(
+                predicted=predicted,
+                expected=expected,
+                predict_type=predict_type,
+                **invoke_kwargs,
+            )
+            score = _decode_response(typing.cast("pyine.evals.code_exec.utils.LLMGraderResponse", response))
+        except _GRADER_RECOVERABLE_EXCEPTIONS:
+            logger.exception("LLM grader async invoke failed; returning 0.0 as fallback score")
+            self._grader_error_count += 1
+            return 0.0
+        if hasattr(response, "was_clamped") and response.was_clamped:
+            self._grader_clamped_count += 1
+        return score
 
     def _invoke_llm_grader_sync(
         self,
@@ -309,13 +330,21 @@ class OutcomeEvaluator:
         if self.add_idempotency_header:
             # make the request unique so that if it is retried while a response is in-flight, it won't cause issues
             invoke_kwargs["extra_headers"] = {"Idempotency-Key": str(uuid.uuid4())}
-        response = self._llm_grader_chain_config.invoke(
-            predicted=predicted,
-            expected=expected,
-            predict_type=predict_type,
-            **invoke_kwargs,
-        )
-        return _decode_response(typing.cast("pyine.evals.code_exec.utils.LLMGraderResponse", response))
+        try:
+            response = self._llm_grader_chain_config.invoke(
+                predicted=predicted,
+                expected=expected,
+                predict_type=predict_type,
+                **invoke_kwargs,
+            )
+            score = _decode_response(typing.cast("pyine.evals.code_exec.utils.LLMGraderResponse", response))
+        except _GRADER_RECOVERABLE_EXCEPTIONS:
+            logger.exception("LLM grader sync invoke failed; returning 0.0 as fallback score")
+            self._grader_error_count += 1
+            return 0.0
+        if hasattr(response, "was_clamped") and response.was_clamped:
+            self._grader_clamped_count += 1
+        return score
 
     def add_sample(
         self,
@@ -582,6 +611,8 @@ class OutcomeEvaluator:
         output: dict[str, float] = {}
         for aggr_name, aggr_func in pyine.evals.constants.AGGREGATION_STAT_FUNCS.items():
             output[f"grader_{aggr_name}"] = float(aggr_func(scores)) if len(scores) > 0 else np.nan
+        output["grader_error_count"] = self._grader_error_count
+        output["grader_clamped_count"] = self._grader_clamped_count
         return output
 
     async def _gather_grader_results(
@@ -650,6 +681,8 @@ class OutcomeEvaluator:
             score_array = np.asarray(grader_scores)
             for aggr_name, aggr_func in pyine.evals.constants.AGGREGATION_STAT_FUNCS.items():
                 output[f"grader_{aggr_name}"] = float(aggr_func(score_array)) if len(score_array) > 0 else np.nan
+            output["grader_error_count"] = self._grader_error_count
+            output["grader_clamped_count"] = self._grader_clamped_count
         # multi-attempt metrics: pass@k (when k-values provided) and majority/diversity (when K > 1)
         if pass_at_k_values is not None or num_attempts_per_sample > 1:
             groups = self.get_sample_groups(

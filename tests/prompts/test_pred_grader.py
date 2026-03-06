@@ -1,6 +1,7 @@
 import langchain_core.output_parsers
 import langchain_core.prompts
 import langchain_core.runnables
+import pydantic
 import pytest
 import pytest_mock
 
@@ -167,3 +168,67 @@ async def test_pred_grader_infer_with_async_reasoning() -> None:
     if result.reasoning is not None:
         assert isinstance(result.reasoning, str)
         assert len(result.reasoning) > 0
+
+
+class TestGradingResultScoreClamping:
+    """Tests for GradingResult score clamping and rejection logic."""
+
+    def test_negative_score_clamped_to_zero(self) -> None:
+        result = pred_grader.GradingResult(score=-2.0)
+        assert result.score == 0.0
+        assert result.was_clamped is True
+
+    def test_score_above_one_clamped_to_one(self) -> None:
+        result = pred_grader.GradingResult(score=5.0)
+        assert result.score == 1.0
+        assert result.was_clamped is True
+
+    def test_valid_score_not_clamped(self) -> None:
+        result = pred_grader.GradingResult(score=0.5)
+        assert result.score == 0.5
+        assert result.was_clamped is False
+
+    def test_int_score_coerced_to_float(self) -> None:
+        result = pred_grader.GradingResult(score=1)
+        assert result.score == 1.0
+        assert isinstance(result.score, float)
+        assert result.was_clamped is False
+
+    def test_bool_score_rejected(self) -> None:
+        with pytest.raises(pydantic.ValidationError):
+            pred_grader.GradingResult(score=True)
+
+    def test_nan_score_rejected(self) -> None:
+        with pytest.raises(pydantic.ValidationError):
+            pred_grader.GradingResult(score=float("nan"))
+
+    def test_inf_score_rejected(self) -> None:
+        with pytest.raises(pydantic.ValidationError):
+            pred_grader.GradingResult(score=float("inf"))
+
+
+class TestGradingResultWithReasoningScoreClamping:
+    """Tests that GradingResultWithReasoning inherits clamping behavior."""
+
+    def test_negative_score_clamped(self) -> None:
+        result = pred_grader.GradingResultWithReasoning(score=-1.0, reasoning="bad")
+        assert result.score == 0.0
+        assert result.was_clamped is True
+
+    def test_above_one_clamped(self) -> None:
+        result = pred_grader.GradingResultWithReasoning(score=3.0)
+        assert result.score == 1.0
+        assert result.was_clamped is True
+
+    def test_valid_score_not_clamped(self) -> None:
+        result = pred_grader.GradingResultWithReasoning(score=0.75, reasoning="ok")
+        assert result.score == 0.75
+        assert result.was_clamped is False
+
+    def test_bool_rejected(self) -> None:
+        with pytest.raises(pydantic.ValidationError):
+            pred_grader.GradingResultWithReasoning(score=False)
+
+    def test_nan_rejected(self) -> None:
+        with pytest.raises(pydantic.ValidationError):
+            pred_grader.GradingResultWithReasoning(score=float("nan"))

@@ -21,6 +21,7 @@ from .conftest import (
     DEFAULT_GRADER_THRESHOLD,
     EXACT_MATCH_SCORE,
     NO_MATCH_SCORE,
+    FailingMockGraderChain,
     MockGraderChain,
 )
 
@@ -607,3 +608,87 @@ async def test_real_llm_grade_scoring() -> None:
     assert metrics["accuracy_grader"] >= 0.5
     agreement = await evaluator.compute_agreement_table()
     assert agreement["hard_vs_soft"] == pytest.approx(1.0)
+
+
+class TestOutcomeEvaluatorGraderFallback:
+    """Tests for grader error fallback and clamped/error counter logic."""
+
+    @pytest.mark.asyncio
+    async def test_async_grader_error_returns_zero(
+        self,
+        base_evaluator: pyine.evals.code_exec.evaluator.OutcomeEvaluator,
+        failing_grader: FailingMockGraderChain,
+    ) -> None:
+        """Async grader failure returns 0.0 and increments error counter."""
+        base_evaluator._llm_grader_chain_config = failing_grader
+        base_evaluator.add_sample(identifier="s1", expected="42", predicted="42")
+        # the sample was added with a future that will fail; gather it
+        await pyine.evals.code_exec.utils.SampleEval.gather_llm_scores(base_evaluator.results)
+        assert base_evaluator.results[0].llm_score == 0.0
+        assert base_evaluator._grader_error_count == 1
+
+    def test_sync_grader_error_returns_zero(
+        self,
+        failing_grader: FailingMockGraderChain,
+    ) -> None:
+        """Sync grader failure returns 0.0 and increments error counter."""
+        evaluator = pyine.evals.code_exec.evaluator.OutcomeEvaluator(use_async_llm_grader=False)
+        evaluator._llm_grader_chain_config = failing_grader
+        evaluator.add_sample(identifier="s1", expected="42", predicted="42")
+        assert evaluator.results[0].llm_score == 0.0
+        assert evaluator._grader_error_count == 1
+
+    @pytest.mark.asyncio
+    async def test_compute_metrics_includes_grader_counters(
+        self,
+        base_evaluator: pyine.evals.code_exec.evaluator.OutcomeEvaluator,
+        failing_grader: FailingMockGraderChain,
+    ) -> None:
+        """compute_metrics output includes grader_error_count and grader_clamped_count."""
+        base_evaluator._llm_grader_chain_config = failing_grader
+        base_evaluator.add_sample(identifier="s1", expected="42", predicted="42")
+        metrics = await base_evaluator.compute_metrics()
+        assert metrics["grader_error_count"] == 1
+        assert metrics["grader_clamped_count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_compute_grader_metrics_includes_counters(
+        self,
+        base_evaluator: pyine.evals.code_exec.evaluator.OutcomeEvaluator,
+        failing_grader: FailingMockGraderChain,
+    ) -> None:
+        """compute_grader_metrics output includes grader_error_count and grader_clamped_count."""
+        base_evaluator._llm_grader_chain_config = failing_grader
+        base_evaluator.add_sample(identifier="s1", expected="42", predicted="42")
+        grader_metrics = await base_evaluator.compute_grader_metrics()
+        assert grader_metrics["grader_error_count"] == 1
+        assert grader_metrics["grader_clamped_count"] == 0
+
+
+class TestOutcomeEvaluatorMetricNames:
+    """Tests for metric name registration and filtering."""
+
+    def test_supported_metric_names_include_grader_counters(self) -> None:
+        names = pyine.evals.code_exec.evaluator.OutcomeEvaluator.get_supported_metric_names()
+        assert "grader_error_count" in names
+        assert "grader_clamped_count" in names
+
+    def test_metric_names_stripped_without_grader(
+        self,
+        base_evaluator: pyine.evals.code_exec.evaluator.OutcomeEvaluator,
+    ) -> None:
+        """grader_error_count and grader_clamped_count are stripped when no grader is configured."""
+        assert not base_evaluator.llm_grader_available
+        names = base_evaluator.get_metric_names()
+        assert "grader_error_count" not in names
+        assert "grader_clamped_count" not in names
+
+    def test_metric_names_present_with_grader(
+        self,
+        evaluator_with_grader: pyine.evals.code_exec.evaluator.OutcomeEvaluator,
+    ) -> None:
+        """grader_error_count and grader_clamped_count are present when grader is configured."""
+        assert evaluator_with_grader.llm_grader_available
+        names = evaluator_with_grader.get_metric_names()
+        assert "grader_error_count" in names
+        assert "grader_clamped_count" in names
