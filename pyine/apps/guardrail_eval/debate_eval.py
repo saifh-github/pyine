@@ -1,13 +1,13 @@
-"""Standalone Hydra entrypoint for prompted LLM guardrail evaluation.
+"""Standalone Hydra entrypoint for LLM debate guardrail evaluation.
 
-Runs the correctness evaluation pipeline with a prompted (non-fine-tuned) LLM
+Runs the correctness evaluation pipeline with a multi-turn LLM debate
 as the guardrail scorer. No training step - the scorer is built directly from
-an LLM provider config.
+interrogator and responder LLM provider configs.
 
 CLI usage::
 
-    python -m pyine.apps.guardrail_eval.prompted_llm_eval \\
-        +experiment=guardrail/prompted_llm_eval_openai
+    python -m pyine.apps.guardrail_eval.debate_eval \\
+        +experiment=guardrail/debate_eval_openai
 """
 
 from __future__ import annotations
@@ -22,25 +22,24 @@ import pyine.evals.correctness._impl as correctness_impl
 import pyine.evals.correctness.datamodule as correctness_datamodule
 import pyine.evals.utils
 import pyine.utils.reprod
-from pyine.apps.guardrail_eval.prompted_llm_eval_configs import (
-    PromptedLLMEvalAppConfig,
+from pyine.apps.guardrail_eval.debate_eval_configs import (
+    DebateEvalAppConfig,
     register_hydra_configs,
 )
-from pyine.guardrails.prompted_llm.scorer import PromptedLLMGuardrailScorer
+from pyine.guardrails.llm_debate.scorer import DebateGuardrailScorer
 
 logger = logging.getLogger(__name__)
 
 
 async def main(
-    config: PromptedLLMEvalAppConfig,
+    config: DebateEvalAppConfig,
     runtime: pyine.configs.schemas.RuntimeConfig | None = None,
 ) -> None:
-    """Main entrypoint for prompted LLM guardrail evaluation.
+    """Main entrypoint for LLM debate guardrail evaluation.
 
-    Follows the same boilerplate pattern as existing training apps
-    (e.g. llm_classifier_trainer.py:main): entrypoint_setup, W&B run
-    init, evaluation loop, finalize. See pyine/apps/trainers/common.py
-    for the full lifecycle template.
+    Follows the same boilerplate pattern as existing evaluation apps
+    (e.g. prompted_llm_eval.py:main): entrypoint_setup, W&B run
+    init, evaluation loop, finalize.
     """
     # 0. Setup (seed, logging, optional W&B run init)
     wandb_init_kwargs: dict[str, typing.Any] = {}
@@ -58,12 +57,13 @@ async def main(
         logger.info("dry run mode -- skipping")
         return
 
-    # 1. Build scorer from guardrail config
-    scorer = PromptedLLMGuardrailScorer(config.guardrail_config)
+    # 1. Build scorer from debate config
+    scorer = DebateGuardrailScorer(config.guardrail_config)
     logger.info(
-        "built prompted LLM scorer: provider=%s, prompt=%s",
-        config.guardrail_config.llm_provider.provider,
-        config.guardrail_config.prompt_name,
+        "built debate scorer: interrogator=%s, responder=%s, max_turns=%d",
+        config.guardrail_config.interrogator_provider.provider,
+        config.guardrail_config.responder_provider.provider,
+        config.guardrail_config.max_debate_turns,
     )
 
     # 2. Prepare datamodule (loads LMDB, builds guardrail splits)
@@ -110,11 +110,11 @@ async def main(
     if runtime is not None:
         runtime.finalize()
 
-    logger.info("prompted LLM guardrail evaluation complete")
+    logger.info("LLM debate guardrail evaluation complete")
 
 
-def async_prompted_llm_eval_main_wrapper(
-    config: PromptedLLMEvalAppConfig,
+def async_debate_eval_main_wrapper(
+    config: DebateEvalAppConfig,
     runtime: pyine.configs.schemas.RuntimeConfig | None = None,
 ) -> None:
     """Synchronous wrapper around the async main."""
@@ -127,5 +127,5 @@ if __name__ == "__main__":
     pyine.apps.trainers.common.hydra_main(
         eval_type=pyine.evals.common.EvalType.CORRECTNESS,
         hydra_config_registration_fn=register_hydra_configs,
-        async_main_wrapper=async_prompted_llm_eval_main_wrapper,
+        async_main_wrapper=async_debate_eval_main_wrapper,
     )

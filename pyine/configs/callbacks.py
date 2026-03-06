@@ -52,7 +52,7 @@ class NonPrimaryRankCleanupCallback(hydra.experimental.callback.Callback):
                 return  # not in distributed mode at all
             if pyine.utils.distrib.has_explicit_global_rank():
                 return  # confirmed global-rank-0 from authoritative source (RANK env var / torch)
-            # global rank inferred from LOCAL_RANK fallback — ambiguous in multi-node
+            # global rank inferred from LOCAL_RANK fallback - ambiguous in multi-node
             # (every node's local-rank-0 would look like global-rank-0); fall through
             # to the FS-aware check below instead of trusting the inferred rank
             self._logger.debug(

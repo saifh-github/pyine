@@ -678,9 +678,9 @@ def render_config(
     # else, fallback for unknown config types
     else:
         if show_field_descriptions:
-            _table_add_row("<unknown>", "—", "—", "Unsupported config type")
+            _table_add_row("<unknown>", "-", "-", "Unsupported config type")
         else:
-            _table_add_row("<unknown>", "—", "—")
+            _table_add_row("<unknown>", "-", "-")
     # print the panel that groups the config description and table
     body_parts = [
         rich.text.Text(f"\n{doc}\n\nConfig contents listed below:\n"),

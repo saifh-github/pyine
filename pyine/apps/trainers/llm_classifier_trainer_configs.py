@@ -174,7 +174,7 @@ class LLMClassifierTrainerAppMainConfig(common.AppMainConfig, common.ModelTokeni
             warnings.warn(
                 "Both class_weight_mode='balanced' and datamodule_config.label_balance "
                 "are active. This applies double correction for class imbalance "
-                "(resampling + weighted loss). This is usually undesirable — consider "
+                "(resampling + weighted loss). This is usually undesirable - consider "
                 "using only one.",
                 stacklevel=2,
             )

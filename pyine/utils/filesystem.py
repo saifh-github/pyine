@@ -252,7 +252,7 @@ def check_output_path_overwrite(
         return
     if not force:
         message = (
-            f"Refusing to overwrite existing output at: {output_path.absolute()} — "
+            f"Refusing to overwrite existing output at: {output_path.absolute()} - "
             "re-run with force=True or pass --force from the CLI to continue."
         )
         logger.error(message)

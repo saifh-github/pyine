@@ -222,7 +222,7 @@ def build_step_mapping(
 ) -> pd.Series:
     """Build a mapping from W&B ``_step`` to a resolved step key (e.g. ``train/global_step``).
 
-    When ``raw_step_df`` is provided, it is used as the source for the mapping — this avoids
+    When ``raw_step_df`` is provided, it is used as the source for the mapping - this avoids
     issues with forward-filled values in ``history_df``. When not provided, ``history_df`` is
     used directly (forward-filled values are included, which provides a reasonable approximation:
     each ``_step`` maps to the last known ``step_key`` value at or before that point).
@@ -449,7 +449,7 @@ def fetch_history_df(
         fetch_keys = [k for k in user_keys if k not in _INTERNAL_KEYS]
         requested_internal = [k for k in user_keys if k in _INTERNAL_KEYS]
         if not fetch_keys:
-            # only internal keys requested — fall through to discovery mode, filter columns
+            # only internal keys requested - fall through to discovery mode, filter columns
             if verbose:
                 print(f"Fetching sampled history ({samples} samples)...")
             df = _retry_on_failure(
@@ -494,7 +494,7 @@ def fetch_history_df(
                     per_key_dfs.append(time_df)
             df = _merge_per_key_dataframes(per_key_dfs)
     else:
-        # discovery mode — no specific keys requested
+        # discovery mode - no specific keys requested
         if full_fidelity:
             if verbose:
                 print("Fetching full history with scan_history...")

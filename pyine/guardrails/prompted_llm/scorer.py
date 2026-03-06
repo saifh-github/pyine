@@ -1,4 +1,4 @@
-"""PromptedLLMGuardrailScorer — GuardrailScorer for prompted (non-fine-tuned) LLMs."""
+"""PromptedLLMGuardrailScorer - GuardrailScorer for prompted (non-fine-tuned) LLMs."""
 
 from __future__ import annotations
 
@@ -62,7 +62,7 @@ class PromptedLLMGuardrailScorer:
             for future in concurrent.futures.as_completed(future_to_idx):
                 idx = future_to_idx[future]
                 results[idx] = future.result()
-                completed += 1  # noqa: SIM113 — as_completed() doesn't support enumerate
+                completed += 1  # noqa: SIM113 - as_completed() doesn't support enumerate
                 if completed % 100 == 0 or completed == len(records):
                     logger.info("scored %d/%d records", completed, len(records))
 
@@ -157,24 +157,7 @@ class PromptedLLMGuardrailScorer:
         handler: pyine.utils.langchain.CaptureLLMHandler,
     ) -> float:
         """Extract total token count from the capture handler."""
-        end_event = handler.get_latest_event("llm_end")
-        if end_event is None or end_event.response is None:
-            return 0.0
-        # LLMResult.llm_output is typed as bare Optional[dict] in langchain (no type params)
-        llm_output: dict[str, typing.Any] = getattr(end_event.response, "llm_output", None) or {}
-        token_usage: dict[str, typing.Any] = llm_output.get("token_usage", {})
-        total: int = token_usage.get("total_tokens", 0)
-        if total > 0:
-            return float(total)
-        # Fallback: sum from generation info
-        for generation_list in end_event.response.generations:
-            for gen in generation_list:
-                gen_info: dict[str, typing.Any] = getattr(gen, "generation_info", None) or {}
-                usage: dict[str, typing.Any] = gen_info.get("usage", {})
-                total += usage.get("total_tokens", 0)
-        if total == 0:
-            logger.debug("token count is 0 for a successful LLM response; provider may not populate token usage fields")
-        return float(total)
+        return pyine.utils.langchain.extract_token_count_from_handler(handler)
 
     def get_metadata(self) -> dict[str, typing.Any]:
         """Return guardrail metadata for reporting."""

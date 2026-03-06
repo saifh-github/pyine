@@ -1,4 +1,4 @@
-"""GuardrailMetricsConnector Protocol — the core abstraction for pluggable guardrail benchmarking.
+"""GuardrailMetricsConnector Protocol - the core abstraction for pluggable guardrail benchmarking.
 
 Each guardrail architecture (activation probes, LLM classifiers, future types)
 implements this protocol.  The metrics runner calls these methods without knowing
@@ -27,7 +27,7 @@ class GuardrailMetricsConnector(typing.Protocol):
     This allows architecture-specific coordination (e.g., probes need to
     install/remove hooks, compute derived metrics like hook overhead, and
     share captured activations across sub-measurements).  The generic runner
-    only handles the sweep over configs, OOM resilience, and output —
+    only handles the sweep over configs, OOM resilience, and output -
     never architecture-specific measurement orchestration.
     """
 

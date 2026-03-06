@@ -1,6 +1,6 @@
 """Unit tests for PromptedLLMGuardrailScorer.
 
-All LLM chain calls are mocked — no real API calls are made.
+All LLM chain calls are mocked - no real API calls are made.
 """
 
 from __future__ import annotations

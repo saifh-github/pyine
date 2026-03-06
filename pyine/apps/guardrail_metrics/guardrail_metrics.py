@@ -107,7 +107,7 @@ def run_benchmark_sweep(
             results.append(result)
         except torch.cuda.OutOfMemoryError:
             logger.warning(
-                "OOM at batch_size=%d, seq_length=%d — skipping",
+                "OOM at batch_size=%d, seq_length=%d - skipping",
                 batch_size,
                 seq_length,
             )

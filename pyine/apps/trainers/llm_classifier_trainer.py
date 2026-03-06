@@ -60,7 +60,7 @@ def _tokenize_for_classification(
 
     Returns:
         Tokenized dataset with input_ids, attention_mask, labels columns.
-        The dataset is left in default (arrow) format — Trainer handles
+        The dataset is left in default (arrow) format - Trainer handles
         tensor conversion internally.
     """
 
@@ -124,7 +124,7 @@ def _add_per_code_type_metrics(
     if hasattr(eval_pred, "inputs") and isinstance(eval_pred.inputs, dict):  # pyright: ignore[reportUnknownMemberType]  # transformers stubs
         code_type_ids = eval_pred.inputs.get("code_type_id")  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # transformers stubs
     if code_type_ids is None:
-        logger.warning("code_type_id not found in eval_pred.inputs — skipping per-code-type metrics")
+        logger.warning("code_type_id not found in eval_pred.inputs - skipping per-code-type metrics")
         return
 
     for ct_id, ct_name in id_to_code_type.items():
@@ -174,7 +174,7 @@ def build_compute_metrics(
             "precision": float(sklearn.metrics.precision_score(labels, predictions, zero_division=0)),
             "recall": float(sklearn.metrics.recall_score(labels, predictions, zero_division=0)),
         }
-        # AUROC — guard against single-class eval AND degenerate probability
+        # AUROC - guard against single-class eval AND degenerate probability
         # distributions (all identical probs).
         unique_labels = {int(v) for v in labels}
         if len(unique_labels) >= 2 and len(labels) >= 2:

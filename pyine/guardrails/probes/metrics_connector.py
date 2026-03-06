@@ -24,7 +24,7 @@ from pyine.apps.guardrail_metrics.metrics_collector import (
 )
 
 if typing.TYPE_CHECKING:
-    import pyine.guardrails.probes.base  # noqa: TC004 — used in typing.cast() string form
+    import pyine.guardrails.probes.base  # noqa: TC004 - used in typing.cast() string form
     from pyine.apps.guardrail_metrics.guardrail_metrics_configs import GuardrailMetricsAppMainConfig
 
 logger = logging.getLogger(__name__)

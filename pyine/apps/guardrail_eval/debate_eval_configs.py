@@ -1,4 +1,4 @@
-"""Hydra-zen config builder for the prompted LLM guardrail evaluation app."""
+"""Hydra-zen config builder for the LLM debate guardrail evaluation app."""
 
 from __future__ import annotations
 
@@ -14,22 +14,22 @@ import pyine.configs.utils
 import pyine.evals.common
 import pyine.evals.correctness.configs
 import pyine.utils.reprod
-from pyine.guardrails.prompted_llm.configs import PromptedLLMGuardrailConfig  # noqa: TC001
+from pyine.guardrails.llm_debate.configs import DebateGuardrailConfig  # noqa: TC001
 
 logger = logging.getLogger(__name__)
 
 
-class PromptedLLMEvalAppConfig(pydantic.BaseModel):
-    """Standalone evaluation app for the prompted LLM guardrail.
+class DebateEvalAppConfig(pydantic.BaseModel):
+    """Standalone evaluation app for the LLM debate guardrail.
 
-    Requires no training - builds the scorer from an LLM provider config
-    and runs the correctness evaluation pipeline on an LMDB dataset.
+    Requires no training - builds the scorer from interrogator/responder
+    provider configs and runs the correctness evaluation pipeline on an LMDB dataset.
     """
 
     model_config = pydantic.ConfigDict(extra="forbid")
 
-    guardrail_config: PromptedLLMGuardrailConfig
-    """Prompted LLM guardrail configuration (LLM provider, prompt, concurrency)."""
+    guardrail_config: DebateGuardrailConfig
+    """LLM debate guardrail configuration (providers, prompts, debate settings)."""
 
     evals_config: pyine.evals.correctness.configs.CorrectnessEvalsConfig
     """Correctness eval pipeline configuration.
@@ -46,16 +46,16 @@ class PromptedLLMEvalAppConfig(pydantic.BaseModel):
 def _get_app_configs(
     group: str,
 ) -> list[pyine.configs.schemas.ConfigDescription]:
-    """Generates and returns prompted LLM eval application configs for hydra zen storage."""
+    """Generates and returns debate eval application configs for hydra zen storage."""
     evals_configs = pyine.evals.correctness.configs.get_evals_configs(
         group=f"{group}/evals_config",
     )
 
     app_main_config = pyine.configs.utils.make_config_description(
-        PromptedLLMEvalAppConfig,
+        DebateEvalAppConfig,
         name="base",
         group=group,
-        description="Base settings for the prompted LLM guardrail eval app.",
+        description="Base settings for the LLM debate guardrail eval app.",
         config={
             "populate_full_signature": True,
             "hydra_convert": "object",
@@ -67,16 +67,16 @@ def _get_app_configs(
 def register_hydra_configs(
     eval_type: pyine.evals.common.EvalType,
 ) -> list[pyine.configs.schemas.ConfigDescription]:
-    """Registers prompted-LLM-eval-specific configs in hydra and returns config descriptions."""
-    from pyine.apps.guardrail_eval.prompted_llm_eval import async_prompted_llm_eval_main_wrapper
+    """Registers debate-eval-specific configs in hydra and returns config descriptions."""
+    from pyine.apps.guardrail_eval.debate_eval import async_debate_eval_main_wrapper
 
     pyine.utils.reprod.load_dotenv()
 
     entrypoint_config = pyine.configs.utils.make_config_description(
-        async_prompted_llm_eval_main_wrapper,
+        async_debate_eval_main_wrapper,
         name="entrypoint",
         group=None,
-        description="Entrypoint settings for the prompted LLM guardrail eval app.",
+        description="Entrypoint settings for the LLM debate guardrail eval app.",
         config={
             "populate_full_signature": True,
             "hydra_defaults": [
@@ -88,12 +88,12 @@ def register_hydra_configs(
         },
     )
 
-    store, base_configs = pyine.configs.base.get_base_store_and_configs("prompted_llm_eval")
+    store, base_configs = pyine.configs.base.get_base_store_and_configs("debate_eval")
     app_configs = _get_app_configs(group="config")
     configs_to_register = [entrypoint_config, *app_configs]
 
     external_configs = pyine.configs.searchpath.SearchPathPlugin.get_external_configs(
-        app_name="prompted_llm_eval",
+        app_name="debate_eval",
         eval_type=eval_type,
         entrypoint_config=entrypoint_config,
         app_configs=[*base_configs, *configs_to_register],
@@ -118,6 +118,6 @@ if __name__ == "__main__":
     pyine.configs.base.register_searchpath_plugin()
     pyine.configs.utils.print_experiment_configs(
         config_descriptions=register_hydra_configs(eval_type=pyine.evals.common.EvalType.CORRECTNESS),
-        app_name="prompted_llm_eval",
+        app_name="debate_eval",
         cli_args=sys.argv[1:],
     )

@@ -1,4 +1,5 @@
 import datetime
+import logging
 import typing
 
 import langchain_core.callbacks
@@ -194,3 +195,31 @@ def get_default_structured_output_chain_retry_config(
         "wait_exponential_jitter": True,  # backoff + jitter
         "stop_after_attempt": max_retries,  # on top of max_retries specified in model config
     }
+
+
+_logger = logging.getLogger(__name__)
+
+
+def extract_token_count_from_handler(handler: CaptureLLMHandler) -> float:
+    """Extract total token count from a CaptureLLMHandler.
+
+    Checks llm_output.token_usage first, falls back to per-generation info.
+    Returns 0.0 if no token usage is available.
+    """
+    end_event = handler.get_latest_event("llm_end")
+    if end_event is None or end_event.response is None:
+        return 0.0
+    llm_output: dict[str, typing.Any] = getattr(end_event.response, "llm_output", None) or {}
+    token_usage: dict[str, typing.Any] = llm_output.get("token_usage", {})
+    total: int = token_usage.get("total_tokens", 0)
+    if total > 0:
+        return float(total)
+    # Fallback: sum from generation info
+    for generation_list in end_event.response.generations:
+        for gen in generation_list:
+            gen_info: dict[str, typing.Any] = getattr(gen, "generation_info", None) or {}
+            usage: dict[str, typing.Any] = gen_info.get("usage", {})
+            total += usage.get("total_tokens", 0)
+    if total == 0:
+        _logger.debug("token count is 0 for a successful LLM response; provider may not populate token usage fields")
+    return float(total)

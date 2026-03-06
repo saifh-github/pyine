@@ -50,7 +50,7 @@ class LabelBalanceConfig(pydantic.BaseModel):
     ``"misleading:0"``). Values are relative weights (normalized internally to
     sum to 1.0). Groups not listed in the dict are **excluded** from the
     resulting split. Every listed key **must** have at least one matching
-    sample in the data — otherwise a ``ValueError`` is raised at runtime.
+    sample in the data - otherwise a ``ValueError`` is raised at runtime.
     Mutually exclusive with ``target_positive_ratio``.
     """
 
@@ -216,7 +216,7 @@ class ProbeDataModuleConfig(pyine.data.datamodule.BaseDataModuleConfig):
         if not issubclass(resolved_class, pyine.data.datamodule.BaseDataModule):
             raise TypeError(f'"{self.datamodule_class_path}" is not a subclass of BaseDataModule')
         self._resolved_datamodule_class = resolved_class  # type: ignore[attr-defined]
-        # Skip parser/loader resolution — ProbeDataModule builds datasets directly.
+        # Skip parser/loader resolution - ProbeDataModule builds datasets directly.
         self._resolved_dataparser_configs = {}  # type: ignore[attr-defined]
         self._resolved_dataloader_configs = {}  # type: ignore[attr-defined]
         # Validate subset name consistency

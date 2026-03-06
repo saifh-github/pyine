@@ -142,7 +142,7 @@ class TestMergePerKeyDataframes:
         df_a = pd.DataFrame({"_step": [0, 1], "loss": [1.0, 0.5]})
         df_b = pd.DataFrame({"_step": [0, 2], "reward": [3.0, 4.0]})
         result = wandb_utils._merge_per_key_dataframes([df_a, df_b])
-        # metric columns should NOT be forward-filled — reward at step 1 should still be NaN
+        # metric columns should NOT be forward-filled - reward at step 1 should still be NaN
         assert result.loc[result["_step"] == 1, "reward"].isna().all()
         assert result.loc[result["_step"] == 2, "loss"].isna().all()
 
@@ -243,7 +243,7 @@ class TestFetchHistoryDf:
                 samples=10_000,
                 verbose=False,
             )
-            # _step should not trigger its own fetch — only "loss" should be fetched per-key
+            # _step should not trigger its own fetch - only "loss" should be fetched per-key
             call_keys = [
                 call.kwargs.get("keys") or call.args[0]
                 for call in mock_hist.call_args_list

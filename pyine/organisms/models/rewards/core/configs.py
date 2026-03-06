@@ -309,7 +309,7 @@ class LoggingConfig(reward_types.BaseConfig):
 
     Note: Tables are flushed in two scenarios: (1) when the buffer reaches this size, and
     (2) at phase transitions when flush_stats() or finalize_run() is called. There is no
-    separate periodic flush interval—set this value to control flush frequency during phases.
+    separate periodic flush interval-set this value to control flush frequency during phases.
     """
 
     # metric names

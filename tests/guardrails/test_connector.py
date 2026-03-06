@@ -32,7 +32,7 @@ def _check_protocol_compliance(cls: type) -> None:
         assert hasattr(cls, name), f"{cls.__name__} missing {kind} '{name}'"
         attr = getattr(cls, name)
         if kind == "property":
-            # For properties, we just check it exists — instance check happens elsewhere
+            # For properties, we just check it exists - instance check happens elsewhere
             pass
         elif kind == "method":
             # Verify it's callable

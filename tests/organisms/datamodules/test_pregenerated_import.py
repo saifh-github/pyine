@@ -221,7 +221,7 @@ class TestLoadPregeneratedOutputs:
         assert record.source_lmdb_path == str(lmdb_b.resolve())  # newer from rank_1
 
     def test_tiebreaker_respects_input_order(self, tmp_path: pathlib.Path) -> None:
-        """Two LMDBs with equal gen_count — the later LMDB (by user-supplied order) wins."""
+        """Two LMDBs with equal gen_count - the later LMDB (by user-supplied order) wins."""
         lmdb_a = tmp_path / "rank_0"
         lmdb_b = tmp_path / "rank_1"
         _write_test_lmdb(lmdb_a, [("train/sample_a/100", _make_record(model_output="first"))])

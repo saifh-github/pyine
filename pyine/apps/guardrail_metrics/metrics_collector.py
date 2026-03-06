@@ -1,6 +1,6 @@
 """Pure measurement helpers for guardrail inference metrics.
 
-This module contains only timing/counting logic — no data generation or model loading.
+This module contains only timing/counting logic - no data generation or model loading.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ def measure_flops(
 ) -> int:
     """Measure FLOPs for a single forward pass.
 
-    FLOPs are deterministic — called once per (model, batch_size, seq_length)
+    FLOPs are deterministic - called once per (model, batch_size, seq_length)
     configuration, NOT inside the benchmark iteration loop.
 
     Args:
@@ -88,7 +88,7 @@ def measure_memory(
             forward_fn(model, sample_input)
         peak_activation_bytes = torch.mps.current_allocated_memory()
 
-    # else: CPU — only parameter memory is reported
+    # else: CPU - only parameter memory is reported
 
     return {
         "param_count": param_count,

@@ -275,7 +275,7 @@ class TestLoadFromCheckpoint:
             probe_dir, hidden_dim=hidden_dim
         )
 
-        # Should have loaded — auto-detected step-0200
+        # Should have loaded - auto-detected step-0200
         assert set(loaded.probes.keys()) == {probe_name}
 
     def test_load_final_preferred_over_steps(

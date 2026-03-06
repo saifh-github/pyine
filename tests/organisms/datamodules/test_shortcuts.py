@@ -2796,7 +2796,7 @@ class TestFindDbMatchValidatedFiltering:
 
         select_samples_from_trace_families gates on selection_config.require_validated_misleading
         before passing the set downstream. When the flag is False, _find_db_match_for_target_type
-        must receive None — even if a cached set was provided to the top-level call.
+        must receive None - even if a cached set was provided to the top-level call.
         """
         import pyine.organisms.datamodules.samples.selection as selection_mod
 

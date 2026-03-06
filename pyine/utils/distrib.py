@@ -915,7 +915,7 @@ def _fallback_barrier_if_needed() -> None:
     variables. Each worker writes a marker file to a shared rendezvous directory; once all markers
     exist, the barrier completes. We scope rendezvous directories under a per-job token derived from
     launch environment variables (or `PYINE_BARRIER_TOKEN`) so concurrent jobs on the same node do not
-    interfere. Cleanup is best-effort—whichever rank finishes last removes the directory tree. This
+    interfere. Cleanup is best-effort-whichever rank finishes last removes the directory tree. This
     provides a safe pre-DDP synchronization point without double-initializing the process group
     Hugging Face owns.
     """

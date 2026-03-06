@@ -397,7 +397,7 @@ class TestLogClassDistribution:
 
 
 # ---------------------------------------------------------------------------
-# TestClassifierTrainUnit — slow tests that require model downloads
+# TestClassifierTrainUnit - slow tests that require model downloads
 # ---------------------------------------------------------------------------
 
 

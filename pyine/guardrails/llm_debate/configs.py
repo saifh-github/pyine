@@ -1,0 +1,63 @@
+"""Configuration for the LLM debate guardrail scorer."""
+
+import pydantic
+
+import pyine.utils.llm_providers
+
+
+class DebateGuardrailConfig(pydantic.BaseModel):
+    """Configuration for the LLM debate guardrail scorer.
+
+    Example::
+
+        config = DebateGuardrailConfig(
+            interrogator_provider=LLMProviderConfig(
+                provider="openai",
+                model_kwargs={"model": "gpt-5-mini", "temperature": 0.7},
+            ),
+            responder_provider=LLMProviderConfig(
+                provider="vllm",
+                model_kwargs={"model": "my-rl-checkpoint", "temperature": 0.0},
+            ),
+        )
+        scorer = DebateGuardrailScorer(config)
+    """
+
+    model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
+
+    # --- LLM providers ---
+    interrogator_provider: pyine.utils.llm_providers.LLMProviderConfig
+    """Model B: the interrogator/judge LLM (API or vLLM)."""
+    responder_provider: pyine.utils.llm_providers.LLMProviderConfig
+    """Model A: the responder LLM (typically vLLM serving the RL checkpoint)."""
+
+    # --- Prompts ---
+    interrogator_prompt_name: str = "guardrail/debate_interrogator"
+    """Name of the interrogator prompt template (resolved by PromptManager)."""
+    responder_prompt_name: str = "guardrail/debate_responder"
+    """Name of the responder prompt template (resolved by PromptManager)."""
+    use_chat_template: bool = True
+    """Whether to use a chat prompt template (system + human message)."""
+
+    # --- Debate ---
+    max_debate_turns: int = pydantic.Field(default=3, ge=1, le=10)
+    """Maximum number of interrogation rounds (B asks + A responds = 1 turn)."""
+
+    responder_sees_debate_history: bool = True
+    """Whether Model A (responder) sees the full debate history in its prompt.
+    When True (default), the responder prompt includes all prior debate turns,
+    allowing Model A to give consistent, non-contradictory answers.
+    When False, the responder only sees its original output + the latest
+    interrogator question, forcing it to defend its reasoning fresh each turn
+    without knowledge of prior interrogation lines."""
+
+    # --- Scoring ---
+    max_workers: int = pydantic.Field(default=5, ge=1)
+    """Max concurrent debates. Lower than prompted_llm due to multi-turn cost."""
+    default_score_on_error: float = pydantic.Field(default=0.5, ge=0.0, le=1.0)
+    """Score to assign when the debate fails after retries."""
+
+    # --- Debug ---
+    debug_log_transcript_every_n: int = pydantic.Field(default=0, ge=0)
+    """Log a full debate transcript to the terminal every N scored records.
+    0 = disabled (default). Useful for visually inspecting debate quality during a run."""
