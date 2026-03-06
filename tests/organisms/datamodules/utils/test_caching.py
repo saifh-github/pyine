@@ -204,6 +204,66 @@ class TestSampling:
         with pytest.raises(ValueError, match="not found in cache"):
             cache.sample_alternative_test_case(trace_id=trace_id)
 
+    def test_filters_trivial_newline_only_output_collisions(self) -> None:
+        cache = object.__new__(caching.CodingProblemTestDataCache)
+        cache.dataset_name = "FAKE"
+        cache.dataset_path = pathlib.Path("/dev/null")
+        cache._rng = np.random.RandomState(0)
+        problem_id = traces_utils.CodingProblemIdentifier(dataset="FAKE", subset="unit", problem_idx=2)
+        cache._cache = {
+            problem_id: make_cached_test_data_list(
+                [
+                    ("in0", "-1"),  # original
+                    ("in1", "-1\n"),  # same output up to whitespace/newline normalization
+                ]
+            )
+        }
+        trace_id = traces_utils.TraceIdentifier(
+            dataset=problem_id.dataset,
+            subset=problem_id.subset,
+            problem_idx=problem_id.problem_idx,
+            solution_idx=0,
+            test_idx=0,
+        )
+        sampled = cache.sample_alternative_test_case(
+            trace_id=trace_id,
+            match_inputs_signature=False,
+            match_outputs_signature=False,
+        )
+        assert sampled is None
+
+    def test_banned_outputs_uses_normalized_text_equality(self) -> None:
+        cache = object.__new__(caching.CodingProblemTestDataCache)
+        cache.dataset_name = "FAKE"
+        cache.dataset_path = pathlib.Path("/dev/null")
+        cache._rng = np.random.RandomState(0)
+        problem_id = traces_utils.CodingProblemIdentifier(dataset="FAKE", subset="unit", problem_idx=3)
+        cache._cache = {
+            problem_id: make_cached_test_data_list(
+                [
+                    ("in0", "orig"),
+                    ("in1", "-1\n"),  # should be filtered out by banned_outputs="-1"
+                    ("in2", "ok"),  # should remain
+                ]
+            )
+        }
+        trace_id = traces_utils.TraceIdentifier(
+            dataset=problem_id.dataset,
+            subset=problem_id.subset,
+            problem_idx=problem_id.problem_idx,
+            solution_idx=0,
+            test_idx=0,
+        )
+        sampled = cache.sample_alternative_test_case(
+            trace_id=trace_id,
+            match_inputs_signature=False,
+            match_outputs_signature=False,
+            banned_outputs="-1",
+            rng=np.random.RandomState(0),
+        )
+        assert sampled is not None
+        assert sampled.outputs == "ok"
+
 
 class TestBuildFromDatasetReader:
     def test_build_from_reader_validates_metadata_and_path(

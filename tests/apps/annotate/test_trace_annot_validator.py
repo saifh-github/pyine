@@ -283,6 +283,15 @@ class TestFilterMisleadingRecords:
         filtered, skipped = validator_utils.filter_misleading_records([rec])
         assert len(filtered) == 1
         assert skipped == 0
+        # same test, but for the v2 prompt, that will be refactored out later
+        rec = mocker.MagicMock(
+            spec=pyine.prompts.result_db.PromptResultRecord,
+            tags=["augment:issues_docs_v2"],
+            record_uid="issues_docs_v2_001",
+        )
+        filtered, skipped = validator_utils.filter_misleading_records([rec])
+        assert len(filtered) == 1
+        assert skipped == 0
 
     def test_all_non_misleading(self, mocker: pytest_mock.MockerFixture) -> None:
         rec = mocker.MagicMock(

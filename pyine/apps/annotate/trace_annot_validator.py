@@ -107,7 +107,7 @@ VALIDATION_PROMPT_NAME: typing.Final = pyine.prompts.names.PromptNames.VALIDATIO
     "source_prompt_names",
     type=str,
     multiple=True,
-    default=("issues/docs", "hints/docs"),
+    default=("issues/docs", "issues/docs_v2", "hints/docs"),
     show_default=True,
     help="Source prompt name(s) whose misleading records should be validated. Repeat for multiple.",
 )

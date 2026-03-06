@@ -285,6 +285,8 @@ class TestTraceIdentifierAugmentationProperties:
         """Test is_bugged is False for 'issues_docs' (which is misleading, not bugged)."""
         tid = dataset_utils.TraceIdentifier("DS", "sub", 1, 1, 1, "issues_docs", 0)
         assert tid.is_bugged is False
+        tid2 = dataset_utils.TraceIdentifier("DS", "sub", 1, 1, 1, "issues_docs_v2", 0)
+        assert tid2.is_bugged is False
 
     def test_is_bugged_true_for_bugged_substring(self) -> None:
         """Test is_bugged is True when category contains 'bugged'."""
@@ -315,6 +317,8 @@ class TestTraceIdentifierAugmentationProperties:
         """Test is_misleading is True for 'issues_docs' category."""
         tid = dataset_utils.TraceIdentifier("DS", "sub", 1, 1, 1, "issues_docs", 0)
         assert tid.is_misleading is True
+        tid2 = dataset_utils.TraceIdentifier("DS", "sub", 1, 1, 1, "issues_docs_v2", 0)
+        assert tid2.is_misleading is True
 
     def test_is_misleading_true_for_misleading_substring(self) -> None:
         """Test is_misleading is True when category contains 'misleading'."""
@@ -358,6 +362,7 @@ class TestAugmentPatterns:
         assert hasattr(dataset_utils.AugmentPatterns, "OBFUSCATED")
         assert hasattr(dataset_utils.AugmentPatterns, "MISLEADING")
         assert hasattr(dataset_utils.AugmentPatterns, "DOCS_EXCEPTION")
+        assert hasattr(dataset_utils.AugmentPatterns, "DOCS_EXCEPTION_V2")
         assert hasattr(dataset_utils.AugmentPatterns, "BUGGED_SUBSTRING")
         assert hasattr(dataset_utils.AugmentPatterns, "HINTED_SUBSTRING")
 
@@ -372,6 +377,10 @@ class TestAugmentPatterns:
     def test_docs_exception_value(self) -> None:
         """Test DOCS_EXCEPTION has expected value."""
         assert dataset_utils.AugmentPatterns.DOCS_EXCEPTION == "issues_docs"
+
+    def test_docs_exception_v2_value(self) -> None:
+        """Test DOCS_EXCEPTION has expected value."""
+        assert dataset_utils.AugmentPatterns.DOCS_EXCEPTION_V2 == "issues_docs_v2"
 
     def test_stubbed_prefix_value(self) -> None:
         """Test STUBBED_PREFIX has expected value."""

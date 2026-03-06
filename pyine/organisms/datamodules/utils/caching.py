@@ -12,6 +12,7 @@ import numpy as np
 import pyine.data.traces.common
 import pyine.data.traces.dataset_reader
 import pyine.data.traces.dataset_utils
+import pyine.utils.code.output_compare
 import pyine.utils.filesystem
 import pyine.utils.reprod
 
@@ -277,7 +278,10 @@ class CodingProblemTestDataCache:
         candidates = [c for c in self._cache[problem_id] if c.test_idx != orig_test_idx]
         # discard all candidate test cases whose inputs/outputs match the original one
         candidates = [
-            c for c in candidates if c.inputs != orig_test_case.inputs and c.outputs != orig_test_case.outputs
+            c
+            for c in candidates
+            if not pyine.utils.code.output_compare.compare(c.inputs, orig_test_case.inputs)
+            and not pyine.utils.code.output_compare.compare(c.outputs, orig_test_case.outputs)
         ]
         if banned_inputs is not None or banned_outputs is not None:
             # also discard all candidate test cases whose inputs/outputs are banned
@@ -285,8 +289,8 @@ class CodingProblemTestDataCache:
             candidates = [
                 c
                 for c in candidates
-                if (banned_inputs is None or c.inputs != banned_inputs)
-                and (banned_outputs is None or c.outputs != banned_outputs)
+                if (banned_inputs is None or not pyine.utils.code.output_compare.compare(c.inputs, banned_inputs))
+                and (banned_outputs is None or not pyine.utils.code.output_compare.compare(c.outputs, banned_outputs))
             ]
         if match_inputs_signature:
             candidates = [c for c in candidates if c.inputs_signature == orig_test_case.inputs_signature]

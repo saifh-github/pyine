@@ -6,6 +6,7 @@ import pytest_mock
 
 import pyine.prompts.configs.hints.docs as hints_docs
 import pyine.prompts.configs.issues.docs as issues_docs
+import pyine.prompts.configs.issues.docs_v2 as issues_docs_v2
 import pyine.prompts.manager as prompt_manager
 import pyine.prompts.types as prompt_types
 import pyine.prompts.utils as prompt_utils
@@ -131,6 +132,18 @@ class TestPromptManager:
         assert issues_config.question.template == hints_config.question.template
         assert issues_config is not hints_config
 
+    def test_dedicated_misleading_prompt_is_independent(
+        self,
+    ) -> None:
+        manager = prompt_manager.get_framework_prompt_manager()
+        prompts = manager.list_prompts()
+        assert "issues/docs_v2" in prompts
+        alias_config = manager.get_prompt_config("issues/docs")
+        dedicated_config = manager.get_prompt_config("issues/docs_v2")
+        assert alias_config.metadata.name == "issues/docs"
+        assert dedicated_config.metadata.name == "issues/docs_v2"
+        assert alias_config.question.template != dedicated_config.question.template
+
 
 def test_issues_docs_delegates_to_hints(
     monkeypatch: pytest.MonkeyPatch,
@@ -166,3 +179,15 @@ def test_issues_docs_delegates_to_hints(
         "context_variables": {"ctx": "value"},
         "examples_block_variables": {"examples": "value"},
     }
+
+
+def test_issues_docs_v2_template_uses_constraint_default() -> None:
+    template = issues_docs_v2.get_prompt_template()
+    rendered = template.format(
+        code="print('x')",
+        inputs="1",
+        expected_output="2",
+        forbidden_execution_output="3",
+    )
+    assert "Forbidden execution output" in rendered
+    assert "must not appear in your generated docs/comments" in rendered

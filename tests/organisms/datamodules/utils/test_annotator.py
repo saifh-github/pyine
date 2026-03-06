@@ -633,7 +633,9 @@ async def test_bugged_hint_prompt_uses_buggy_code(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("prompt_name", ["issues/docs", "issues/docs_v2"])
 async def test_bugged_misleading_prompt_uses_buggy_code(
+    prompt_name: str,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: pathlib.Path,
 ) -> None:
@@ -684,7 +686,7 @@ async def test_bugged_misleading_prompt_uses_buggy_code(
         return str(parent_id)
 
     captured = await _run_prompt_case(
-        "issues/docs",
+        prompt_name,
         dataset=dataset,
         monkeypatch=monkeypatch,
         tmp_path=tmp_path,
@@ -715,16 +717,19 @@ async def test_bugged_misleading_prompt_uses_buggy_code(
     assert input_vars["code"] == buggy_code
     assert input_vars[annotator._INTERNAL_BUGGED_HINTED_TOKEN] == trace.code_string
     assert input_vars[annotator._INTERNAL_MISLEADING_TOKEN] == str(trace.expected_output)
+    assert input_vars["forbidden_execution_output"] == str(trace.expected_output)
     assert input_vars["expected_output"] == str({"alt": "value"})
     tags = captured["tags"]
     assert "sample_code_description:1" in tags
     assert "augment:misleading" in tags
     assert "augment:bugged" in tags
-    assert captured["prompt_name"] == "issues/docs"
+    assert captured["prompt_name"] == prompt_name
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("prompt_name", ["issues/docs", "issues/docs_v2"])
 async def test_misleading_issue_prompt_rewrites_expected_output(
+    prompt_name: str,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: pathlib.Path,
 ) -> None:
@@ -760,7 +765,7 @@ async def test_misleading_issue_prompt_rewrites_expected_output(
             )
 
     captured = await _run_prompt_case(
-        "issues/docs",
+        prompt_name,
         dataset=dataset,
         monkeypatch=monkeypatch,
         tmp_path=tmp_path,
@@ -782,13 +787,14 @@ async def test_misleading_issue_prompt_rewrites_expected_output(
 
     assert captured["identifier"] == str(trace.identifier)
     assert captured["group"] == expected_solution_id
-    assert captured["prompt_name"] == "issues/docs"
+    assert captured["prompt_name"] == prompt_name
 
     input_vars = captured["input_variables"]
     assert input_vars["description"] == "Existing summary"
     assert input_vars["inputs"] == str(trace.inputs)
     assert input_vars["expected_output"] == str({"alt": "value"})
     assert input_vars[annotator._INTERNAL_MISLEADING_TOKEN] == str(trace.expected_output)
+    assert input_vars["forbidden_execution_output"] == str(trace.expected_output)
     assert input_vars["code"] == trace.code_string
 
     tags = captured["tags"]
@@ -798,7 +804,7 @@ async def test_misleading_issue_prompt_rewrites_expected_output(
     assert "llm_provider:openai" in tags
 
     meta = captured["meta"]
-    assert meta["prompt_config"]["prompt_name"] == "issues/docs"
+    assert meta["prompt_config"]["prompt_name"] == prompt_name
     assert meta["llm_provider_config"]["provider"] == "openai"
 
 

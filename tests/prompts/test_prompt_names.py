@@ -35,6 +35,7 @@ class TestPromptNames:
         assert PromptNames.HINTS_DOCS == "hints/docs"
         assert PromptNames.HINTS_TESTS == "hints/tests"
         assert PromptNames.ISSUES_DOCS == "issues/docs"
+        assert PromptNames.ISSUES_DOCS_V2 == "issues/docs_v2"
         assert PromptNames.ISSUES_ITERATORS == "issues/iterators"
         assert PromptNames.ISSUES_TODOS == "issues/todos"
 

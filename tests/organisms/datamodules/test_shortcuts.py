@@ -149,6 +149,7 @@ class TestIsHintCategory:
     def test_detects_issues_docs_pattern(self) -> None:
         dm = _make_stub_shortcuts_datamodule()
         assert dm._is_hint_category("issues_docs") is True
+        assert dm._is_hint_category("issues_docs_v2") is True
 
     def test_returns_false_for_non_hint_categories(self) -> None:
         dm = _make_stub_shortcuts_datamodule()
