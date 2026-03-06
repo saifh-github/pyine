@@ -191,8 +191,8 @@ class TestFormatOutput:
         transcript = make_debate_transcript(num_turns=2, score=0.85, reasoning="Good")
         formatted = DebateGuardrailScorer._format_transcript_for_log(transcript, "sample_123", True)
 
-        # Should contain separator lines
-        assert "-" * 72 in formatted
+        # Should contain separator lines (Unicode box-drawing character \u2500)
+        assert "\u2500" * 72 in formatted
         # Should contain sample_id
         assert "sample_123" in formatted
         # Should contain history_visible field
