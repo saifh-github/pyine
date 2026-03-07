@@ -181,7 +181,7 @@ class CorrectnessDataModule(pyine.data.datamodule.BaseDataModule["CorrectnessDat
             RuntimeError: If called before ``setup()``.
         """
         records = self.get_records_for_subset("guardrail_valid")
-        if resampling_config is not None:
+        if resampling_config is not None and not resampling_config.is_noop:
             import pyine.evals.correctness.resampling as correctness_resampling
 
             records = correctness_resampling.resample_records(records, resampling_config)
@@ -194,7 +194,7 @@ class CorrectnessDataModule(pyine.data.datamodule.BaseDataModule["CorrectnessDat
             RuntimeError: If called before ``setup()``.
         """
         records = self.get_records_for_subset("guardrail_train")
-        if self.config.resampling is not None:
+        if self.config.resampling is not None and not self.config.resampling.is_noop:
             import pyine.evals.correctness.resampling as correctness_resampling
 
             records = correctness_resampling.resample_records(records, self.config.resampling)
@@ -210,7 +210,7 @@ class CorrectnessDataModule(pyine.data.datamodule.BaseDataModule["CorrectnessDat
             RuntimeError: If called before ``setup()``.
         """
         records = self.get_records_for_subset("guardrail_valid")
-        if self.config.resampling is not None:
+        if self.config.resampling is not None and not self.config.resampling.is_noop:
             import pyine.evals.correctness.resampling as correctness_resampling
 
             records = correctness_resampling.resample_records(records, self.config.resampling)
@@ -323,7 +323,7 @@ class CorrectnessDataModule(pyine.data.datamodule.BaseDataModule["CorrectnessDat
         for subset_name in target_subsets or list(self.config.subset_names):
             records = self.get_records_for_subset(subset_name)
             _collect_record_stats(records, prefix=subset_name, out=stats)
-        if self.config.resampling is not None:
+        if self.config.resampling is not None and not self.config.resampling.is_noop:
             if target_subsets is None or "guardrail_train" in target_subsets:
                 resampled_train = self.get_records_for_training()
                 _collect_record_stats(resampled_train, prefix="guardrail_train_resampled", out=stats)

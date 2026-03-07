@@ -8,6 +8,8 @@ import warnings
 if typing.TYPE_CHECKING:
     import pathlib
 
+import hydra
+import omegaconf
 import pydantic
 import pytest
 import torch
@@ -235,6 +237,37 @@ class TestHydraConfigRegistration:
 
         assert any(cfg.name == "correctness_taco_base" and cfg.group == "config/datamodule_config" for cfg in configs)
         assert any(cfg.name == "correctness_taco_base" and cfg.group == "config/evals_config" for cfg in configs)
+
+    def test_correctness_resampling_override_composes(
+        self,
+        tmp_path: pathlib.Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import pyine.apps.trainers.llm_classifier_trainer_configs as llm_cfg
+        import pyine.configs.base
+        import pyine.evals.common
+        import pyine.utils.filesystem
+
+        monkeypatch.setattr(pyine.utils.filesystem, "get_logs_root_path", lambda: tmp_path)
+        llm_cfg.register_hydra_configs(pyine.evals.common.EvalType.CORRECTNESS)
+
+        with hydra.initialize(config_path=None, version_base=pyine.configs.base.target_hydra_version):
+            config = hydra.compose(
+                config_name="entrypoint",
+                overrides=[
+                    "config=base",
+                    "config/datamodule_config=correctness_taco_base",
+                    "config/datamodule_config/resampling=skewed_pos_helpful_bias",
+                    "config/training_args_config=train_default",
+                ],
+            )
+
+        assert omegaconf.OmegaConf.select(config, "config.datamodule_config.resampling.target_positive_ratio") == 0.8
+        assert omegaconf.OmegaConf.select(config, "config.datamodule_config.resampling.code_type_proportions") == {
+            "original": 0.9,
+            "hinted": 0.09,
+            "misleading": 0.01,
+        }
 
     def test_register_hydra_configs_includes_training_args(
         self,

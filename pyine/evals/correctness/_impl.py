@@ -79,7 +79,7 @@ async def evaluate_guardrail_replicas(
     )
     if eval_subset_name == "guardrail_valid":
         resampling_note = ""
-        if config.calibration_resampling is not None:
+        if config.calibration_resampling is not None and not config.calibration_resampling.is_noop:
             resampling_note = " (calibration is resampled but still drawn from guardrail_valid)"
         logger.warning(
             "evaluating on 'guardrail_valid' uses the same split as threshold calibration%s; "

@@ -542,6 +542,10 @@ def get_datamodule_configs(
         config={
             "populate_full_signature": True,
             "hydra_convert": "object",
+            "hydra_defaults": [
+                "_self_",
+                {"resampling": "resampling_base"},
+            ],
             **base_config_extras,
         },
     )
@@ -586,6 +590,10 @@ def get_evals_configs(
         config={
             "populate_full_signature": True,
             "hydra_convert": "object",
+            "hydra_defaults": [
+                "_self_",
+                {"resampling": "resampling_base"},
+            ],
             **dm_config_extras,
         },
     )
@@ -600,6 +608,7 @@ def get_evals_configs(
             "hydra_defaults": [
                 "_self_",
                 {"datamodule_config": datamodule_name},
+                {"calibration_resampling": "resampling_base"},
             ],
         },
     )
