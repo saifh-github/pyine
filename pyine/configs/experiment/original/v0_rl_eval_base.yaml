@@ -20,6 +20,7 @@ config:
   datamodule_config:
     eval_subset_names: ["valid", "test"]
   evals_config:
+    result_dump_dir: ${runtime.output_dir}/benchmark_export
     eval_runnable_config:
       max_workers: 256
       max_in_flight_jobs: 256
