@@ -188,9 +188,10 @@ class LLMClassifierScorer:
                 attempt_key: correctness_types.ScoredAttemptKey = (record.sample_id, record.attempt_index, draw_index)
                 attention_mask_tensor = typing.cast("torch.Tensor", attention_mask)
                 input_token_count = int(attention_mask_tensor.to(dtype=torch.int64).sum().item())
+                was_truncated = input_ids.shape[-1] >= self._max_seq_length  # type: ignore[reportUnknownMemberType]
                 all_metadata[attempt_key] = {
                     "input_token_count": input_token_count,  # lightweight forensic context
-                    # (we could add more here, but there's not much to actually add in this simple wrapper)
+                    "was_truncated": was_truncated,
                     # (note: we DO NOT add record data purposefully, as that is gathered at the run level)
                 }
         return correctness_types.ScoringResult(
