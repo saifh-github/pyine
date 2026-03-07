@@ -7,6 +7,8 @@ import typing
 
 import pydantic
 
+import pyine.configs.schemas
+import pyine.configs.utils
 import pyine.data.datamodule
 import pyine.utils.portability
 from pyine.guardrails.data.reward_keys import (  # noqa: TID252 -- avoids circular import via __init__
@@ -227,3 +229,28 @@ class ProbeDataModuleConfig(pyine.data.datamodule.BaseDataModuleConfig):
         if any(name not in self.subset_names for name in self.eval_subset_names):
             raise ValueError(f"some subset name(s) are invalid; got {self.eval_subset_names!r}")
         return self
+
+
+def get_datamodule_configs(
+    group: str,
+) -> list[pyine.configs.schemas.ConfigDescription]:
+    """Returns datamodule configs for probe-based training apps.
+
+    Returns a base ``ProbeDataModuleConfig`` config for hydra-zen config composition. Required
+    fields (``lmdb_path``) are left as MISSING: the user must provide them at runtime or in a
+    YAML override.
+
+    Args:
+        group: Hydra config group path for the datamodule configs.
+    """
+    base_config = pyine.configs.utils.make_config_description(
+        ProbeDataModuleConfig,
+        name="probe_base",
+        group=group,
+        description="Base probe datamodule settings (LMDB source, splitting, filtering).",
+        config={
+            "populate_full_signature": True,
+            "hydra_convert": "object",
+        },
+    )
+    return [base_config]

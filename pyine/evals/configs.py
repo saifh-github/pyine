@@ -1,3 +1,5 @@
+import typing
+
 import pyine.configs.schemas
 import pyine.configs.utils
 import pyine.utils.llm_providers
@@ -56,14 +58,26 @@ def get_grader_provider_configs(group: str) -> list[pyine.configs.schemas.Config
 def get_evals_configs(
     eval_type: EvalType,
     group: str,
+    **kwargs: typing.Any,
 ) -> list[pyine.configs.schemas.ConfigDescription]:
-    """Generates and returns evals configs for hydra zen storage."""
+    """Generates and returns evals configs for hydra zen storage.
+
+    Extra keyword arguments are forwarded to the eval-type-specific config provider. Unknown
+    kwargs will cause a TypeError in the child getter, which is intentional; it surfaces mismatches
+    early rather than silently ignoring them.
+
+    Args:
+        eval_type: The type of evaluation to generate configs for.
+        group: Hydra config group path for the eval configs.
+        **kwargs: Additional keyword arguments forwarded to the eval-type-specific provider
+            (e.g. ``split_source`` for CORRECTNESS).
+    """
     if eval_type == EvalType.CODE_EXEC:
         import pyine.evals.code_exec.configs
 
-        return pyine.evals.code_exec.configs.get_evals_configs(group=group)
+        return pyine.evals.code_exec.configs.get_evals_configs(group=group, **kwargs)
     if eval_type == EvalType.CORRECTNESS:
         import pyine.evals.correctness.configs
 
-        return pyine.evals.correctness.configs.get_evals_configs(group=group)
+        return pyine.evals.correctness.configs.get_evals_configs(group=group, **kwargs)
     raise NotImplementedError(f"evaluation type {eval_type} not implemented")

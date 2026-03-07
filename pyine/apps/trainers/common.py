@@ -28,7 +28,10 @@ import pyine.configs.schemas
 import pyine.configs.utils
 import pyine.data.datamodule
 import pyine.evals.common
+import pyine.evals.configs
+import pyine.evals.correctness.configs as correctness_configs
 import pyine.evals.utils
+import pyine.guardrails.data.datamodule_configs
 import pyine.organisms.models.rewards.core.configs as reward_configs
 import pyine.organisms.models.rewards.core.logging as reward_logging
 import pyine.organisms.models.rewards.core.manager as reward_manager_mod
@@ -1677,6 +1680,49 @@ def get_lora_configs(
         },
     )
     return [default_lora_config]
+
+
+def get_probe_and_correctness_support_configs(
+    group: str,
+    split_source: str = "TACO",
+) -> list[pyine.configs.schemas.ConfigDescription]:
+    """Returns shared probe/correctness Hydra configs for trainer apps.
+
+    This helper keeps trainer config modules aligned when they support both:
+    - direct probe training from reward LMDBs via ``ProbeDataModuleConfig``;
+    - optional training/evaluation on correctness LMDBs via explicit TACO-oriented presets.
+
+    The correctness presets intentionally use stable, explicit names instead of mutating the
+    meaning of a generic base config based on local filesystem state.
+
+    TODO: @@@@@
+        Once we 'officialize' the release artifacts, add the paths to pregenerated code exec
+        eval records (LMDBs) here? (that way we can have fully defined datamodules, like elsewhere
+
+    Args:
+        group: Hydra config group path for the app configs.
+        split_source: Dataset name or path used to pre-fill guardrail split resolution for the
+            correctness presets. Defaults to ``"TACO"``.
+
+    Returns:
+        Probe datamodule configs, correctness datamodule configs, and correctness eval configs.
+    """
+    probe_dm_configs = pyine.guardrails.data.datamodule_configs.get_datamodule_configs(
+        f"{group}/datamodule_config",
+    )
+    correctness_dm_configs = correctness_configs.get_datamodule_configs(
+        group=f"{group}/datamodule_config",
+        split_source=split_source,
+        base_name="correctness_taco_base",
+    )
+    correctness_eval_configs = pyine.evals.configs.get_evals_configs(
+        eval_type=pyine.evals.common.EvalType.CORRECTNESS,
+        group=f"{group}/evals_config",
+        split_source=split_source,
+        base_name="correctness_taco_base",
+        datamodule_name="correctness_taco_dm_base",
+    )
+    return [*probe_dm_configs, *correctness_dm_configs, *correctness_eval_configs]
 
 
 def strip_deepspeed_local_rank_arg() -> None:

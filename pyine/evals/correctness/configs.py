@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pathlib  # noqa: TC003
 import typing
 
 import pydantic
@@ -466,31 +467,131 @@ _RESAMPLING_PRESETS: list[tuple[str, str]] = [
 """Mapping of preset name to factory classmethod name on RecordResamplingConfig."""
 
 
+def _get_split_config_extras(
+    split_source: str | pathlib.Path | None,
+) -> dict[str, typing.Any]:
+    """Returns Hydra config overrides for pre-filling ``split_config.split_source``."""
+    if split_source is None:
+        return {}
+    return {"split_config": {"split_source": str(split_source)}}
+
+
+def _get_resampling_configs(
+    group: str,
+    base_description: str,
+) -> list[pyine.configs.schemas.ConfigDescription]:
+    """Returns the base resampling config and all canonical resampling presets for a Hydra group."""
+    configs = [
+        pyine.configs.utils.make_config_description(
+            correctness_types.RecordResamplingConfig,
+            name="resampling_base",
+            group=group,
+            description=base_description,
+            config={
+                "populate_full_signature": True,
+                "hydra_convert": "object",
+            },
+        )
+    ]
+    for preset_name, factory_name in _RESAMPLING_PRESETS:
+        factory = getattr(correctness_types.RecordResamplingConfig, factory_name)
+        preset_instance = factory()
+        overrides = preset_instance.model_dump(exclude_defaults=True)
+        configs.append(
+            pyine.configs.utils.make_config_description(
+                correctness_types.RecordResamplingConfig,
+                name=preset_name,
+                group=group,
+                description=factory.__doc__ or f"Resampling preset: {preset_name}",
+                config={
+                    "populate_full_signature": True,
+                    "hydra_convert": "object",
+                    **overrides,
+                },
+            )
+        )
+    return configs
+
+
+def get_datamodule_configs(
+    group: str,
+    split_source: str | pathlib.Path | None = None,
+    base_name: str = "correctness_base",
+) -> list[pyine.configs.schemas.ConfigDescription]:
+    """Returns datamodule configs for correctness-based training apps.
+
+    These configs are intended for the **datamodule preparation in training apps** (e.g. probe
+    trainer, LLM classifier trainer), not for the nested datamodule inside ``CorrectnessEvalsConfig``.
+
+    Returns a base ``CorrectnessDataModuleConfig`` config, a ``resampling_base`` config, and all
+    canonical resampling presets. If ``split_source`` is provided, the base config pre-fills
+    ``split_config.split_source`` so users don't have to specify it manually.
+
+    Args:
+        group: Hydra config group path for the datamodule configs.
+        split_source: Optional path or dataset name for the split source. When provided,
+            pre-fills ``split_config.split_source`` in the base config.
+        base_name: Name to use for the registered base datamodule config.
+    """
+    base_config_extras = _get_split_config_extras(split_source)
+    base_config = pyine.configs.utils.make_config_description(
+        correctness_datamodule_configs.CorrectnessDataModuleConfig,
+        name=base_name,
+        group=group,
+        description="Base correctness datamodule settings (LMDB eval records, splits, resampling).",
+        config={
+            "populate_full_signature": True,
+            "hydra_convert": "object",
+            **base_config_extras,
+        },
+    )
+    return [
+        base_config,
+        *_get_resampling_configs(
+            group=f"{group}/resampling",
+            base_description="Base resampling config for training and validation data composition control.",
+        ),
+    ]
+
+
 def get_evals_configs(
     group: str,
+    split_source: str | pathlib.Path | None = None,
+    base_name: str = "correctness_base",
+    datamodule_name: str = "correctness_dm_base",
 ) -> list[pyine.configs.schemas.ConfigDescription]:
     """Config provider for EvalType.CORRECTNESS, called by pyine/evals/configs.py dispatch.
 
     Returns a base ``CorrectnessEvalsConfig`` and its nested ``CorrectnessDataModuleConfig`` for
-    hydra-zen config composition. Required fields (``lmdb_paths``, ``split_config.split_source``)
-    are left as MISSING: the user must provide them at runtime or in a YAML override.
+    hydra-zen config composition. Required fields (``lmdb_paths``) are left as MISSING: the user
+    must provide them at runtime or in a YAML override. If ``split_source`` is provided, it
+    pre-fills ``split_config.split_source`` in the nested datamodule config.
 
     Also registers canonical resampling presets under both ``calibration_resampling`` and
     ``datamodule_config/resampling`` hydra groups.
+
+    Args:
+        group: Hydra config group path for the eval configs.
+        split_source: Optional path or dataset name for the split source. When provided,
+            pre-fills ``split_config.split_source`` in the nested datamodule config.
+        base_name: Name to use for the registered base eval config.
+        datamodule_name: Name to use for the nested datamodule base config.
     """
+    dm_config_extras = _get_split_config_extras(split_source)
     datamodule_config = pyine.configs.utils.make_config_description(
         correctness_datamodule_configs.CorrectnessDataModuleConfig,
-        name="correctness_dm_base",
+        name=datamodule_name,
         group=f"{group}/datamodule_config",
         description="Base correctness evaluation datamodule settings (LMDB source, label type, splitting).",
         config={
             "populate_full_signature": True,
             "hydra_convert": "object",
+            **dm_config_extras,
         },
     )
     base_config = pyine.configs.utils.make_config_description(
         CorrectnessEvalsConfig,
-        name="correctness_base",
+        name=base_name,
         group=group,
         description="Correctness evaluation settings with canonical defaults for guardrail benchmarking.",
         config={
@@ -498,51 +599,19 @@ def get_evals_configs(
             "hydra_convert": "object",
             "hydra_defaults": [
                 "_self_",
-                {"datamodule_config": "correctness_dm_base"},
+                {"datamodule_config": datamodule_name},
             ],
         },
     )
-    calibration_resampling_config = pyine.configs.utils.make_config_description(
-        correctness_types.RecordResamplingConfig,
-        name="resampling_base",
-        group=f"{group}/calibration_resampling",
-        description="Base resampling config with reasonable defaults for robustness testing.",
-        config={
-            "populate_full_signature": True,
-            "hydra_convert": "object",
-        },
-    )
-    resampling_config = pyine.configs.utils.make_config_description(
-        correctness_types.RecordResamplingConfig,
-        name="resampling_base",
-        group=f"{group}/datamodule_config/resampling",
-        description="Base resampling config for training and validation data composition control.",
-        config={
-            "populate_full_signature": True,
-            "hydra_convert": "object",
-        },
-    )
-    configs = [base_config, datamodule_config, calibration_resampling_config, resampling_config]
-    resampling_groups = [
-        f"{group}/calibration_resampling",
-        f"{group}/datamodule_config/resampling",
+    return [
+        base_config,
+        datamodule_config,
+        *_get_resampling_configs(
+            group=f"{group}/calibration_resampling",
+            base_description="Base resampling config with reasonable defaults for robustness testing.",
+        ),
+        *_get_resampling_configs(
+            group=f"{group}/datamodule_config/resampling",
+            base_description="Base resampling config for training and validation data composition control.",
+        ),
     ]
-    for preset_name, factory_name in _RESAMPLING_PRESETS:
-        factory = getattr(correctness_types.RecordResamplingConfig, factory_name)
-        preset_instance = factory()
-        overrides = preset_instance.model_dump(exclude_defaults=True)
-        for resampling_group in resampling_groups:
-            configs.append(
-                pyine.configs.utils.make_config_description(
-                    correctness_types.RecordResamplingConfig,
-                    name=preset_name,
-                    group=resampling_group,
-                    description=factory.__doc__ or f"Resampling preset: {preset_name}",
-                    config={
-                        "populate_full_signature": True,
-                        "hydra_convert": "object",
-                        **overrides,
-                    },
-                )
-            )
-    return configs

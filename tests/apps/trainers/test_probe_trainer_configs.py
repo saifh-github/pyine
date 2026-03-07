@@ -103,6 +103,21 @@ class TestHydraConfigRegistration:
         )
         assert dm_config is not None
 
+    def test_register_hydra_configs_includes_correctness_taco_presets(
+        self,
+        tmp_path: pathlib.Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import pyine.apps.trainers.probe_trainer_configs as ptc
+        import pyine.evals.common
+        import pyine.utils.filesystem
+
+        monkeypatch.setattr(pyine.utils.filesystem, "get_logs_root_path", lambda: tmp_path)
+        configs = ptc.register_hydra_configs(pyine.evals.common.EvalType.CODE_EXEC)
+
+        assert any(cfg.name == "correctness_taco_base" and cfg.group == "config/datamodule_config" for cfg in configs)
+        assert any(cfg.name == "correctness_taco_base" and cfg.group == "config/evals_config" for cfg in configs)
+
 
 class TestProbeTrainerEvalOnlyConfig:
     def test_checkpoint_dir_accepted(self) -> None:

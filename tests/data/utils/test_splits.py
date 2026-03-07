@@ -1,7 +1,10 @@
+import pathlib
+
 import pydantic
 import pytest
 
 import pyine.data.utils.splits as splits
+import pyine.utils.filesystem
 
 
 @pytest.fixture
@@ -270,9 +273,14 @@ def test_build_subset_to_identifiers_map(
     assert sorted(flat) == sorted(sample_ids)
 
 
-def test_get_dataset_split_file() -> None:
+def test_get_dataset_split_file(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(pyine.utils.filesystem, "get_data_root_path", lambda: tmp_path)
     split_file_path = splits.get_dataset_split_file_path("fooOOO", must_exist=False)
     assert "fooOOO" in split_file_path.name
-    assert split_file_path.parent.exists()
+    assert split_file_path.parent == tmp_path / "splits"
+    assert not split_file_path.parent.exists()
     with pytest.raises(FileNotFoundError):
         _ = splits.get_dataset_split_result("fooOOO")

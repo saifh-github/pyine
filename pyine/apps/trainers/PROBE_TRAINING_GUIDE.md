@@ -276,7 +276,23 @@ The trainer validates the loaded dataset at load time:
 
 Instead of reward LMDB datasets exported during training via the `DiskRewardLogger` class, the
 probe trainer can also consume eval LMDBs exported in the code exec eval pipeline by the
-`DiskEvalLogger` class. To use this, set the `datamodule_config` to a `CorrectnessDataModuleConfig`:
+`DiskEvalLogger` class.
+
+For the common TACO workflow, the trainer registers an explicit `correctness_taco_base` preset that
+pre-fills `split_config.split_source: TACO` and exposes the correctness resampling presets:
+
+```bash
+uv run python -m pyine.apps.trainers.probe_trainer \
+  +config/datamodule_config=correctness_taco_base \
+  +config/datamodule_config/resampling=balanced
+
+uv run python -m pyine.apps.trainers.probe_trainer \
+  +config/evals_config=correctness_taco_base \
+  +config/evals_config/calibration_resampling=balanced
+```
+
+If you want to spell out the full nested config manually, use a `CorrectnessDataModuleConfig` like
+this:
 
 ```yaml
 config:
@@ -285,7 +301,7 @@ config:
     lmdb_paths: /path/to/eval_logs.lmdb
     label_type: soft_match
     split_config:
-      split_source: my_dataset
+      split_source: /path/to/dataset/split/file.bin
       guardrail_valid_fraction: 0.5
     resampling:  # optional
       target_positive_ratio: 0.5

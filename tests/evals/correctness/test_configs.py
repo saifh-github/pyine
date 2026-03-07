@@ -66,6 +66,24 @@ class TestGetEvalsConfigs:
         # 4 base configs + 7 presets * 2 groups = 18 total
         assert len(configs) == 18
 
+    def test_split_source_prefills_nested_datamodule_config(self) -> None:
+        configs = correctness_configs.get_evals_configs("test_group", split_source="TACO")
+        dm_config = next(cfg for cfg in configs if cfg.name == "correctness_dm_base")
+        split_config_factory = dm_config.config.__dataclass_fields__["split_config"].default_factory
+        assert split_config_factory() == {"split_source": "TACO"}
+
+    def test_custom_base_and_datamodule_names_are_supported(self) -> None:
+        configs = correctness_configs.get_evals_configs(
+            "test_group",
+            split_source="TACO",
+            base_name="correctness_taco_base",
+            datamodule_name="correctness_taco_dm_base",
+        )
+        assert any(cfg.name == "correctness_taco_base" and cfg.group == "test_group" for cfg in configs)
+        assert any(
+            cfg.name == "correctness_taco_dm_base" and cfg.group == "test_group/datamodule_config" for cfg in configs
+        )
+
     def test_preset_names_registered_in_both_groups(self) -> None:
         configs = correctness_configs.get_evals_configs("test_group")
         preset_names = {
@@ -129,3 +147,24 @@ class TestCorrectnessEvalsConfig:
         mock_dm = unittest.mock.MagicMock()
         with pytest.raises(ValueError, match="should not provide one"):
             config.prepare_eval_datamodule(mock_dm)
+
+
+class TestGetDatamoduleConfigs:
+    def test_total_config_count(self) -> None:
+        configs = correctness_configs.get_datamodule_configs("test_group")
+        # 1 base config + 1 base resampling config + 7 presets = 9 total
+        assert len(configs) == 9
+
+    def test_split_source_prefills_base_datamodule_config(self) -> None:
+        configs = correctness_configs.get_datamodule_configs("test_group", split_source="TACO")
+        base_config = next(cfg for cfg in configs if cfg.name == "correctness_base")
+        split_config_factory = base_config.config.__dataclass_fields__["split_config"].default_factory
+        assert split_config_factory() == {"split_source": "TACO"}
+
+    def test_custom_base_name_is_supported(self) -> None:
+        configs = correctness_configs.get_datamodule_configs(
+            "test_group",
+            split_source="TACO",
+            base_name="correctness_taco_base",
+        )
+        assert any(cfg.name == "correctness_taco_base" and cfg.group == "test_group" for cfg in configs)

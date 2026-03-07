@@ -385,10 +385,10 @@ def get_dataset_split_file_path(
 ) -> pathlib.Path:
     """Returns the path of the split file for a given dataset.
 
+    This helper is intentionally side-effect-free: it only constructs the expected path.
     If `must_exist` is True and the split does not exist, raises FileNotFoundError.
     """
     split_root_folder = pyine.utils.filesystem.get_data_root_path() / "splits"
-    split_root_folder.mkdir(parents=True, exist_ok=True)
     split_path = split_root_folder / f"{source_dataset_name}-split.bin"
     if must_exist and not split_path.is_file():
         raise FileNotFoundError(f"split file not found for: {source_dataset_name}")

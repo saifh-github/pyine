@@ -16,7 +16,6 @@ import pyine.configs.schemas
 import pyine.configs.searchpath
 import pyine.configs.utils
 import pyine.evals.common
-import pyine.evals.configs
 import pyine.evals.correctness.datamodule_configs  # noqa: TC001
 import pyine.guardrails.data.datamodule_configs  # noqa: TC001
 import pyine.guardrails.probes.base  # noqa: TC001
@@ -32,8 +31,8 @@ class ProbeTrainerAppMainConfig(common.AppMainConfig, common.ModelTokenizerConfi
     evals_config: pyine.evals.common.BaseEvalsConfig | None = None  # type: ignore[assignment]
     """Optional correctness eval config for post-training benchmarking.
 
-    When set (e.g. via ``+evals_config=correctness_base`` on the hydra command line), the trained
-    probes are evaluated as guardrail scorers on the correctness pipeline after training completes.
+    When set, the trained probes are evaluated as guardrail scorers on the correctness pipeline
+    after training completes.
     """
 
     # --- Override: accept ProbeDataModuleConfig or CorrectnessDataModuleConfig ---
@@ -149,34 +148,7 @@ def _get_app_configs(
     group: str,
 ) -> list[pyine.configs.schemas.ConfigDescription]:
     """Generates and returns probe trainer application configs for hydra zen storage."""
-    # --- Probe datamodule config ---
-    datamodule_config = pyine.configs.utils.make_config_description(
-        pyine.guardrails.data.datamodule_configs.ProbeDataModuleConfig,
-        name="probe_base",
-        group=f"{group}/datamodule_config",
-        description="Base probe datamodule settings (LMDB source, splitting, filtering).",
-        config={
-            "populate_full_signature": True,
-            "hydra_convert": "object",
-        },
-    )
-    # --- Correctness datamodule config ---
-    correctness_datamodule_config = pyine.configs.utils.make_config_description(
-        pyine.evals.correctness.datamodule_configs.CorrectnessDataModuleConfig,
-        name="correctness_base",
-        group=f"{group}/datamodule_config",
-        description="Base correctness datamodule settings (LMDB eval records, splits, resampling).",
-        config={
-            "populate_full_signature": True,
-            "hydra_convert": "object",
-        },
-    )
-    # --- Correctness eval configs (registered so user can opt-in via hydra) ---
-    evals_configs = pyine.evals.configs.get_evals_configs(
-        eval_type=pyine.evals.common.EvalType.CORRECTNESS,
-        group=f"{group}/evals_config",
-    )
-    # --- Main app config ---
+    support_configs = common.get_probe_and_correctness_support_configs(group=group)
     app_main_config = pyine.configs.utils.make_config_description(
         ProbeTrainerAppMainConfig,
         name="base",
@@ -191,7 +163,7 @@ def _get_app_configs(
             ],
         },
     )
-    return [app_main_config, datamodule_config, correctness_datamodule_config, *evals_configs]
+    return [app_main_config, *support_configs]
 
 
 def register_hydra_configs(
