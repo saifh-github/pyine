@@ -291,7 +291,7 @@ class KeywordBiasDataModule(
             min_keyword_length=1,
             banned_keywords=(),
             raise_on_error=False,
-            verbose=self.verbose,
+            verbose=True,
         )
         clusters = [
             KeywordClusterData(

@@ -1417,7 +1417,7 @@ def test_prepare_bias_specific_metadata_with_explicit_keyword(
 ) -> None:
     """Test that _prepare_bias_specific_metadata works with explicit keyword."""
     pyine.utils.reprod.load_dotenv()
-    dm = keywords_dm_config.instantiate_datamodule(verbose=True)
+    dm = keywords_dm_config.instantiate_datamodule()
     # clear any cached metadata to force fresh computation
     if dm._is_metadata_prepared():
         dm._clear_prepared_metadata()
@@ -1464,7 +1464,7 @@ def test_keyword_datamodule_full_lifecycle(
 ) -> None:
     """Test full datamodule lifecycle: prepare, setup, get_parser, teardown."""
     pyine.utils.reprod.load_dotenv()
-    dm = keywords_dm_config.instantiate_datamodule(verbose=True)
+    dm = keywords_dm_config.instantiate_datamodule()
     if dm._is_metadata_prepared():
         dm._clear_prepared_metadata()
     dm.prepare_data()
@@ -1509,7 +1509,7 @@ def test_keyword_datamodule_counterfactual_mode() -> None:
 
     pyine.utils.reprod.load_dotenv()
     counterfactual_config = _create_keywords_dm_config(evaluation_strategy=EvaluationStrategy.counterfactual)
-    dm = counterfactual_config.instantiate_datamodule(verbose=True)
+    dm = counterfactual_config.instantiate_datamodule()
     if dm._is_metadata_prepared():
         dm._clear_prepared_metadata()
     dm.prepare_data()
@@ -1553,7 +1553,7 @@ def test_train_rebalancing_respects_target_ratio(
     pyine.utils.reprod.load_dotenv()
     # set a specific target ratio
     rebalance_config = keywords_dm_config.model_copy(update={"train_subset_with_keyword_ratio": 0.25})
-    dm = rebalance_config.instantiate_datamodule(verbose=True)
+    dm = rebalance_config.instantiate_datamodule()
     if dm._is_metadata_prepared():
         dm._clear_prepared_metadata()
     dm.prepare_data()
@@ -1606,7 +1606,7 @@ def test_cluster_cache_deterministic() -> None:
             "min_samples_without_keyword": 0,
         }
     )
-    dm1 = config1.instantiate_datamodule(verbose=True)
+    dm1 = config1.instantiate_datamodule()
     if dm1._is_metadata_prepared():
         dm1._clear_prepared_metadata()
     dm1.prepare_data()
@@ -1615,7 +1615,7 @@ def test_cluster_cache_deterministic() -> None:
     assert meta1.keyword == "result"
     trace_ids_1 = meta1.trace_ids_with_keyword
     # create second datamodule with same config
-    dm2 = config1.instantiate_datamodule(verbose=True)
+    dm2 = config1.instantiate_datamodule()
     if dm2._is_metadata_prepared():
         dm2._clear_prepared_metadata()
     dm2.prepare_data()

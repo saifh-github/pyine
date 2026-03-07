@@ -959,7 +959,7 @@ def test_shortcuts_datamodule_integration(
     shortcuts_dm_config: pyine.organisms.datamodules.shortcuts_configs.ShortcutBiasDataModuleConfig,
 ) -> None:
     pyine.utils.reprod.load_dotenv()
-    dm = shortcuts_dm_config.instantiate_datamodule(verbose=True)
+    dm = shortcuts_dm_config.instantiate_datamodule()
     if dm._is_metadata_prepared():
         dm._clear_prepared_metadata()
     dm.prepare_data()
@@ -1029,7 +1029,7 @@ def test_shortcuts_datamodule_predefined_split(
     shortcuts_dm_config: pyine.organisms.datamodules.shortcuts_configs.ShortcutBiasDataModuleConfig,
 ) -> None:
     pyine.utils.reprod.load_dotenv()
-    dm = shortcuts_dm_config.instantiate_datamodule(verbose=True)
+    dm = shortcuts_dm_config.instantiate_datamodule()
     if dm._is_metadata_prepared():
         dm._clear_prepared_metadata()
     dm.prepare_data()
@@ -1099,7 +1099,7 @@ def test_shortcuts_counterfactual_subsets_seeded_prompt_db(
         min_samples_misleading=0,
         min_samples_hintless=0,
     )
-    dm = config.instantiate_datamodule(verbose=True)
+    dm = config.instantiate_datamodule()
     if dm._is_metadata_prepared():
         dm._clear_prepared_metadata()
     dm.prepare_data()
@@ -1194,7 +1194,7 @@ def test_shortcuts_counterfactual_subsets_missing_misleading_prompt_db(
         min_samples_misleading=0,
         min_samples_hintless=0,
     )
-    dm = config.instantiate_datamodule(verbose=True)
+    dm = config.instantiate_datamodule()
     if dm._is_metadata_prepared():
         dm._clear_prepared_metadata()
     dm.prepare_data()
@@ -1249,7 +1249,7 @@ def test_shortcuts_datamodule_examples_round_trip(
     shortcuts_dm_config: pyine.organisms.datamodules.shortcuts_configs.ShortcutBiasDataModuleConfig,
 ) -> None:
     pyine.utils.reprod.load_dotenv()
-    dm = shortcuts_dm_config.instantiate_datamodule(verbose=True)
+    dm = shortcuts_dm_config.instantiate_datamodule()
     if dm._is_metadata_prepared():
         dm._clear_prepared_metadata()
     dm.prepare_data()

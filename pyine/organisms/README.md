@@ -123,7 +123,7 @@ config = get_datamodule_config(
     split_file_path="path/to/split.bin",
     seed=42,
 )
-datamodule = config.instantiate_datamodule(verbose=True)
+datamodule = config.instantiate_datamodule()
 datamodule.prepare_data()
 datamodule.setup(stage="fit")
 

@@ -28,7 +28,7 @@ class DummyDatamodule(pyine.data.datamodule.BaseDataModule):
         self.prepared = False
         self.setup_called = 0
         self.setup_stages: list[str | None] = []
-        self.instantiate_verbose: list[bool] = []
+        self.instantiate_count: int = 0
         self._stats = stats or {"rows": 3}
         self.config: DummyDatamoduleConfig | None = None  # set by DummyDatamoduleConfig.instantiate_datamodule
 
@@ -67,9 +67,9 @@ class DummyDatamoduleConfig(pyine.data.datamodule.BaseDataModuleConfig):
     def resolved_eval_subset_names(self) -> tuple[str, ...]:
         return tuple(self.eval_subset_names)
 
-    def instantiate_datamodule(self, verbose: bool = False) -> DummyDatamodule:
-        self.calls.append(verbose)
-        self.datamodule.instantiate_verbose.append(verbose)
+    def instantiate_datamodule(self) -> DummyDatamodule:
+        self.calls.append(True)
+        self.datamodule.instantiate_count += 1
         self.datamodule.config = self
         return self.datamodule
 
@@ -137,7 +137,7 @@ def test_prepare_datamodule_basic() -> None:
     assert datamodule.prepared
     assert datamodule.setup_called == 1
     assert datamodule.setup_stages == [None]
-    assert datamodule.instantiate_verbose == [True]
+    assert datamodule.instantiate_count == 1
 
 
 def test_prepare_datamodule_forwards_stage() -> None:

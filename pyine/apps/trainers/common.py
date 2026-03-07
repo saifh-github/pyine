@@ -848,7 +848,7 @@ def prepare_datamodule(
         The instantiated, prepared, and set-up datamodule that is ready to provide data loaders.
     """
     logger.info("preparing datamodule and setting up parsers/loaders...")
-    dm = config.datamodule_config.instantiate_datamodule(verbose=True)
+    dm = config.datamodule_config.instantiate_datamodule()
     # use synchronized decision-making to prevent cross-node divergence and ensure DDP is
     # initialized early (before any rank-divergent work like fingerprint computation)
     use_per_node_prep = pyine.utils.distrib.determine_per_node_prep_mode()

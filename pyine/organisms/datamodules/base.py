@@ -358,11 +358,9 @@ class BiasDataModuleBase[ConfigType: BiasDataModuleBaseConfig](
     def __init__(
         self,
         config: ConfigType,
-        verbose: bool = False,
     ) -> None:
         """Initializes a new BiasDataModuleBase instance."""
         super().__init__(config)
-        self.verbose = verbose
         self._metadata = None
         self._readers = []
         self._subset_parsers = {}

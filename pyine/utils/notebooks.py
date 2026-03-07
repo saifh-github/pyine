@@ -31,7 +31,6 @@ import pyine.organisms.datamodules.samples
 def load_datamodule_from_hf_trainer_config(
     experiment_name: str,
     overrides: list[str] | None = None,
-    verbose: bool = True,
 ) -> pyine.data.datamodule.BaseDataModule[typing.Any]:
     """Loads and instantiates a datamodule from an hf_trainer experiment config.
 
@@ -46,7 +45,6 @@ def load_datamodule_from_hf_trainer_config(
     Args:
         experiment_name: The experiment config name (e.g., "original/v0_rl").
         overrides: Optional list of Hydra overrides to apply (e.g., ["runtime.seed=42"]).
-        verbose: Whether to print verbose information during datamodule setup.
 
     Returns:
         The instantiated and prepared datamodule, ready for data access.
@@ -72,7 +70,7 @@ def load_datamodule_from_hf_trainer_config(
         config_dict = hydra.compose(config_name="entrypoint", overrides=all_overrides)
     # instantiate just the datamodule config (not the full app config)
     dm_config = hydra_zen.instantiate(config_dict.config.datamodule_config)
-    dm = dm_config.instantiate_datamodule(verbose=verbose)
+    dm = dm_config.instantiate_datamodule()
     dm.prepare_data()
     dm.setup()
     return dm
