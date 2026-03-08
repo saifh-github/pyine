@@ -9,6 +9,7 @@ import torch
 import torch.utils.flop_counter
 
 import pyine.evals.correctness.types as correctness_types
+import pyine.evals.utils
 import pyine.guardrails.probes.base
 import pyine.guardrails.probes.extraction
 
@@ -67,6 +68,11 @@ class ProbeScorer:
         device = next(self._probe.parameters()).device
         self._probe.eval()
         self._model.eval()
+        total_records = len(records)
+        logger.info(
+            f"probe scorer processing {total_records} records "
+            f"(batch_size={self._batch_size}, max_seq_length={self._max_seq_length})"
+        )
         with torch.no_grad():
             for batch_start in range(0, len(texts), self._batch_size):
                 batch_texts = texts[batch_start : batch_start + self._batch_size]
@@ -109,6 +115,10 @@ class ProbeScorer:
                         # (we could add more here, but there's not much to actually add in this simple wrapper)
                         # (note: we DO NOT add record data purposefully, as that is gathered at the run level)
                     }
+                    num_processed = draw_index + 1
+                    if pyine.evals.utils.should_log_percent_progress(num_processed, total_records):
+                        progress_percent = (100.0 * num_processed) / total_records
+                        logger.info(f"probe scorer progress: {num_processed}/{total_records} ({progress_percent:.1f}%)")
         return correctness_types.ScoringResult(
             scores=all_scores,
             verification_costs=all_costs,
@@ -166,6 +176,8 @@ class LLMClassifierScorer:
         all_metadata: dict[correctness_types.ScoredAttemptKey, dict[str, typing.Any]] = {}
         device = next(self._model.parameters()).device  # type: ignore[reportUnknownMemberType]
         self._model.eval()
+        total_records = len(records)
+        logger.info(f"llm classifier scorer processing {total_records} records (max_seq_length={self._max_seq_length})")
         # each sample is processed individually to get exact per-sample FLOP counts
         # (full classifier forward + softmax; no padding overhead)
         with torch.no_grad():
@@ -194,6 +206,12 @@ class LLMClassifierScorer:
                     "was_truncated": was_truncated,
                     # (note: we DO NOT add record data purposefully, as that is gathered at the run level)
                 }
+                num_processed = draw_index + 1
+                if pyine.evals.utils.should_log_percent_progress(num_processed, total_records):
+                    progress_percent = (100.0 * num_processed) / total_records
+                    logger.info(
+                        f"llm classifier scorer progress: {num_processed}/{total_records} ({progress_percent:.1f}%)"
+                    )
         return correctness_types.ScoringResult(
             scores=all_scores,
             verification_costs=all_costs,

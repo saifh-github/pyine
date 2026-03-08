@@ -823,7 +823,8 @@ def compute_clustered_bootstrap_cis(
         return {}
     # collect bootstrap samples and compute metrics for each replicate
     metric_samples: dict[str, list[float]] = collections.defaultdict(list)
-    for _ in range(num_replicates):
+    logger.info(f"running clustered bootstrap CI computation ({num_replicates} replicates)")
+    for replicate_idx in range(num_replicates):
         resampled_problem_indices = rng.integers(0, num_problems, size=num_problems)
         resampled_record_indices, sample_keys = _build_bootstrap_sample_keys(
             records,
@@ -852,6 +853,10 @@ def compute_clustered_bootstrap_cis(
             metric_samples,
             sample_keys=sample_keys,
         )
+        num_done = replicate_idx + 1
+        if pyine.evals.utils.should_log_percent_progress(num_done, num_replicates):
+            progress_percent = (100.0 * num_done) / num_replicates
+            logger.info(f"clustered bootstrap progress: {num_done}/{num_replicates} ({progress_percent:.1f}%)")
     return _build_cis_from_samples(metric_samples, confidence_level)
 
 
@@ -965,7 +970,8 @@ def compute_hierarchical_bootstrap_cis(
         run_problem_maps.append(prob_to_idx)
         run_problem_id_lists.append(sorted(prob_to_idx.keys()))
     metric_samples: dict[str, list[float]] = collections.defaultdict(list)
-    for _ in range(num_replicates):
+    logger.info(f"running hierarchical bootstrap CI computation ({num_replicates} replicates)")
+    for replicate_idx in range(num_replicates):
         # resample run indices
         run_indices = rng.integers(0, num_runs, size=num_runs)
         per_run_metrics: dict[str, list[float]] = collections.defaultdict(list)
@@ -1011,6 +1017,10 @@ def compute_hierarchical_bootstrap_cis(
         for metric_name, values in per_run_metrics.items():
             if values:
                 metric_samples[metric_name].append(float(np.mean(values)))
+        num_done = replicate_idx + 1
+        if pyine.evals.utils.should_log_percent_progress(num_done, num_replicates):
+            progress_percent = (100.0 * num_done) / num_replicates
+            logger.info(f"hierarchical bootstrap progress: {num_done}/{num_replicates} ({progress_percent:.1f}%)")
     return _build_cis_from_samples(metric_samples, confidence_level)
 
 

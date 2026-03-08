@@ -34,6 +34,23 @@ TokenType = typing.Literal[
 """Type used to represent token counts that can be used as keys in a MetricsDictType."""
 
 
+def should_log_percent_progress(
+    num_done: int,
+    num_total: int,
+    percent_step: int = 1,
+) -> bool:
+    """Return True when percentage progress crosses a reporting boundary."""
+    if num_total <= 0 or percent_step <= 0:
+        return False
+    if num_done >= num_total:
+        return True
+    prev_percent = ((num_done - 1) * 100) // num_total
+    curr_percent = (num_done * 100) // num_total
+    if curr_percent == prev_percent:
+        return False
+    return curr_percent % percent_step == 0
+
+
 @dataclasses.dataclass
 class TokenUsageInfo:
     """Unified token usage information across multiple provider response formats.
