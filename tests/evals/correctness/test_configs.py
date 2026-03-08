@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import pathlib
+import types
+import unittest.mock
 
 import pydantic
 import pytest
@@ -139,14 +141,48 @@ class TestCorrectnessEvalsConfig:
         assert config.confidence_level == 0.95
 
     def test_prepare_eval_datamodule_rejects_provided_datamodule(self) -> None:
-        import unittest.mock
-
         config = correctness_configs.CorrectnessEvalsConfig(
             datamodule_config=_make_datamodule_config(),
         )
         mock_dm = unittest.mock.MagicMock()
         with pytest.raises(ValueError, match="should not provide one"):
             config.prepare_eval_datamodule(mock_dm)
+
+    def test_log_metrics_hides_category_stats_dynamically(self) -> None:
+        config = correctness_configs.CorrectnessEvalsConfig(
+            datamodule_config=_make_datamodule_config(),
+            target_fpr_values=[0.05],
+        )
+        mock_wandb_run = unittest.mock.MagicMock()
+        subset_result = types.SimpleNamespace(
+            metrics={
+                "auroc/mean": 0.91,
+                "category/regular/auroc/mean": 0.9,
+                "category/regular/auroc/std": 0.02,
+                "category/regular/fpr_0_05/tpr/num_valid_runs": 5,
+                "category/regular/fpr_0_05/tpr/bootstrap_ci_lower": 0.75,
+            }
+        )
+
+        config.log_metrics(
+            wandb_run=mock_wandb_run,
+            results_by_subset={"guardrail_test": subset_result},
+        )
+
+        define_calls_by_name = {
+            call.kwargs["name"]: call.kwargs for call in mock_wandb_run.define_metric.call_args_list
+        }
+        category_std_metric = "benchmark/guardrail_test/category/regular/auroc/std"
+        category_num_valid_metric = "benchmark/guardrail_test/category/regular/fpr_0_05/tpr/num_valid_runs"
+        category_ci_lower_metric = "benchmark/guardrail_test/category/regular/fpr_0_05/tpr/bootstrap_ci_lower"
+        category_mean_metric = "benchmark/guardrail_test/category/regular/auroc/mean"
+
+        for metric_name in [category_std_metric, category_num_valid_metric, category_ci_lower_metric]:
+            assert metric_name in define_calls_by_name
+            assert define_calls_by_name[metric_name]["hidden"] is True
+            assert define_calls_by_name[metric_name]["summary"] == "none"
+            assert define_calls_by_name[metric_name]["step_metric"] == "train/global_step"
+        assert category_mean_metric not in define_calls_by_name
 
 
 class TestGetDatamoduleConfigs:

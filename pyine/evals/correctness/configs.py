@@ -20,6 +20,15 @@ import pyine.evals.correctness.types as correctness_types
 import pyine.evals.persistence
 import pyine.evals.utils
 
+_HIDDEN_STAT_SUFFIXES: tuple[str, ...] = (
+    "std",
+    "p5",
+    "num_valid_runs",
+    "bootstrap_ci_point",
+    "bootstrap_ci_lower",
+    "bootstrap_ci_upper",
+)
+
 
 class RecordCategoryConfig(pydantic.BaseModel):
     """Defines how to categorize EvalRecords for per-category metric breakdowns.
@@ -313,21 +322,45 @@ class CorrectnessEvalsConfig(pyine.evals.common.BaseEvalsConfig):
                         summary="last",
                     )
             # -- variability, CI, and descriptive metrics (hidden) --
-            hidden_suffixes = [
-                "std",
-                "p5",
-                "num_valid_runs",
-                "bootstrap_ci_point",
-                "bootstrap_ci_lower",
-                "bootstrap_ci_upper",
-            ]
-            for suffix in hidden_suffixes:
-                wandb_run.define_metric(
-                    name=f"{prefix}/*/{suffix}",
-                    step_metric=step_metric,
-                    hidden=True,
-                    summary="none",
+            # enumerate concrete base metric names; wandb only supports glob as a suffix,
+            # not mid-string (e.g. "prefix/*/std" is rejected)
+            hidden_base_metrics = ["auroc", "average_precision"]
+            for target_fpr in self.target_fpr_values:
+                fpr_key = correctness_metrics.format_fpr_key(target_fpr)
+                hidden_base_metrics.append(f"tpr_at_{fpr_key}")
+                hidden_base_metrics.extend(
+                    [
+                        f"{fpr_key}/tpr",
+                        f"{fpr_key}/fpr",
+                        f"{fpr_key}/fnr",
+                        f"{fpr_key}/precision",
+                        f"{fpr_key}/npv",
+                        f"{fpr_key}/base_pass_rate",
+                        f"{fpr_key}/total_block_rate",
+                        f"{fpr_key}/guarded_pass_rate",
+                        f"{fpr_key}/unsafe_slip_rate",
+                        f"{fpr_key}/best_of_k_success_rate",
+                        f"{fpr_key}/cons_pass_rate",
+                        f"{fpr_key}/cons_unsafe_slip_rate",
+                        f"{fpr_key}/cons_justified_reject_rate",
+                        f"{fpr_key}/cost_total",
+                        f"{fpr_key}/cost_mean",
+                        f"{fpr_key}/cost_median",
+                        f"{fpr_key}/cost_std",
+                        f"{fpr_key}/cost_per_correct_acceptance",
+                        f"{fpr_key}/cost_per_incorrect_block",
+                        f"{fpr_key}/cost_accuracy_rank_correlation",
+                        f"{fpr_key}/cost_difficulty_rank_correlation",
+                    ]
                 )
+            for base_name in hidden_base_metrics:
+                for suffix in _HIDDEN_STAT_SUFFIXES:
+                    wandb_run.define_metric(
+                        name=f"{prefix}/{base_name}/{suffix}",
+                        step_metric=step_metric,
+                        hidden=True,
+                        summary="none",
+                    )
             # class balance and counts
             for hidden_name in ["class_balance/*", "record_count", "sample_count"]:
                 wandb_run.define_metric(
@@ -379,6 +412,17 @@ class CorrectnessEvalsConfig(pyine.evals.common.BaseEvalsConfig):
                 row.append(subset_metrics.get(metric_name))
             table.add_data(*row)  # pyright: ignore[reportUnknownMemberType] - wandb Table.add_data has incomplete stubs
             summary_prefix = f"benchmark/{subset_name}"
+            for metric_name in subset_metrics:
+                # category metric names are data-dependent, so hide their variability/CI stats
+                # here once concrete keys are available from the eval result.
+                metric_suffix = metric_name.rsplit("/", maxsplit=1)[-1]
+                if metric_name.startswith("category/") and metric_suffix in _HIDDEN_STAT_SUFFIXES:
+                    wandb_run.define_metric(
+                        name=f"{summary_prefix}/{metric_name}",
+                        step_metric="train/global_step",
+                        hidden=True,
+                        summary="none",
+                    )
             for metric_name, metric_val in subset_metrics.items():
                 wandb_run.summary[f"{summary_prefix}/{metric_name}"] = metric_val
         table_key = "benchmark/metrics_table"
