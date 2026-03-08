@@ -46,12 +46,83 @@ HEALTH_INTERVAL=5   # seconds between health checks
 VLLM_SERVER_EXTRA_ARGS=()
 CHECKPOINTS=()
 HYDRA_OVERRIDES=()
+VLLM_PID=""
+VLLM_PGID=""
+CLEANUP_DONE=0
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ---- helpers ----
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
+
+server_serves_expected_model() {
+    local expected_model="$1"
+    local url="http://localhost:${PORT}/v1/models"
+    local models_payload
+    if ! models_payload="$(curl -sf "${url}")"; then
+        return 1
+    fi
+    EXPECTED_MODEL="${expected_model}" python3 -c '
+import json
+import os
+import sys
+
+payload = json.loads(sys.stdin.read())
+expected_model = os.environ["EXPECTED_MODEL"]
+models = payload.get("data", [])
+sys.exit(0 if any(model.get("id") == expected_model for model in models) else 1)
+' <<< "${models_payload}"
+}
+
+port_is_open() {
+    python3 - "$1" <<'PY'
+import socket
+import sys
+
+port = int(sys.argv[1])
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+    sock.settimeout(1.0)
+    sys.exit(0 if sock.connect_ex(("127.0.0.1", port)) == 0 else 1)
+PY
+}
+
+parse_vllm_extra_args() {
+    local raw_args="$1"
+    local IFS=' '
+    read -r -a PARSED_VLLM_EXTRA_ARGS <<< "${raw_args}"
+}
+
+vllm_resources_released() {
+    local process_group_alive=1
+    local process_alive=1
+    local port_open=1
+
+    if [[ -n "${VLLM_PGID:-}" ]] && ! kill -0 -- "-${VLLM_PGID}" 2>/dev/null; then
+        process_group_alive=0
+    fi
+    if [[ -n "${VLLM_PID:-}" ]] && ! kill -0 "${VLLM_PID}" 2>/dev/null; then
+        process_alive=0
+    fi
+    if ! port_is_open "${PORT}"; then
+        port_open=0
+    fi
+
+    (( process_group_alive == 0 && process_alive == 0 && port_open == 0 ))
+}
+
+wait_for_vllm_stop() {
+    local timeout_secs="$1"
+    local waited=0
+    while (( waited < timeout_secs )); do
+        if vllm_resources_released; then
+            return 0
+        fi
+        sleep 1
+        waited=$(( waited + 1 ))
+    done
+    vllm_resources_released
+}
 
 usage() {
     local exit_code="${1:-0}"
@@ -144,8 +215,9 @@ while [[ $# -gt 0 ]]; do
                 echo "Error: --vllm-extra-args requires a value"
                 usage 1
             fi
-            read -r -a parsed_extra_args <<< "$2"
-            VLLM_SERVER_EXTRA_ARGS+=("${parsed_extra_args[@]}")
+            PARSED_VLLM_EXTRA_ARGS=()
+            parse_vllm_extra_args "$2"
+            VLLM_SERVER_EXTRA_ARGS+=("${PARSED_VLLM_EXTRA_ARGS[@]}")
             shift 2
             ;;
         --vllm-extra-arg)
@@ -246,19 +318,33 @@ start_vllm() {
     fi
 
     log "Starting vLLM server: ${server_cmd[*]}"
-    "${server_cmd[@]}" &
+    if command -v setsid > /dev/null 2>&1; then
+        setsid "${server_cmd[@]}" &
+        VLLM_PGID=$!
+    else
+        "${server_cmd[@]}" &
+        VLLM_PGID=""
+    fi
     VLLM_PID=$!
     log "vLLM server started (PID: ${VLLM_PID})"
 }
 
 wait_for_health() {
+    local expected_model="$1"
     local url="http://localhost:${PORT}/health"
     local elapsed=0
-    log "Waiting for vLLM server to become healthy at ${url} (timeout: ${HEALTH_TIMEOUT}s)..."
+    local warned_wrong_model=0
+    log "Waiting for vLLM server to become healthy at ${url} (timeout: ${HEALTH_TIMEOUT}s, expected model: ${expected_model})..."
     while (( elapsed < HEALTH_TIMEOUT )); do
         if curl -sf "${url}" > /dev/null 2>&1; then
-            log "vLLM server is healthy (took ${elapsed}s)"
-            return 0
+            if server_serves_expected_model "${expected_model}"; then
+                log "vLLM server is healthy and serving ${expected_model} (took ${elapsed}s)"
+                return 0
+            fi
+            if (( warned_wrong_model == 0 )); then
+                log "vLLM health endpoint is up, but a different model is still being served on port ${PORT}; waiting for the new server..."
+                warned_wrong_model=1
+            fi
         fi
         # also check that the server process is still alive
         if ! kill -0 "${VLLM_PID}" 2>/dev/null; then
@@ -280,31 +366,72 @@ wait_for_health() {
 }
 
 stop_vllm() {
-    if [[ -n "${VLLM_PID:-}" ]] && kill -0 "${VLLM_PID}" 2>/dev/null; then
-        log "Stopping vLLM server (PID: ${VLLM_PID})..."
-        kill "${VLLM_PID}" 2>/dev/null || true
-        # give it a moment to shut down gracefully, then force-kill if needed
-        local waited=0
-        while kill -0 "${VLLM_PID}" 2>/dev/null && (( waited < 30 )); do
-            sleep 1
-            waited=$(( waited + 1 ))
-        done
-        if kill -0 "${VLLM_PID}" 2>/dev/null; then
-            log "Force-killing vLLM server (PID: ${VLLM_PID})..."
-            kill -9 "${VLLM_PID}" 2>/dev/null || true
-        fi
-        wait "${VLLM_PID}" 2>/dev/null || true
-        log "vLLM server stopped"
+    local stopped_cleanly=0
+
+    if [[ -n "${VLLM_PGID:-}" ]] && kill -0 -- "-${VLLM_PGID}" 2>/dev/null; then
+        log "Stopping vLLM server process group (PGID: ${VLLM_PGID})..."
+        kill -TERM -- "-${VLLM_PGID}" 2>/dev/null || true
+    elif [[ -n "${VLLM_PID:-}" ]] && kill -0 "${VLLM_PID}" 2>/dev/null; then
+        log "Stopping vLLM server process (PID: ${VLLM_PID})..."
+        kill -TERM "${VLLM_PID}" 2>/dev/null || true
     fi
+
+    if wait_for_vllm_stop 45; then
+        stopped_cleanly=1
+    fi
+
+    if (( stopped_cleanly == 0 )); then
+        if [[ -n "${VLLM_PGID:-}" ]] && kill -0 -- "-${VLLM_PGID}" 2>/dev/null; then
+            log "Force-killing vLLM server process group (PGID: ${VLLM_PGID})..."
+            kill -KILL -- "-${VLLM_PGID}" 2>/dev/null || true
+        elif [[ -n "${VLLM_PID:-}" ]] && kill -0 "${VLLM_PID}" 2>/dev/null; then
+            log "Force-killing vLLM server process (PID: ${VLLM_PID})..."
+            kill -KILL "${VLLM_PID}" 2>/dev/null || true
+        fi
+
+        if wait_for_vllm_stop 15; then
+            stopped_cleanly=1
+        fi
+    fi
+
+    if [[ -n "${VLLM_PID:-}" ]]; then
+        wait "${VLLM_PID}" 2>/dev/null || true
+    fi
+
+    if (( stopped_cleanly == 1 )); then
+        log "vLLM server stopped"
+    else
+        log "Warning: timed out waiting for vLLM server resources to fully release"
+    fi
+
     VLLM_PID=""
+    VLLM_PGID=""
 }
 
 # ensure vLLM is stopped on exit/interrupt
 cleanup() {
+    if (( CLEANUP_DONE == 1 )); then
+        return
+    fi
+    CLEANUP_DONE=1
     log "Cleaning up..."
     stop_vllm
 }
-trap cleanup EXIT INT TERM
+
+handle_signal() {
+    local signal_name="$1"
+    log "Received ${signal_name}; stopping checkpoint sweep..."
+    cleanup
+    trap - EXIT
+    if [[ "${signal_name}" == "INT" ]]; then
+        exit 130
+    fi
+    exit 143
+}
+
+trap cleanup EXIT
+trap 'handle_signal INT' INT
+trap 'handle_signal TERM' TERM
 
 # ---- main loop ----
 
@@ -335,7 +462,7 @@ for ckpt_idx in $(seq 0 $(( TOTAL - 1 ))); do
     start_vllm "${ckpt}"
 
     # 2. wait for it to be ready
-    if ! wait_for_health; then
+    if ! wait_for_health "${model_name}"; then
         log "FAILED: vLLM server did not start for checkpoint: ${ckpt}"
         stop_vllm
         FAILED=$(( FAILED + 1 ))

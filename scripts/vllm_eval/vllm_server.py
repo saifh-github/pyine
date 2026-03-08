@@ -33,9 +33,10 @@ import argparse
 import importlib.util
 import json
 import os
+import shlex
 import sys
+import typing
 from pathlib import Path
-from typing import Any
 
 import torch
 from dotenv import find_dotenv, load_dotenv
@@ -61,7 +62,7 @@ def check_is_lora_checkpoint(checkpoint_path: str) -> bool:
     return adapter_config.exists()
 
 
-def load_adapter_config(checkpoint_path: str) -> dict[str, Any]:
+def load_adapter_config(checkpoint_path: str) -> dict[str, typing.Any]:
     """Load adapter configuration to get base model name."""
     adapter_config_path = Path(checkpoint_path) / "adapter_config.json"
     with open(adapter_config_path) as f:
@@ -150,7 +151,8 @@ def start_vllm_server(
     max_model_len: int | None = None,
     trust_remote_code: bool = True,
     model_name: str = "default",
-) -> None:
+    extra_args: list[str] | None = None,
+) -> typing.NoReturn:
     """
     Start vLLM OpenAI-compatible API server.
 
@@ -163,6 +165,7 @@ def start_vllm_server(
         max_model_len: Maximum sequence length
         trust_remote_code: Whether to trust remote code in model
         model_name: Name to serve the model under (clients use this name in API calls)
+        extra_args: Extra CLI arguments to pass through to `vllm serve`
     """
     print("\n" + "=" * 80)
     print("Starting vLLM Server")
@@ -201,19 +204,33 @@ def start_vllm_server(
     # Always set the served model name
     cmd_parts.extend(["--served-model-name", model_name])
 
-    # Execute vllm serve
-    import subprocess
+    if extra_args:
+        cmd_parts.extend(extra_args)
 
-    cmd = " ".join(cmd_parts)
+    cmd = shlex.join(cmd_parts)
     print(f"Executing: {cmd}\n")
 
+    # replace the wrapper process with `vllm serve` so the caller can manage a single process tree
     try:
-        subprocess.run(cmd, shell=True, check=True)  # noqa: S602 # Security issue raised: Shell=True is required to run vllm serve command
-    except KeyboardInterrupt:
-        print("\nShutting down server...")
-    except subprocess.CalledProcessError as e:
-        print(f"Error running vLLM server: {e}")
+        os.execvpe(cmd_parts[0], cmd_parts, os.environ.copy())  # noqa: S606 # intentional exec; caller manages the process tree
+    except OSError as exc:
+        print(f"Error: failed to exec vLLM server: {exc}")
         sys.exit(1)
+
+
+def infer_tensor_parallel_size(
+    cuda_devices: str | None,
+    tensor_parallel_size: int | None,
+) -> int:
+    """Infer a stable tensor parallel size from explicit devices or visible GPUs."""
+    if tensor_parallel_size is not None:
+        return tensor_parallel_size
+    if cuda_devices is not None:
+        return len([device_id for device_id in cuda_devices.split(",") if device_id.strip()])
+    visible_device_count = torch.cuda.device_count()
+    if visible_device_count < 1:
+        raise ValueError("No CUDA devices are visible; cannot start a vLLM GPU server")
+    return visible_device_count
 
 
 def main() -> None:
@@ -267,8 +284,8 @@ def main() -> None:
     parser.add_argument(
         "--tensor_parallel_size",
         type=int,
-        default=8,
-        help="Number of GPUs for tensor parallelism (1-8 for your cluster)",
+        default=None,
+        help="Number of GPUs for tensor parallelism",
     )
     parser.add_argument(
         "--gpu_memory_utilization", type=float, default=0.9, help="Fraction of GPU memory to use (0.0-1.0)"
@@ -277,10 +294,13 @@ def main() -> None:
         "--max_model_len", type=int, default=None, help="Maximum sequence length (default: model's max)"
     )
     parser.add_argument(
-        "--trust_remote_code", action="store_true", default=True, help="Trust remote code in model (needed for Qwen)"
+        "--trust_remote_code",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Trust remote code in model (needed for Qwen)",
     )
 
-    args = parser.parse_args()
+    args, extra_vllm_args = parser.parse_known_args()
 
     # Validate that either --model or --checkpoint_path is provided
     if not args.model and not args.checkpoint_path:
@@ -368,14 +388,24 @@ def main() -> None:
         os.environ["CUDA_VISIBLE_DEVICES"] = args.cuda_devices
         print(f"Setting CUDA_VISIBLE_DEVICES={args.cuda_devices}")
 
-        # Validate tensor_parallel_size matches number of devices
-        num_devices = len(args.cuda_devices.split(","))
+    args.tensor_parallel_size = infer_tensor_parallel_size(
+        cuda_devices=args.cuda_devices,
+        tensor_parallel_size=args.tensor_parallel_size,
+    )
+
+    # If the user explicitly set both `--cuda_devices` and `--tensor_parallel_size`,
+    # validate that the requested TP size matches the visible device count.
+    if args.cuda_devices is not None:
+        num_devices = len([device_id for device_id in args.cuda_devices.split(",") if device_id.strip()])
         if args.tensor_parallel_size != num_devices:
             print(
                 f"Warning: tensor_parallel_size ({args.tensor_parallel_size}) != number of CUDA devices ({num_devices})"
             )
             print(f"Adjusting tensor_parallel_size to {num_devices} to match available devices")
             args.tensor_parallel_size = num_devices
+
+    if extra_vllm_args:
+        print(f"Passing through extra vLLM args: {shlex.join(extra_vllm_args)}")
 
     # Start vLLM server
     start_vllm_server(
@@ -387,6 +417,7 @@ def main() -> None:
         max_model_len=args.max_model_len,
         trust_remote_code=args.trust_remote_code,
         model_name=served_model_name,
+        extra_args=extra_vllm_args,
     )
 
 
