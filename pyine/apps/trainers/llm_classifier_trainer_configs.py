@@ -6,6 +6,7 @@ import logging
 import pathlib  # noqa: TC003
 import typing
 
+import peft
 import pydantic
 import torch
 import transformers
@@ -146,11 +147,29 @@ class LLMClassifierTrainerAppMainConfig(common.AppMainConfig, common.ModelTokeni
             "label2id": self.label2id,
             **resolved_config,
         }
-        model_path = checkpoint_path if checkpoint_path is not None else self.base_model
-        model: transformers.PreTrainedModel = transformers.AutoModelForSequenceClassification.from_pretrained(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # transformers stubs
-            model_path,
-            **model_kwargs,
-        )
+        if checkpoint_path is not None:
+            adapter_config_path = checkpoint_path / "adapter_config.json"
+            if adapter_config_path.exists():
+                logger.debug(f"loading PEFT adapter classifier checkpoint from: {checkpoint_path}")
+                model = typing.cast(
+                    "transformers.PreTrainedModel",
+                    peft.AutoPeftModelForSequenceClassification.from_pretrained(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+                        checkpoint_path,
+                        **model_kwargs,
+                    ),
+                )
+            else:
+                logger.debug(f"loading full classifier checkpoint from: {checkpoint_path}")
+                model = transformers.AutoModelForSequenceClassification.from_pretrained(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # transformers stubs
+                    checkpoint_path,
+                    **model_kwargs,
+                )
+        else:
+            logger.debug(f"loading base sequence-classification model from: {self.base_model}")
+            model = transformers.AutoModelForSequenceClassification.from_pretrained(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # transformers stubs
+                self.base_model,
+                **model_kwargs,
+            )
         model_config = typing.cast("typing.Any", model.config)  # pyright: ignore[reportUnknownMemberType]
         if (
             getattr(model_config, "pad_token_id", None) is None
@@ -162,14 +181,13 @@ class LLMClassifierTrainerAppMainConfig(common.AppMainConfig, common.ModelTokeni
             # trainer path still performs an explicit tokenizer->model sync after loading both.
             model.config.pad_token_id = model.config.eos_token_id  # type: ignore[reportUnknownMemberType]
         if self.lora_config is not None and checkpoint_path is None:
-            import peft
-
             if isinstance(self.lora_config, pyine.utils.transformers.LoraConfig):
                 lora_peft_config = self.lora_config.to_peft_config()
             else:
                 lora_peft_config = self.lora_config
+            logger.debug(f"applying LoRA adapters to classifier model loaded from: {self.base_model}")
             model = peft.get_peft_model(model, lora_peft_config)  # type: ignore[assignment]  # pyright: ignore[reportUnknownVariableType]
-        return model  # pyright: ignore[reportUnknownVariableType]  # peft stubs
+        return typing.cast("transformers.PreTrainedModel", model)  # pyright: ignore[reportUnknownVariableType]
 
     # --- Validators ---
     @pydantic.model_validator(mode="after")

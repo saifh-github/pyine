@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import typing
 from unittest.mock import MagicMock
@@ -11,11 +12,16 @@ if typing.TYPE_CHECKING:
 
 import datasets
 import numpy as np
+import peft
 import pytest
 import torch
 import transformers
 
 import pyine.apps.trainers.llm_classifier_trainer as llm_trainer
+from pyine.apps.trainers.llm_classifier_trainer_configs import (
+    LLMClassifierTrainerAppMainConfig,
+)
+from pyine.guardrails.data.debug_dataset import create_debug_probe_lmdb
 
 # ---------------------------------------------------------------------------
 # Helpers for building synthetic datasets
@@ -405,12 +411,6 @@ class TestSkipTrainingClassifierTrainer:
     """Tests for the skip_training code path in classifier trainer main."""
 
     def test_skip_training_requires_checkpoint_path(self) -> None:
-        import asyncio
-
-        from pyine.apps.trainers.llm_classifier_trainer_configs import (
-            LLMClassifierTrainerAppMainConfig,
-        )
-
         cfg = LLMClassifierTrainerAppMainConfig(
             **{
                 "base_model": "prajjwal1/bert-tiny",
@@ -432,13 +432,6 @@ class TestSkipTrainingClassifierTrainer:
     @pytest.mark.slow
     def test_skip_training_loads_saved_model(self, tmp_path: pathlib.Path) -> None:
         """Round-trip: train + save, then load via skip_training."""
-        import asyncio
-
-        from pyine.apps.trainers.llm_classifier_trainer_configs import (
-            LLMClassifierTrainerAppMainConfig,
-        )
-        from pyine.guardrails.data.debug_dataset import create_debug_probe_lmdb
-
         lmdb_path = create_debug_probe_lmdb(tmp_path / "lmdb", n_train=40, n_eval_families=10)
         output_dir = tmp_path / "output"
         cfg = LLMClassifierTrainerAppMainConfig(
@@ -489,8 +482,6 @@ class TestClassifierTrainUnit:
     @pytest.fixture
     def debug_lmdb(self, tmp_path: pathlib.Path) -> pathlib.Path:
         """Create a debug LMDB for testing."""
-        from pyine.guardrails.data.debug_dataset import create_debug_probe_lmdb
-
         return create_debug_probe_lmdb(tmp_path / "test_lmdb", n_train=40, n_eval_families=10)
 
     @pytest.fixture
@@ -520,20 +511,12 @@ class TestClassifierTrainUnit:
 
     @pytest.mark.slow
     def test_training_completes(self, minimal_config: dict, tmp_path: pathlib.Path) -> None:
-        from pyine.apps.trainers.llm_classifier_trainer_configs import (
-            LLMClassifierTrainerAppMainConfig,
-        )
-
         cfg = LLMClassifierTrainerAppMainConfig(**minimal_config)
         trainer = llm_trainer.classifier_train(config=cfg, runtime=None)
         assert trainer is not None
 
     @pytest.mark.slow
     def test_model_saved_to_disk(self, minimal_config: dict, tmp_path: pathlib.Path) -> None:
-        from pyine.apps.trainers.llm_classifier_trainer_configs import (
-            LLMClassifierTrainerAppMainConfig,
-        )
-
         minimal_config["save_model"] = True
         minimal_config["training_args_config"]["output_dir"] = str(tmp_path / "save_output")
         cfg = LLMClassifierTrainerAppMainConfig(**minimal_config)
@@ -543,10 +526,6 @@ class TestClassifierTrainUnit:
 
     @pytest.mark.slow
     def test_saved_model_loadable(self, minimal_config: dict, tmp_path: pathlib.Path) -> None:
-        from pyine.apps.trainers.llm_classifier_trainer_configs import (
-            LLMClassifierTrainerAppMainConfig,
-        )
-
         minimal_config["save_model"] = True
         minimal_config["training_args_config"]["output_dir"] = str(tmp_path / "load_output")
         cfg = LLMClassifierTrainerAppMainConfig(**minimal_config)
@@ -557,10 +536,6 @@ class TestClassifierTrainUnit:
 
     @pytest.mark.slow
     def test_metrics_computed_during_eval(self, minimal_config: dict, tmp_path: pathlib.Path) -> None:
-        from pyine.apps.trainers.llm_classifier_trainer_configs import (
-            LLMClassifierTrainerAppMainConfig,
-        )
-
         cfg = LLMClassifierTrainerAppMainConfig(**minimal_config)
         result = llm_trainer.classifier_train(config=cfg, runtime=None)
         # Trainer should have logged eval metrics
@@ -570,10 +545,6 @@ class TestClassifierTrainUnit:
 
     @pytest.mark.slow
     def test_class_distribution_logged(self, minimal_config: dict, caplog: pytest.LogCaptureFixture) -> None:
-        from pyine.apps.trainers.llm_classifier_trainer_configs import (
-            LLMClassifierTrainerAppMainConfig,
-        )
-
         cfg = LLMClassifierTrainerAppMainConfig(**minimal_config)
         logger_name = "pyine.apps.trainers.llm_classifier_trainer"
         target_logger = logging.getLogger(logger_name)
@@ -587,10 +558,6 @@ class TestClassifierTrainUnit:
 
     @pytest.mark.slow
     def test_balanced_class_weights(self, minimal_config: dict, tmp_path: pathlib.Path) -> None:
-        from pyine.apps.trainers.llm_classifier_trainer_configs import (
-            LLMClassifierTrainerAppMainConfig,
-        )
-
         minimal_config["class_weight_mode"] = "balanced"
         cfg = LLMClassifierTrainerAppMainConfig(**minimal_config)
         result = llm_trainer.classifier_train(config=cfg, runtime=None)
@@ -604,11 +571,6 @@ class TestClassifierTrainIntegration:
     @pytest.mark.integration
     def test_training_end_to_end_with_modernbert(self, tmp_path: pathlib.Path) -> None:
         """Full pipeline with ModernBERT-base on GPU."""
-        from pyine.apps.trainers.llm_classifier_trainer_configs import (
-            LLMClassifierTrainerAppMainConfig,
-        )
-        from pyine.guardrails.data.debug_dataset import create_debug_probe_lmdb
-
         lmdb_path = create_debug_probe_lmdb(tmp_path / "lmdb", n_train=40, n_eval_families=10)
         cfg = LLMClassifierTrainerAppMainConfig(
             base_model="answerdotai/ModernBERT-base",
@@ -634,13 +596,6 @@ class TestClassifierTrainIntegration:
     @pytest.mark.integration
     def test_training_with_lora(self, tmp_path: pathlib.Path) -> None:
         """Training with LoRA adapters produces valid checkpoints."""
-        import peft
-
-        from pyine.apps.trainers.llm_classifier_trainer_configs import (
-            LLMClassifierTrainerAppMainConfig,
-        )
-        from pyine.guardrails.data.debug_dataset import create_debug_probe_lmdb
-
         lmdb_path = create_debug_probe_lmdb(tmp_path / "lmdb", n_train=40, n_eval_families=10)
         cfg = LLMClassifierTrainerAppMainConfig(
             base_model="prajjwal1/bert-tiny",
@@ -662,8 +617,38 @@ class TestClassifierTrainIntegration:
             lora_config=peft.LoraConfig(
                 r=4,
                 lora_alpha=8,
+                task_type=peft.TaskType.SEQ_CLS,
                 target_modules=["query", "value"],
             ),
         )
         result = llm_trainer.classifier_train(config=cfg, runtime=None)
         assert isinstance(result.trainer.model, peft.PeftModel)
+        output_dir = tmp_path / "output"
+        assert (output_dir / "adapter_config.json").exists()
+        assert (output_dir / "adapter_model.safetensors").exists() or (output_dir / "adapter_model.bin").exists()
+        assert (output_dir / "tokenizer_config.json").exists()
+
+        reloaded_model = cfg.get_model(checkpoint_path=output_dir)
+        assert isinstance(reloaded_model, peft.PeftModel)
+
+        skip_cfg = LLMClassifierTrainerAppMainConfig(
+            base_model="prajjwal1/bert-tiny",
+            classifier_checkpoint_path=output_dir,
+            datamodule_config={"lmdb_path": str(lmdb_path)},
+            training_args_config={
+                "output_dir": str(tmp_path / "skip_output"),
+                "num_train_epochs": 1,
+                "per_device_train_batch_size": 2,
+                "per_device_eval_batch_size": 2,
+                "report_to": "none",
+                "use_cpu": True,
+            },
+            max_seq_length=64,
+            lora_config=peft.LoraConfig(
+                r=4,
+                lora_alpha=8,
+                task_type=peft.TaskType.SEQ_CLS,
+                target_modules=["query", "value"],
+            ),
+        )
+        asyncio.run(llm_trainer.main(config=skip_cfg, runtime=None, skip_training=True))

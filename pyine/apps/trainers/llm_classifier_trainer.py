@@ -382,7 +382,9 @@ def classifier_train(
 
     # --- 9. Save final model ---
     if config.save_model:
+        assert trainer.args.output_dir is not None
         trainer.save_model()
+        tokenizer.save_pretrained(trainer.args.output_dir)  # pyright: ignore[reportUnknownMemberType]
 
     return ClassifierTrainResult(trainer=trainer, tokenizer=tokenizer)
 

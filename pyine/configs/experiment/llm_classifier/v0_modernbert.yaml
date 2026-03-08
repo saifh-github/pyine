@@ -52,6 +52,15 @@ config:
   auto_model_config:
     attn_implementation: "flash_attention_2"
 
+  # LoRA adapter config
+  lora_config:
+    r: 8
+    lora_alpha: 16
+    lora_dropout: 0.05
+    bias: "none"
+    task_type: "SEQ_CLS"
+    target_modules: ["Wqkv"]
+
   # Save trained model
   save_model: true
 

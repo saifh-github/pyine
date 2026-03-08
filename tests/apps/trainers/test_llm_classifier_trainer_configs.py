@@ -11,16 +11,23 @@ if typing.TYPE_CHECKING:
 
 import hydra
 import omegaconf
+import peft
 import pydantic
 import pytest
 import torch
 
+import pyine.apps.trainers.llm_classifier_trainer as classifier_trainer
+import pyine.apps.trainers.llm_classifier_trainer_configs as llm_cfg
+import pyine.configs.base
+import pyine.evals.common
 import pyine.evals.correctness.configs as correctness_configs
 import pyine.evals.correctness.datamodule_configs as correctness_datamodule_configs
 import pyine.evals.correctness.types as correctness_types
+import pyine.utils.filesystem
 from pyine.apps.trainers.llm_classifier_trainer_configs import (
     LLMClassifierTrainerAppMainConfig,
 )
+from pyine.guardrails.data.datamodule_configs import LabelBalanceConfig
 
 
 def _make_minimal_training_args(**overrides: object) -> dict:
@@ -124,8 +131,6 @@ class TestLLMClassifierTrainerAppMainConfig:
         assert cfg.evals_config is None
 
     def test_class_weight_with_label_balance_warns(self) -> None:
-        from pyine.guardrails.data.datamodule_configs import LabelBalanceConfig
-
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             LLMClassifierTrainerAppMainConfig(
@@ -141,8 +146,6 @@ class TestLLMClassifierTrainerAppMainConfig:
             assert len(balance_warnings) >= 1
 
     def test_max_seq_length_default(self) -> None:
-        import pyine.evals.common
-
         cfg = LLMClassifierTrainerAppMainConfig(**_make_minimal_config())
         assert cfg.max_seq_length == pyine.evals.common.PASS_AT_K_DEFAULTS.max_new_tokens
 
@@ -180,8 +183,6 @@ class TestLLMClassifierTrainerAppMainConfig:
 
     @pytest.mark.slow
     def test_get_model_with_lora(self) -> None:
-        import peft
-
         cfg = LLMClassifierTrainerAppMainConfig(
             **_make_minimal_config(
                 base_model="prajjwal1/bert-tiny",
@@ -216,10 +217,6 @@ class TestHydraConfigRegistration:
         tmp_path: pathlib.Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        import pyine.apps.trainers.llm_classifier_trainer_configs as llm_cfg
-        import pyine.evals.common
-        import pyine.utils.filesystem
-
         monkeypatch.setattr(pyine.utils.filesystem, "get_logs_root_path", lambda: tmp_path)
         configs = llm_cfg.register_hydra_configs(pyine.evals.common.EvalType.CODE_EXEC)
         assert len(configs) > 0
@@ -235,10 +232,6 @@ class TestHydraConfigRegistration:
         tmp_path: pathlib.Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        import pyine.apps.trainers.llm_classifier_trainer_configs as llm_cfg
-        import pyine.evals.common
-        import pyine.utils.filesystem
-
         monkeypatch.setattr(pyine.utils.filesystem, "get_logs_root_path", lambda: tmp_path)
         configs = llm_cfg.register_hydra_configs(pyine.evals.common.EvalType.CODE_EXEC)
 
@@ -253,10 +246,6 @@ class TestHydraConfigRegistration:
         tmp_path: pathlib.Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        import pyine.apps.trainers.llm_classifier_trainer_configs as llm_cfg
-        import pyine.evals.common
-        import pyine.utils.filesystem
-
         monkeypatch.setattr(pyine.utils.filesystem, "get_logs_root_path", lambda: tmp_path)
         configs = llm_cfg.register_hydra_configs(pyine.evals.common.EvalType.CODE_EXEC)
 
@@ -268,11 +257,6 @@ class TestHydraConfigRegistration:
         tmp_path: pathlib.Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        import pyine.apps.trainers.llm_classifier_trainer_configs as llm_cfg
-        import pyine.configs.base
-        import pyine.evals.common
-        import pyine.utils.filesystem
-
         monkeypatch.setattr(pyine.utils.filesystem, "get_logs_root_path", lambda: tmp_path)
         llm_cfg.register_hydra_configs(pyine.evals.common.EvalType.CORRECTNESS)
 
@@ -299,11 +283,6 @@ class TestHydraConfigRegistration:
         tmp_path: pathlib.Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        import pyine.apps.trainers.llm_classifier_trainer_configs as llm_cfg
-        import pyine.configs.base
-        import pyine.evals.common
-        import pyine.utils.filesystem
-
         monkeypatch.setattr(pyine.utils.filesystem, "get_logs_root_path", lambda: tmp_path)
         pyine.configs.base.register_searchpath_plugin()
         llm_cfg.register_hydra_configs(pyine.evals.common.EvalType.CORRECTNESS)
@@ -328,11 +307,6 @@ class TestHydraConfigRegistration:
         tmp_path: pathlib.Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        import pyine.apps.trainers.llm_classifier_trainer_configs as llm_cfg
-        import pyine.configs.base
-        import pyine.evals.common
-        import pyine.utils.filesystem
-
         monkeypatch.setattr(pyine.utils.filesystem, "get_logs_root_path", lambda: tmp_path)
         pyine.configs.base.register_searchpath_plugin()
         llm_cfg.register_hydra_configs(pyine.evals.common.EvalType.CORRECTNESS)
@@ -344,16 +318,17 @@ class TestHydraConfigRegistration:
             )
 
         assert omegaconf.OmegaConf.select(config, "config.truncation_side") == "left"
+        assert omegaconf.OmegaConf.select(config, "config.lora_config.r") == 8
+        assert omegaconf.OmegaConf.select(config, "config.lora_config.lora_alpha") == 16
+        assert omegaconf.OmegaConf.select(config, "config.lora_config.lora_dropout") == 0.05
+        assert omegaconf.OmegaConf.select(config, "config.lora_config.task_type") == "SEQ_CLS"
+        assert omegaconf.OmegaConf.select(config, "config.lora_config.target_modules") == ["Wqkv"]
 
     def test_register_hydra_configs_includes_training_args(
         self,
         tmp_path: pathlib.Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        import pyine.apps.trainers.llm_classifier_trainer_configs as llm_cfg
-        import pyine.evals.common
-        import pyine.utils.filesystem
-
         monkeypatch.setattr(pyine.utils.filesystem, "get_logs_root_path", lambda: tmp_path)
         configs = llm_cfg.register_hydra_configs(pyine.evals.common.EvalType.CODE_EXEC)
 
@@ -366,8 +341,6 @@ class TestHydraConfigRegistration:
 
 class TestPadTokenSync:
     def test_sync_model_pad_token_id_with_tokenizer(self) -> None:
-        import pyine.apps.trainers.llm_classifier_trainer as classifier_trainer
-
         model = types.SimpleNamespace(config=types.SimpleNamespace(pad_token_id=None))
         tokenizer = types.SimpleNamespace(pad_token_id=123)
 
@@ -376,8 +349,6 @@ class TestPadTokenSync:
         assert model.config.pad_token_id == 123
 
     def test_sync_model_pad_token_id_requires_tokenizer_pad_token(self) -> None:
-        import pyine.apps.trainers.llm_classifier_trainer as classifier_trainer
-
         model = types.SimpleNamespace(config=types.SimpleNamespace(pad_token_id=None))
         tokenizer = types.SimpleNamespace(pad_token_id=None)
 
