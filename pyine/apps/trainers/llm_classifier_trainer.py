@@ -41,6 +41,24 @@ logger = logging.getLogger(__name__)
 _RAW_COLUMNS_TO_REMOVE = ("text", "label", "sample_id", "code_type", "messages")
 
 
+def _sync_model_pad_token_id_with_tokenizer(
+    model: transformers.PreTrainedModel,
+    tokenizer: transformers.PreTrainedTokenizerBase,
+) -> None:
+    """Sync the model's ``pad_token_id`` with the tokenizer used for batching.
+
+    This is especially important for decoder-only sequence-classification models (e.g. Qwen),
+    whose classifier head may need ``model.config.pad_token_id`` to locate the last non-padding
+    token in batched inputs.
+    """
+    tokenizer_pad_token_id = getattr(tokenizer, "pad_token_id", None)
+    if tokenizer_pad_token_id is None:
+        raise ValueError("tokenizer.pad_token_id must be set for batched sequence classification")
+    model_pad_token_id = getattr(model.config, "pad_token_id", None)  # type: ignore[reportUnknownMemberType]
+    if model_pad_token_id != tokenizer_pad_token_id:
+        model.config.pad_token_id = tokenizer_pad_token_id  # type: ignore[reportUnknownMemberType]
+
+
 def _tokenize_for_classification(
     dataset: datasets.Dataset,
     tokenizer: transformers.PreTrainedTokenizerBase,
@@ -246,6 +264,7 @@ def classifier_train(
     # --- 1. Load model + tokenizer ---
     tokenizer = config.get_tokenizer()
     model = config.get_model()
+    _sync_model_pad_token_id_with_tokenizer(model, tokenizer)
 
     # --- 2. Set truncation side (if configured) ---
     if config.truncation_side is not None:
@@ -382,6 +401,7 @@ async def main(
         classifier_model.eval()
         classifier_model.requires_grad_(False)
         tokenizer = config.get_tokenizer(checkpoint_path=config.classifier_checkpoint_path)
+        _sync_model_pad_token_id_with_tokenizer(classifier_model, tokenizer)
         if config.truncation_side is not None:
             tokenizer.truncation_side = config.truncation_side
     else:

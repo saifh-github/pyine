@@ -145,6 +145,15 @@ class LLMClassifierTrainerAppMainConfig(common.AppMainConfig, common.ModelTokeni
             model_path,
             **model_kwargs,
         )
+        if (
+            getattr(model.config, "pad_token_id", None) is None
+            and self.tokenizer_set_padding_to_eos_if_needed
+            and getattr(model.config, "eos_token_id", None) is not None
+        ):
+            # keep standalone get_model() reasonably safe for decoder-only classifiers: when the
+            # tokenizer logic will reuse EOS as PAD, mirror that on the model config too. The
+            # trainer path still performs an explicit tokenizer->model sync after loading both.
+            model.config.pad_token_id = model.config.eos_token_id  # type: ignore[reportUnknownMemberType]
         if self.lora_config is not None and checkpoint_path is None:
             import peft
 
