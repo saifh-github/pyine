@@ -8,12 +8,14 @@
 
 defaults:
   - override /config: base
+  - override /config/datamodule_config: correctness_taco_base
+  - override /config/datamodule_config/resampling: skewed_pos_helpful_bias
   - override /config/training_args_config: train_default
   - _self_
 
 runtime:
   exp_name: llm_classifier/v0_modernbert
-  run_name: "${runtime.exp_name}"
+  run_name: "${now:%Y%m%d_%H%M%S}"
   tags:
     - "model:${config.base_model}"
     - "llm-classifier"
@@ -25,16 +27,13 @@ config:
   use_wandb_logging: true
   base_model: answerdotai/ModernBERT-base
 
-  # LMDB data source (nested under datamodule_config — same config as probe trainer)
-  datamodule_config:
-    lmdb_path: /path/to/lmdb
-    label_metric_key: "reward/metrics/soft_match/is_match"
-    train_key_prefix: "train/"
-    valid_key_prefix: "eval/"
-    selection_strategy: latest
+  # LMDB data source
+  datamodule_config:  # the target datamodule defined in the defaults at the top is CorrectnessDataModule
+    lmdb_paths:
+      - /scratch/pl.stcharles/pyine/data/RL_HT_49/v0_rl_eval_base_RL_HT_49_checkpoint-950/benchmark_export
 
   # Tokenization
-  max_seq_length: 3000
+  max_seq_length: 8192  # NOTE: this is far from the actual max used in target models (13k), need to address this @@@@@
 
   # Code type metrics
   log_per_code_type_metrics: true
@@ -60,7 +59,7 @@ config:
     # save_total_limit: null     # Max HF checkpoints to keep (null = all)
     per_device_train_batch_size: 16
     per_device_eval_batch_size: 32
-    num_train_epochs: 3
+    num_train_epochs: 10
     learning_rate: 2e-5
     weight_decay: 0.01
     warmup_ratio: 0.1

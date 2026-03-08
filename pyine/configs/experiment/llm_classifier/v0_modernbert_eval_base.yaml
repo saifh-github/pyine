@@ -1,0 +1,36 @@
+# @package _global_
+#
+# LLM classifier eval-only config: evaluate an already-trained ModernBERT classifier
+# without re-training. Loads the model from a checkpoint and runs correctness benchmarking.
+#
+# Requires classifier_checkpoint_path to be set (either here or via CLI override).
+#
+# Usage:
+#   python -m pyine.apps.trainers.llm_classifier_trainer \
+#     +experiment=llm_classifier/v0_modernbert_eval_base \
+#     config.classifier_checkpoint_path=/path/to/checkpoint
+
+defaults:
+  - llm_classifier/v0_modernbert
+  - /config/evals_config: correctness_taco_base
+  - _self_
+
+runtime:
+  exp_name: llm_classifier/v0_modernbert_eval
+  run_name: "${now:%Y%m%d_%H%M%S}"
+
+# skip training entirely; load from checkpoint
+skip_training: True
+
+config:
+  # checkpoint to evaluate (override via CLI)
+  classifier_checkpoint_path: /scratch/pl.stcharles/pyine/logs/runs/llm_classifier_trainer/llm_classifier/v0_modernbert/20260306_214545/checkpoint-456
+
+  # no need to save the model again during eval
+  save_model: false
+
+  # correctness benchmarking config
+  evals_config:
+    result_dump_dir: ${runtime.output_dir}/benchmark_export
+    datamodule_config:
+      lmdb_paths: ${config.datamodule_config.lmdb_paths}
