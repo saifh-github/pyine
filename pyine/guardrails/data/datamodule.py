@@ -93,12 +93,19 @@ class ProbeDataModule(pyine.data.datamodule.BaseDataModule["ProbeDataModuleConfi
 
     # --- Accessors ---
 
-    def get_probe_dataset(self) -> datasets.DatasetDict:
+    def get_probe_dataset(
+        self,
+        text_field: str | None = None,
+    ) -> datasets.DatasetDict:
         """Return the prepared DatasetDict with ``"train"`` and ``"valid"`` splits.
 
         Each split has columns: ``messages`` (list[dict[str, str]]), ``label`` (int),
         ``sample_id`` (str), ``code_type`` (str).
+
+        Args:
+            text_field: Ignored for probe datasets, which already contain structured messages.
         """
+        del text_field
         if self._dataset_dict is None:
             raise RuntimeError("DataModule not set up. Call setup() first.")
         return self._dataset_dict

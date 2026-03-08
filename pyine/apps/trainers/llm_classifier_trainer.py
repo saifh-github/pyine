@@ -22,7 +22,6 @@ import transformers
 import pyine.apps.trainers.common
 import pyine.configs.schemas
 import pyine.evals.common
-import pyine.evals.correctness.configs as correctness_configs
 import pyine.evals.correctness.scorers as correctness_scorers
 import pyine.utils.transformers.data
 
@@ -291,7 +290,11 @@ def classifier_train(
     # --- 3. Load LMDB data via DataModule (handles DDP coordination + caching) ---
     datamodule = pyine.apps.trainers.common.prepare_datamodule(config, runtime)
     # both ProbeDataModule and CorrectnessDataModule provide get_probe_dataset/code_type_to_id/id_to_code_type
-    raw_ds = typing.cast("datasets.DatasetDict", datamodule.get_probe_dataset())  # pyright: ignore[reportUnknownMemberType,reportAttributeAccessIssue]
+    probe_dataset_owner = typing.cast("typing.Any", datamodule)
+    raw_ds = typing.cast(
+        "datasets.DatasetDict",
+        probe_dataset_owner.get_probe_dataset(text_field=config.text_field),
+    )
     code_type_to_id = typing.cast("dict[str, int]", datamodule.code_type_to_id)  # pyright: ignore[reportUnknownMemberType,reportAttributeAccessIssue]
     id_to_code_type = typing.cast("dict[int, str]", datamodule.id_to_code_type)  # pyright: ignore[reportUnknownMemberType,reportAttributeAccessIssue]
 
@@ -300,6 +303,13 @@ def classifier_train(
 
     # --- 5. Format messages -> text (chat template if available, else plain concat), then tokenize ---
     has_chat_template = pyine.utils.transformers.data.tokenizer_has_chat_template(tokenizer)
+    input_formatting_mode = "chat_template" if has_chat_template else "role_tagged_text"
+    logger.info(
+        "classifier inputs: text_field=%s, input_formatting_mode=%s, add_special_tokens=%s",
+        config.text_field,
+        input_formatting_mode,
+        not has_chat_template,
+    )
     raw_ds = pyine.apps.trainers.common.apply_messages_formatting(raw_ds, tokenizer)
     # when a chat template produced the text, special tokens are already embedded;
     # encoder tokenizers (no chat template) need add_special_tokens=True for [CLS]/[SEP]
@@ -327,6 +337,9 @@ def classifier_train(
         training_args_dict["output_dir"] = runtime.output_dir
     if runtime is not None and runtime.wandb_run is not None:
         training_args_dict["report_to"] = ["wandb"]
+        runtime.wandb_run.summary["classifier/text_field"] = config.text_field  # type: ignore[reportUnknownMemberType]
+        runtime.wandb_run.summary["classifier/input_formatting_mode"] = input_formatting_mode  # type: ignore[reportUnknownMemberType]
+        runtime.wandb_run.summary["classifier/add_special_tokens"] = not has_chat_template  # type: ignore[reportUnknownMemberType]
     pyine.apps.trainers.common.resolve_save_on_each_node(training_args_dict, runtime)
 
     # Wire include_for_metrics for per-code-type metrics
@@ -412,12 +425,11 @@ async def main(
     # benchmarking phase (if enabled); goes through the standard evaluate_model pipeline
     # which handles datamodule setup, W&B metric definition, logging, etc.
     if config.evals_config is not None:
-        evals_config = typing.cast("correctness_configs.CorrectnessEvalsConfig", config.evals_config)
         scorer = correctness_scorers.LLMClassifierScorer(
             model=classifier_model,
             tokenizer=tokenizer,
             max_seq_length=config.max_seq_length,
-            text_field=evals_config.text_field,
+            text_field=config.text_field,
         )
         await pyine.apps.trainers.common.evaluate_model(  # type: ignore[reportUnknownMemberType, reportAttributeAccessIssue]
             model=scorer,

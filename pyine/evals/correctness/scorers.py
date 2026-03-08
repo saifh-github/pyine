@@ -8,6 +8,7 @@ import typing
 import torch
 import torch.utils.flop_counter
 
+import pyine.evals.correctness.formatting as correctness_formatting
 import pyine.evals.correctness.types as correctness_types
 import pyine.evals.utils
 import pyine.guardrails.probes.base
@@ -60,8 +61,11 @@ class ProbeScorer:
         Returns:
             ScoringResult with one score per record (sigmoid of probe logit).
         """
-        texts = [getattr(rec, self._text_field) for rec in records]
-        assert all(isinstance(t, str) for t in texts), f"'{self._text_field}' must be str on all records"
+        texts, add_special_tokens = correctness_formatting.format_records_for_tokenizer(
+            records=records,
+            tokenizer=self._tokenizer,
+            text_field=self._text_field,
+        )
         all_scores: list[float] = []
         all_costs: list[float] = []
         all_metadata: dict[correctness_types.ScoredAttemptKey, dict[str, typing.Any]] = {}
@@ -83,6 +87,7 @@ class ProbeScorer:
                     padding=True,
                     truncation=True,
                     max_length=self._max_seq_length,
+                    add_special_tokens=add_special_tokens,
                 )
                 input_ids = encoded["input_ids"].to(device)  # type: ignore[reportUnknownMemberType]
                 attention_mask = encoded["attention_mask"].to(device)  # type: ignore[reportUnknownMemberType]
@@ -127,14 +132,15 @@ class ProbeScorer:
 
     def get_metadata(self) -> dict[str, typing.Any]:
         """Return probe configuration details."""
+        formatting_metadata = correctness_formatting.get_input_formatting_metadata(self._tokenizer, self._text_field)
         return {
             "name": self._probe_config.name,
             "architecture": self._probe_config.architecture,
             "layer": self._probe_config.layer,
             "replica_idx": self._probe_config.replica_idx,
             "base_name": self._probe_config.base_name,
-            "text_field": self._text_field,
             "scorer_type": "probe",
+            **formatting_metadata,
         }
 
     def get_verification_cost_unit(self) -> str | None:
@@ -169,8 +175,11 @@ class LLMClassifierScorer:
         Returns:
             ScoringResult with one score per record (positive class probability).
         """
-        texts = [getattr(rec, self._text_field) for rec in records]
-        assert all(isinstance(t, str) for t in texts), f"'{self._text_field}' must be str on all records"
+        texts, add_special_tokens = correctness_formatting.format_records_for_tokenizer(
+            records=records,
+            tokenizer=self._tokenizer,
+            text_field=self._text_field,
+        )
         all_scores: list[float] = []
         all_costs: list[float] = []
         all_metadata: dict[correctness_types.ScoredAttemptKey, dict[str, typing.Any]] = {}
@@ -187,6 +196,7 @@ class LLMClassifierScorer:
                     return_tensors="pt",
                     truncation=True,
                     max_length=self._max_seq_length,
+                    add_special_tokens=add_special_tokens,
                 )
                 input_ids = encoded["input_ids"].to(device)  # type: ignore[reportUnknownMemberType]
                 attention_mask = encoded["attention_mask"].to(device)  # type: ignore[reportUnknownMemberType]
@@ -221,11 +231,12 @@ class LLMClassifierScorer:
     def get_metadata(self) -> dict[str, typing.Any]:
         """Return classifier model details."""
         model_name = getattr(self._model.config, "name_or_path", type(self._model).__name__)  # type: ignore[reportUnknownMemberType]
+        formatting_metadata = correctness_formatting.get_input_formatting_metadata(self._tokenizer, self._text_field)
         return {
             "model_name": model_name,
             "max_seq_length": self._max_seq_length,
-            "text_field": self._text_field,
             "scorer_type": "llm_classifier",
+            **formatting_metadata,
         }
 
     def get_verification_cost_unit(self) -> str | None:

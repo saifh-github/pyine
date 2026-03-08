@@ -29,7 +29,7 @@ def _make_record(
         label=label,
         code_type="original",
         tags=[],
-        record={},
+        record={"sample_id": sample_id, "prompt": f"prompt for {sample_id}"},
         difficulty_score=None,
     )
 
@@ -78,6 +78,10 @@ class _MockModel(torch.nn.Module):
 class _FastTokenizer:
     """Minimal tokenizer used by fast tests (no network/model downloads)."""
 
+    def __init__(self) -> None:
+        self.seen_text_batches: list[list[str]] = []
+        self.seen_add_special_tokens: list[bool] = []
+
     def __call__(
         self,
         texts: str | list[str],
@@ -85,10 +89,13 @@ class _FastTokenizer:
         padding: bool = False,
         truncation: bool = True,
         max_length: int | None = None,
+        add_special_tokens: bool = True,
     ) -> dict[str, torch.Tensor]:
         assert return_tensors == "pt"
         assert truncation
         text_list = [texts] if isinstance(texts, str) else texts
+        self.seen_text_batches.append(list(text_list))
+        self.seen_add_special_tokens.append(add_special_tokens)
         token_counts = [
             max(1, min(len(text.split()), max_length if max_length is not None else len(text.split())))
             for text in text_list
@@ -169,6 +176,45 @@ class _FastClassifierModel(torch.nn.Module):
 
 
 class TestScorerAttemptMetadataFast:
+    def test_probe_scorer_formats_full_messages_before_tokenization(self) -> None:
+        model = _FastBackboneModel(hidden_size=8)
+        probe_config = pyine.guardrails.probes.base.ProbeConfig(
+            name="test_probe",
+            architecture="mean_pool",
+            layer=1,
+            hidden_dim=8,
+        )
+        tokenizer = _FastTokenizer()
+        scorer = correctness_scorers.ProbeScorer(
+            probe=_MockProbe(probe_config),
+            probe_config=probe_config,
+            model=model,
+            tokenizer=tokenizer,
+            extractor=_FastExtractor(model, layer=1),  # type: ignore[arg-type]
+            batch_size=2,
+            max_seq_length=128,
+            text_field="model_output",
+        )
+
+        scorer.score_records([_make_record(sample_id="short", model_output="answer text")])
+
+        assert tokenizer.seen_text_batches == [["user: prompt for short\n\nassistant: answer text"]]
+        assert tokenizer.seen_add_special_tokens == [True]
+
+    def test_classifier_scorer_formats_full_messages_before_tokenization(self) -> None:
+        tokenizer = _FastTokenizer()
+        scorer = correctness_scorers.LLMClassifierScorer(
+            model=_FastClassifierModel(),  # type: ignore[arg-type]
+            tokenizer=tokenizer,  # type: ignore[arg-type]
+            max_seq_length=128,
+            text_field="model_output",
+        )
+
+        scorer.score_records([_make_record(sample_id="short", model_output="answer text")])
+
+        assert tokenizer.seen_text_batches == [["user: prompt for short\n\nassistant: answer text"]]
+        assert tokenizer.seen_add_special_tokens == [True]
+
     def test_probe_scorer_reports_attempt_metadata(self) -> None:
         model = _FastBackboneModel(hidden_size=8)
         probe_config = pyine.guardrails.probes.base.ProbeConfig(
@@ -286,6 +332,9 @@ class TestProbeScorer:
         assert metadata["name"] == "test_probe"
         assert metadata["architecture"] == "mean_pool"
         assert metadata["scorer_type"] == "probe"
+        assert metadata["text_field"] == "model_output"
+        assert metadata["input_formatting_mode"] in {"chat_template", "role_tagged_text"}
+        assert "add_special_tokens" in metadata
         extractor.remove_hooks()
 
     def test_verification_cost_unit_is_flops(self) -> None:
@@ -346,6 +395,9 @@ class TestLLMClassifierScorer:
         metadata = scorer.get_metadata()
         assert "model_name" in metadata
         assert metadata["scorer_type"] == "llm_classifier"
+        assert metadata["text_field"] == "model_output"
+        assert metadata["input_formatting_mode"] in {"chat_template", "role_tagged_text"}
+        assert "add_special_tokens" in metadata
 
     def test_verification_cost_unit_is_flops(self) -> None:
         model = transformers.AutoModelForSequenceClassification.from_pretrained("prajjwal1/bert-tiny", num_labels=2)

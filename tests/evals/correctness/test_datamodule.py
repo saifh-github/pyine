@@ -359,6 +359,15 @@ class TestGetProbeDataset:
         assert len(first_messages) >= 2
         assert first_messages[-1]["role"] == "assistant"
 
+    def test_uses_requested_text_field(self, mock_data: correctness_splits.GuardrailSplits) -> None:
+        dm = correctness_datamodule.CorrectnessDataModule(self._make_config())
+        dm.prepare_data()
+        dm.setup()
+
+        ds = dm.get_probe_dataset(text_field="final_answer")
+
+        assert ds["train"][0]["messages"][-1]["content"] == "42"
+
     def test_resampling_applied(self, mock_data: correctness_splits.GuardrailSplits) -> None:
         config = correctness_datamodule_configs.CorrectnessDataModuleConfig(
             lmdb_paths=(_FAKE_LMDB_PATH,),

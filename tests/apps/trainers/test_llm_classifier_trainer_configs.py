@@ -15,6 +15,9 @@ import pydantic
 import pytest
 import torch
 
+import pyine.evals.correctness.configs as correctness_configs
+import pyine.evals.correctness.datamodule_configs as correctness_datamodule_configs
+import pyine.evals.correctness.types as correctness_types
 from pyine.apps.trainers.llm_classifier_trainer_configs import (
     LLMClassifierTrainerAppMainConfig,
 )
@@ -146,6 +149,27 @@ class TestLLMClassifierTrainerAppMainConfig:
     def test_log_per_code_type_metrics_default(self) -> None:
         cfg = LLMClassifierTrainerAppMainConfig(**_make_minimal_config())
         assert cfg.log_per_code_type_metrics is True
+
+    def test_text_field_default(self) -> None:
+        cfg = LLMClassifierTrainerAppMainConfig(**_make_minimal_config())
+        assert cfg.text_field == "model_output"
+
+    def test_text_field_must_match_evals_config(self) -> None:
+        evals_config = correctness_configs.CorrectnessEvalsConfig(
+            datamodule_config=correctness_datamodule_configs.CorrectnessDataModuleConfig(
+                lmdb_paths=("/tmp/fake-correctness-lmdb",),  # noqa: S108
+                split_config=correctness_types.GuardrailSplitConfig(split_source="TACO"),
+            ),
+            text_field="final_answer",
+        )
+
+        with pytest.raises(ValueError, match="same text field"):
+            LLMClassifierTrainerAppMainConfig(
+                **_make_minimal_config(
+                    text_field="model_output",
+                    evals_config=evals_config,
+                )
+            )
 
     @pytest.mark.slow
     def test_get_model_returns_sequence_classification(self) -> None:

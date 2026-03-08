@@ -32,6 +32,7 @@ import pyine.evals.correctness.scorers as correctness_scorers
 import pyine.guardrails.probes.collection
 import pyine.guardrails.probes.extraction
 import pyine.utils.distrib  # pyright: ignore[reportUnusedImport]
+import pyine.utils.transformers.data
 
 if typing.TYPE_CHECKING:
     import accelerate
@@ -667,7 +668,8 @@ def probe_train(
     logger.info("Loading probe dataset from datamodule...")
     datamodule = pyine.apps.trainers.common.prepare_datamodule(config, runtime)
     # both ProbeDataModule and CorrectnessDataModule provide get_probe_dataset/code_type_to_id/id_to_code_type
-    raw_ds = typing.cast("datasets.DatasetDict", datamodule.get_probe_dataset())  # pyright: ignore[reportUnknownMemberType,reportAttributeAccessIssue]
+    probe_dataset_owner = typing.cast("typing.Any", datamodule)
+    raw_ds = typing.cast("datasets.DatasetDict", probe_dataset_owner.get_probe_dataset(text_field=config.text_field))
     code_type_to_id = typing.cast("dict[str, int]", datamodule.code_type_to_id)  # pyright: ignore[reportUnknownMemberType,reportAttributeAccessIssue]
     id_to_code_type = typing.cast("dict[int, str]", datamodule.id_to_code_type)  # pyright: ignore[reportUnknownMemberType,reportAttributeAccessIssue]
 
@@ -680,6 +682,18 @@ def probe_train(
             logger.info(f"  {split_name} code_type distribution: {code_type_counts}")
 
     # format messages -> text (uses chat template if available, else role-tagged concatenation)
+    has_chat_template = pyine.utils.transformers.data.tokenizer_has_chat_template(tokenizer)
+    input_formatting_mode = "chat_template" if has_chat_template else "role_tagged_text"
+    logger.info(
+        "probe inputs: text_field=%s, input_formatting_mode=%s, add_special_tokens=%s",
+        config.text_field,
+        input_formatting_mode,
+        not has_chat_template,
+    )
+    if runtime is not None and runtime.wandb_run is not None:
+        runtime.wandb_run.summary["probe/text_field"] = config.text_field  # type: ignore[reportUnknownMemberType]
+        runtime.wandb_run.summary["probe/input_formatting_mode"] = input_formatting_mode  # type: ignore[reportUnknownMemberType]
+        runtime.wandb_run.summary["probe/add_special_tokens"] = not has_chat_template  # type: ignore[reportUnknownMemberType]
     raw_ds = pyine.apps.trainers.common.apply_messages_formatting(raw_ds, tokenizer)
     train_ds = _tokenize_split(raw_ds["train"], tokenizer, config.max_seq_length, code_type_to_id)
     valid_ds = _tokenize_split(raw_ds["valid"], tokenizer, config.max_seq_length, code_type_to_id)
@@ -948,7 +962,7 @@ async def main(
                     tokenizer=tokenizer,
                     extractor=extractor,  # pyright: ignore[reportUnknownArgumentType]
                     max_seq_length=config.max_seq_length,
-                    text_field=evals_config.text_field,
+                    text_field=config.text_field,
                 )
                 scorers_by_type.setdefault(base_name, []).append(scorer)
             for eval_subset_name in eval_dm_typed.config.resolved_eval_subset_names:

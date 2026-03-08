@@ -74,6 +74,12 @@ class ProbeTrainerAppMainConfig(common.AppMainConfig, common.ModelTokenizerConfi
     eval_batch_size: int = 8
     max_seq_length: int = 20000
     """Maximum sequence length for tokenization."""
+    text_field: str = "model_output"
+    """Which ``EvalRecord`` field to use as the assistant output when building model inputs.
+
+    This is only used with ``CorrectnessDataModuleConfig``. Probe LMDB datasets already contain
+    structured messages and ignore this setting.
+    """
     gradient_accumulation_steps: int = 1
     """Number of gradient accumulation steps before optimizer update."""
     logging_steps: int = 10
@@ -140,6 +146,17 @@ class ProbeTrainerAppMainConfig(common.AppMainConfig, common.ModelTokenizerConfi
             warnings.warn(
                 "save_steps > 0 has no effect when save_probes=False",
                 stacklevel=2,
+            )
+        return self
+
+    @pydantic.model_validator(mode="after")
+    def _validate_text_field_matches_evals_config(self) -> ProbeTrainerAppMainConfig:
+        evals_text_field = getattr(self.evals_config, "text_field", None)
+        if evals_text_field is not None and evals_text_field != self.text_field:
+            raise ValueError(
+                f"config.text_field={self.text_field!r} does not match "
+                f"config.evals_config.text_field={evals_text_field!r}; "
+                "use the same text field for training and correctness evaluation"
             )
         return self
 

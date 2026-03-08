@@ -73,6 +73,12 @@ class LLMClassifierTrainerAppMainConfig(common.AppMainConfig, common.ModelTokeni
     # --- Tokenization ---
     max_seq_length: pydantic.PositiveInt = pyine.evals.common.PASS_AT_K_DEFAULTS.max_new_tokens
     """Maximum sequence length for tokenization. Should not exceed model's max position embeddings."""
+    text_field: str = "model_output"
+    """Which ``EvalRecord`` field to use as the assistant output when building model inputs.
+
+    This is only used with ``CorrectnessDataModuleConfig``. Probe LMDB datasets already contain
+    structured messages and ignore this setting.
+    """
     truncation_side: typing.Literal["right", "left"] | None = None
     """Which side to truncate when sequences exceed max_seq_length.
 
@@ -145,10 +151,11 @@ class LLMClassifierTrainerAppMainConfig(common.AppMainConfig, common.ModelTokeni
             model_path,
             **model_kwargs,
         )
+        model_config = typing.cast("typing.Any", model.config)  # pyright: ignore[reportUnknownMemberType]
         if (
-            getattr(model.config, "pad_token_id", None) is None
+            getattr(model_config, "pad_token_id", None) is None
             and self.tokenizer_set_padding_to_eos_if_needed
-            and getattr(model.config, "eos_token_id", None) is not None
+            and getattr(model_config, "eos_token_id", None) is not None
         ):
             # keep standalone get_model() reasonably safe for decoder-only classifiers: when the
             # tokenizer logic will reuse EOS as PAD, mirror that on the model config too. The
@@ -185,6 +192,17 @@ class LLMClassifierTrainerAppMainConfig(common.AppMainConfig, common.ModelTokeni
                 "(resampling + weighted loss). This is usually undesirable - consider "
                 "using only one.",
                 stacklevel=2,
+            )
+        return self
+
+    @pydantic.model_validator(mode="after")
+    def _validate_text_field_matches_evals_config(self) -> LLMClassifierTrainerAppMainConfig:
+        evals_text_field = getattr(self.evals_config, "text_field", None)
+        if evals_text_field is not None and evals_text_field != self.text_field:
+            raise ValueError(
+                f"config.text_field={self.text_field!r} does not match "
+                f"config.evals_config.text_field={evals_text_field!r}; "
+                "use the same text field for training and correctness evaluation"
             )
         return self
 

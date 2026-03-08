@@ -9,6 +9,9 @@ if typing.TYPE_CHECKING:
 
 import pytest
 
+import pyine.evals.correctness.configs as correctness_configs
+import pyine.evals.correctness.datamodule_configs as correctness_datamodule_configs
+import pyine.evals.correctness.types as correctness_types
 from pyine.apps.trainers.probe_trainer_configs import ProbeTrainerAppMainConfig
 from pyine.guardrails.probes.base import ProbeConfig
 
@@ -61,6 +64,27 @@ class TestProbeTrainerAppMainConfig:
         cfg = ProbeTrainerAppMainConfig(**_make_minimal_config())
         assert isinstance(cfg.datamodule_config, ProbeDataModuleConfig)
         assert cfg.datamodule_config.selection_strategy == "latest"
+
+    def test_text_field_default(self) -> None:
+        cfg = ProbeTrainerAppMainConfig(**_make_minimal_config())
+        assert cfg.text_field == "model_output"
+
+    def test_text_field_must_match_evals_config(self) -> None:
+        evals_config = correctness_configs.CorrectnessEvalsConfig(
+            datamodule_config=correctness_datamodule_configs.CorrectnessDataModuleConfig(
+                lmdb_paths=("/tmp/fake-correctness-lmdb",),  # noqa: S108
+                split_config=correctness_types.GuardrailSplitConfig(split_source="TACO"),
+            ),
+            text_field="final_answer",
+        )
+
+        with pytest.raises(ValueError, match="same text field"):
+            ProbeTrainerAppMainConfig(
+                **_make_minimal_config(
+                    text_field="model_output",
+                    evals_config=evals_config,
+                )
+            )
 
 
 class TestHydraConfigRegistration:

@@ -15,9 +15,9 @@ import typing
 import datasets
 
 import pyine.data.datamodule
-import pyine.data.utils.generation_record
 import pyine.data.utils.lmdb_io
 import pyine.evals.correctness.data_loading as correctness_data_loading
+import pyine.evals.correctness.formatting as correctness_formatting
 import pyine.evals.correctness.splits as correctness_splits
 import pyine.evals.correctness.types as correctness_types
 import pyine.utils.reprod
@@ -280,16 +280,7 @@ class CorrectnessDataModule(pyine.data.datamodule.BaseDataModule["CorrectnessDat
             sample_ids: list[str] = []
             code_types: list[str] = []
             for record in records:
-                text_value = getattr(record, text_field, None)
-                if text_value is None:
-                    raise ValueError(
-                        f"record {record.sample_id!r} has None for text_field={text_field!r}; "
-                        f"choose a field that is always populated"
-                    )
-                messages = pyine.data.utils.generation_record.build_messages_from_record(
-                    record=record.record,
-                    model_output=str(text_value),
-                )
+                messages = correctness_formatting.build_messages_from_eval_record(record, text_field)
                 all_messages.append(messages)
                 labels.append(int(record.label))
                 sample_ids.append(record.sample_id)
