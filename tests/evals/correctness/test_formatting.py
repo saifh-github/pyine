@@ -99,6 +99,7 @@ class TestFormatRecordsForTokenizer:
             "input_formatting_mode": "role_tagged_text",
             "tokenizer_has_chat_template": False,
             "add_special_tokens": True,
+            "truncation_side": None,
         }
 
     def test_get_input_formatting_metadata_with_chat_template(self) -> None:
@@ -113,4 +114,5 @@ class TestFormatRecordsForTokenizer:
             "input_formatting_mode": "chat_template",
             "tokenizer_has_chat_template": True,
             "add_special_tokens": False,
+            "truncation_side": None,
         }

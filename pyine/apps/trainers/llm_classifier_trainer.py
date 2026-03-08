@@ -305,10 +305,8 @@ def classifier_train(
     has_chat_template = pyine.utils.transformers.data.tokenizer_has_chat_template(tokenizer)
     input_formatting_mode = "chat_template" if has_chat_template else "role_tagged_text"
     logger.info(
-        "classifier inputs: text_field=%s, input_formatting_mode=%s, add_special_tokens=%s",
-        config.text_field,
-        input_formatting_mode,
-        not has_chat_template,
+        f"classifier inputs: text_field={config.text_field}, truncation_side={tokenizer.truncation_side}, "
+        f"input_formatting_mode={input_formatting_mode}, add_special_tokens={not has_chat_template}"
     )
     raw_ds = pyine.apps.trainers.common.apply_messages_formatting(raw_ds, tokenizer)
     # when a chat template produced the text, special tokens are already embedded;
@@ -338,6 +336,7 @@ def classifier_train(
     if runtime is not None and runtime.wandb_run is not None:
         training_args_dict["report_to"] = ["wandb"]
         runtime.wandb_run.summary["classifier/text_field"] = config.text_field  # type: ignore[reportUnknownMemberType]
+        runtime.wandb_run.summary["classifier/truncation_side"] = tokenizer.truncation_side  # type: ignore[reportUnknownMemberType]
         runtime.wandb_run.summary["classifier/input_formatting_mode"] = input_formatting_mode  # type: ignore[reportUnknownMemberType]
         runtime.wandb_run.summary["classifier/add_special_tokens"] = not has_chat_template  # type: ignore[reportUnknownMemberType]
     pyine.apps.trainers.common.resolve_save_on_each_node(training_args_dict, runtime)

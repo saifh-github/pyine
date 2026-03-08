@@ -685,13 +685,12 @@ def probe_train(
     has_chat_template = pyine.utils.transformers.data.tokenizer_has_chat_template(tokenizer)
     input_formatting_mode = "chat_template" if has_chat_template else "role_tagged_text"
     logger.info(
-        "probe inputs: text_field=%s, input_formatting_mode=%s, add_special_tokens=%s",
-        config.text_field,
-        input_formatting_mode,
-        not has_chat_template,
+        f"probe inputs: text_field={config.text_field}, truncation_side={tokenizer.truncation_side}, "
+        f"input_formatting_mode={input_formatting_mode}, add_special_tokens={not has_chat_template}"
     )
     if runtime is not None and runtime.wandb_run is not None:
         runtime.wandb_run.summary["probe/text_field"] = config.text_field  # type: ignore[reportUnknownMemberType]
+        runtime.wandb_run.summary["probe/truncation_side"] = tokenizer.truncation_side  # type: ignore[reportUnknownMemberType]
         runtime.wandb_run.summary["probe/input_formatting_mode"] = input_formatting_mode  # type: ignore[reportUnknownMemberType]
         runtime.wandb_run.summary["probe/add_special_tokens"] = not has_chat_template  # type: ignore[reportUnknownMemberType]
     raw_ds = pyine.apps.trainers.common.apply_messages_formatting(raw_ds, tokenizer)

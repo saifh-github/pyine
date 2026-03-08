@@ -335,6 +335,7 @@ class TestProbeScorer:
         assert metadata["text_field"] == "model_output"
         assert metadata["input_formatting_mode"] in {"chat_template", "role_tagged_text"}
         assert "add_special_tokens" in metadata
+        assert "truncation_side" in metadata
         extractor.remove_hooks()
 
     def test_verification_cost_unit_is_flops(self) -> None:
@@ -398,6 +399,7 @@ class TestLLMClassifierScorer:
         assert metadata["text_field"] == "model_output"
         assert metadata["input_formatting_mode"] in {"chat_template", "role_tagged_text"}
         assert "add_special_tokens" in metadata
+        assert "truncation_side" in metadata
 
     def test_verification_cost_unit_is_flops(self) -> None:
         model = transformers.AutoModelForSequenceClassification.from_pretrained("prajjwal1/bert-tiny", num_labels=2)

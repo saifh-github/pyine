@@ -118,4 +118,5 @@ def get_input_formatting_metadata(
         "input_formatting_mode": "chat_template" if has_chat_template else "role_tagged_text",
         "tokenizer_has_chat_template": has_chat_template,
         "add_special_tokens": not has_chat_template,
+        "truncation_side": getattr(tokenizer, "truncation_side", None),
     }

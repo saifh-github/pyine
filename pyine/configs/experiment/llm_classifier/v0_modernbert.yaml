@@ -34,6 +34,7 @@ config:
 
   # Tokenization
   max_seq_length: 8192  # NOTE: this is far from the actual max used in target models (13k), need to address this @@@@@
+  truncation_side: left  # preserve the assistant reasoning/completion at the end when truncation is needed
 
   # Code type metrics
   log_per_code_type_metrics: true
