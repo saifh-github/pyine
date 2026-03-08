@@ -432,7 +432,7 @@ class TestLLMClassifierScorer:
             label=True,
             code_type="original",
             tags=[],
-            record={},
+            record={"sample_id": "long", "prompt": "prompt for long"},
             difficulty_score=None,
         )
         result = scorer.score_records([short_record, long_record])
