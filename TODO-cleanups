@@ -1,3 +1,0 @@
-# File that needs to be removed before release
-pyine/configs/accelerate/hostfile
-pyine/configs/accelerate/* # Possibly?
