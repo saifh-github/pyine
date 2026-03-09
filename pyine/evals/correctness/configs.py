@@ -505,6 +505,7 @@ _RESAMPLING_PRESETS: list[tuple[str, str]] = [
     ("original_only", "for_original_only"),
     ("mostly_original", "for_mostly_original"),
     ("helpful_bias", "for_helpful_bias"),
+    ("balanced_helpful_bias", "for_balanced_helpful_bias"),
     ("skewed_pos_helpful_bias", "for_skewed_positive_helpful_bias"),
     ("oversample_balanced", "for_oversample_balanced"),
 ]

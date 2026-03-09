@@ -85,6 +85,15 @@ class RecordResamplingConfig(pydantic.BaseModel):
         return cls(seed=seed, code_type_proportions={"original": 0.9, "hinted": 0.09, "misleading": 0.01})
 
     @classmethod
+    def for_balanced_helpful_bias(cls, seed: int = 0) -> RecordResamplingConfig:
+        """Resampling preset: 50% positive ratio + helpful-bias-dominant code types."""
+        return cls(
+            seed=seed,
+            target_positive_ratio=0.5,
+            code_type_proportions={"original": 0.9, "hinted": 0.09, "misleading": 0.01},
+        )
+
+    @classmethod
     def for_skewed_positive_helpful_bias(cls, seed: int = 0) -> RecordResamplingConfig:
         """Resampling preset: 80% positive ratio + helpful-bias-dominant code types."""
         return cls(

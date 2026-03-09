@@ -390,6 +390,13 @@ class TestResamplingPresets:
             {"code_type_proportions": {"original": 0.9, "hinted": 0.09, "misleading": 0.01}},
         ),
         (
+            "for_balanced_helpful_bias",
+            {
+                "target_positive_ratio": 0.5,
+                "code_type_proportions": {"original": 0.9, "hinted": 0.09, "misleading": 0.01},
+            },
+        ),
+        (
             "for_skewed_positive_helpful_bias",
             {
                 "target_positive_ratio": 0.8,
