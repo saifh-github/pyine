@@ -7,6 +7,7 @@
 #   Multi-GPU:   torchrun --nproc_per_node=NUM_GPUS -m pyine.apps.trainers.llm_classifier_trainer +experiment=llm_classifier/v0_modernbert
 
 defaults:
+  - /config/evals_config: correctness_taco_base
   - override /config: base
   - override /config/datamodule_config: correctness_taco_base
   - override /config/datamodule_config/resampling: skewed_pos_helpful_bias
@@ -81,3 +82,9 @@ config:
     load_best_model_at_end: true
     metric_for_best_model: "auroc"
     greater_is_better: true
+
+  # correctness benchmarking config
+  evals_config:
+    result_dump_dir: ${runtime.output_dir}/benchmark_export
+    datamodule_config:
+      lmdb_paths: ${config.datamodule_config.lmdb_paths}
