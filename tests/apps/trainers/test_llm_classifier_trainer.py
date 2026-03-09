@@ -416,7 +416,7 @@ class TestBestModelExport:
                 trainer=trainer,
                 tokenizer=tokenizer,
                 output_dir=tmp_path / "output",
-                output_suffix="_best",
+                output_suffix="/checkpoint-best",
             )
 
     def test_export_best_model_artifacts_saves_to_suffixed_dir(
@@ -439,10 +439,10 @@ class TestBestModelExport:
             trainer=trainer,
             tokenizer=tokenizer,
             output_dir=output_dir,
-            output_suffix="_best",
+            output_suffix="/checkpoint-best",
         )
 
-        assert export_dir == tmp_path / "output_best"
+        assert export_dir == output_dir / "checkpoint-best"
         assert (export_dir / "pytorch_model.bin").read_text() == "best"
         assert (export_dir / "config.json").read_text() == "{}"
         assert not (export_dir / "optimizer.pt").exists()
@@ -466,10 +466,10 @@ class TestBestModelExport:
             trainer=trainer,
             tokenizer=tokenizer,
             output_dir=output_dir,
-            output_suffix="_best",
+            output_suffix="/checkpoint-best",
         )
 
-        assert export_dir == tmp_path / "output_best"
+        assert export_dir == output_dir / "checkpoint-best"
         assert (export_dir / "model.safetensors").read_text() == "loaded-best"
         assert (export_dir / "config.json").read_text() == "{}"
         assert not (export_dir / "trainer_state.json").exists()
@@ -492,7 +492,7 @@ class TestBestModelExport:
                 trainer=trainer,
                 tokenizer=tokenizer,
                 output_dir=tmp_path / "output",
-                output_suffix="_best",
+                output_suffix="/checkpoint-best",
             )
 
 
@@ -728,7 +728,7 @@ class TestClassifierTrainIntegration:
         assert (output_dir / "adapter_config.json").exists()
         assert (output_dir / "adapter_model.safetensors").exists() or (output_dir / "adapter_model.bin").exists()
         assert (output_dir / "tokenizer_config.json").exists()
-        best_output_dir = tmp_path / "output_best"
+        best_output_dir = output_dir / "checkpoint-best"
         assert best_output_dir.exists()
         assert (best_output_dir / "adapter_config.json").exists()
         assert (best_output_dir / "tokenizer_config.json").exists()

@@ -81,7 +81,7 @@ def _export_best_model_artifacts(
     output_dir: pathlib.Path,
     output_suffix: str,
 ) -> pathlib.Path:
-    """Export the selected best checkpoint to a clearly named sibling directory.
+    """Export the selected best checkpoint to a clearly named directory under ``output_dir``.
 
     Copies inference artifacts from ``output_dir`` when ``load_best_model_at_end=True`` because the
     caller must save the already-reloaded best weights there before invoking this helper.
@@ -92,7 +92,13 @@ def _export_best_model_artifacts(
     best_model_checkpoint = trainer.state.best_model_checkpoint
     if best_model_checkpoint is None:
         raise ValueError("cannot export best model artifacts when trainer.state.best_model_checkpoint is unset")
-    export_dir = output_dir.with_name(f"{output_dir.name}{output_suffix}")
+    relative_output_suffix = output_suffix.lstrip("/\\")
+    if not relative_output_suffix:
+        raise ValueError("best-model export path must not be empty or root-only")
+    export_path = pathlib.Path(relative_output_suffix)
+    if any(part == ".." for part in export_path.parts):
+        raise ValueError("best-model export path must stay within output_dir")
+    export_dir = output_dir / export_path
     if export_dir.exists():
         raise FileExistsError(f"best-model export directory already exists: {export_dir}")
     source_dir = output_dir if trainer.args.load_best_model_at_end else pathlib.Path(best_model_checkpoint)

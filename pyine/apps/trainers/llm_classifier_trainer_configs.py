@@ -99,9 +99,13 @@ class LLMClassifierTrainerAppMainConfig(common.AppMainConfig, common.ModelTokeni
     save_model: bool = True
     """Whether to save the trained model at the end of training."""
     save_best_model_export: bool = True
-    """Whether to also export the best loaded model to an explicit suffixed directory."""
-    best_model_output_suffix: str = "_best"
-    """Suffix appended to ``training_args_config.output_dir`` for the best-model export."""
+    """Whether to also export the best loaded model to an explicit directory under the run output dir."""
+    best_model_output_suffix: str = "/checkpoint-best"
+    """Relative export path under ``training_args_config.output_dir`` for the best-model export.
+
+    A leading path separator is ignored for convenience, so ``/checkpoint-best`` resolves to
+    ``<output_dir>/checkpoint-best``.
+    """
 
     # --- Class imbalance ---
     class_weight_mode: typing.Literal["none", "balanced"] = "none"
@@ -234,6 +238,11 @@ class LLMClassifierTrainerAppMainConfig(common.AppMainConfig, common.ModelTokeni
             raise ValueError("save_best_model_export=True requires save_model=True")
         if not self.best_model_output_suffix:
             raise ValueError("best_model_output_suffix must be non-empty")
+        normalized_output_suffix = self.best_model_output_suffix.lstrip("/\\")
+        if not normalized_output_suffix:
+            raise ValueError("best_model_output_suffix must not be empty or root-only")
+        if any(part == ".." for part in pathlib.Path(normalized_output_suffix).parts):
+            raise ValueError("best_model_output_suffix must stay within output_dir")
         if self.save_best_model_export:
 
             def _normalize_interval_strategy(

@@ -159,6 +159,14 @@ class TestLLMClassifierTrainerAppMainConfig:
                 )
             )
 
+    def test_best_model_output_suffix_rejects_parent_traversal(self) -> None:
+        with pytest.raises(ValueError, match="must stay within output_dir"):
+            LLMClassifierTrainerAppMainConfig(
+                **_make_minimal_config(
+                    best_model_output_suffix="../checkpoint-best",
+                )
+            )
+
     def test_truncation_side_default_not_left(self) -> None:
         cfg = LLMClassifierTrainerAppMainConfig(**_make_minimal_config())
         assert cfg.tokenizer_override_truncation_to_left_side is False
@@ -332,7 +340,7 @@ class TestHydraConfigRegistration:
 
         assert omegaconf.OmegaConf.select(config, "config.truncation_side") == "left"
         assert omegaconf.OmegaConf.select(config, "config.save_best_model_export") is True
-        assert omegaconf.OmegaConf.select(config, "config.best_model_output_suffix") == "_best"
+        assert omegaconf.OmegaConf.select(config, "config.best_model_output_suffix") == "/checkpoint-best"
         assert omegaconf.OmegaConf.select(config, "config.lora_config.r") == 8
         assert omegaconf.OmegaConf.select(config, "config.lora_config.lora_alpha") == 16
         assert omegaconf.OmegaConf.select(config, "config.lora_config.lora_dropout") == 0.05
