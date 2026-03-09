@@ -13,7 +13,7 @@ class DebateGuardrailConfig(pydantic.BaseModel):
         config = DebateGuardrailConfig(
             interrogator_provider=LLMProviderConfig(
                 provider="openai",
-                model_kwargs={"model": "gpt-5-mini", "temperature": 0.7},
+                model_kwargs={"model": "gpt-5-mini"},
             ),
             responder_provider=LLMProviderConfig(
                 provider="vllm",
