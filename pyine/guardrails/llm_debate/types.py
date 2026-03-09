@@ -10,8 +10,8 @@ import pydantic
 class DebateRole(enum.StrEnum):
     """Role of a participant in the debate."""
 
-    INTERROGATOR = "interrogator"  # Model B
-    RESPONDER = "responder"  # Model A
+    INTERROGATOR = "interrogator"
+    RESPONDER = "responder"
 
 
 class DebateMessage(pydantic.BaseModel):
@@ -26,7 +26,7 @@ class DebateMessage(pydantic.BaseModel):
 
 
 class DebateVerdict(pydantic.BaseModel):
-    """Model B's final judgement after debate."""
+    """The interrogator's final judgement after debate."""
 
     model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
 

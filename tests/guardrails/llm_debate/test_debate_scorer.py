@@ -52,7 +52,7 @@ def _make_final_graph_state(
         )
     return {
         "original_prompt": "test prompt",
-        "model_a_output": "test output",
+        "responder_output": "test output",
         "final_answer": "test answer",
         "max_turns": 3,
         "messages": messages,

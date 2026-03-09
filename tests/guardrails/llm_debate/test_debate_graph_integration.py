@@ -32,7 +32,7 @@ def _make_initial_state(max_turns: int = 3) -> dict[str, typing.Any]:
     """Build the initial DebateState dict."""
     return {
         "original_prompt": "What is the output of:\n```python\nfor i in range(3): print(i)\n```",
-        "model_a_output": "The output is:\n0\n1\n2",
+        "responder_output": "The output is:\n0\n1\n2",
         "final_answer": "0\n1\n2",
         "max_turns": max_turns,
         "messages": [],

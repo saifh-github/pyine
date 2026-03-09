@@ -7,10 +7,10 @@ assess whether a target model's code execution predictions are correct. It imple
 `GuardrailScorer` protocol and plugs directly into the existing correctness evaluation pipeline
 (`evaluate_guardrail_replicas`).
 
-**Model B** (the interrogator/judge — an off-the-shelf LLM via API or vLLM) interrogates **Model A**
+**The interrogator** (the interrogator/judge — an off-the-shelf LLM via API or vLLM) interrogates **the responder**
 (the responder — typically an RL-trained checkpoint served via vLLM) about its reasoning, then
 renders a correctness verdict (score 0–1). The debate is bootstrapped from existing LMDB traces
-where Model A's prompt and full output are already available.
+where the responder's prompt and full output are already available.
 
 Key characteristics:
 
@@ -18,13 +18,13 @@ Key characteristics:
   (one for the interrogator, one for the responder)
 - **Multi-turn debate** — a LangGraph state machine orchestrates alternating interrogation
   and response turns, with configurable turn limits and early termination
-- **Structured interrogator output** — Model B returns either a probing question or a verdict
+- **Structured interrogator output** — the interrogator returns either a probing question or a verdict
   with confidence score, parsed via Pydantic output parser
 - **Token cost tracking** — records per-node token usage via `CaptureLLMHandler`, accumulated
   across all debate turns
 - **Concurrent** — uses `ThreadPoolExecutor` (not asyncio) for safe concurrent debates
 - **Multi-provider** — supports OpenAI, DeepSeek, and local vLLM servers via `LLMProviderConfig`
-- **Configurable debate history visibility** — Model A can optionally be denied access to
+- **Configurable debate history visibility** — the responder can optionally be denied access to
   prior debate turns, forcing fresh reasoning each round
 
 For data format, splits, metrics, and the `GuardrailScorer` protocol, see
@@ -42,8 +42,8 @@ The debate system is composed of four layers:
 debate_eval.py (Hydra entrypoint)
     └── DebateGuardrailScorer (scorer.py)
             └── LangGraph compiled graph (graph.py)
-                    ├── interrogator_turn node  →  Model B chain (prompt | llm | parser)
-                    └── responder_turn node     →  Model A chain (prompt | llm | parser)
+                    ├── interrogator_turn node  →  interrogator chain (prompt | llm | parser)
+                    └── responder_turn node     →  responder chain (prompt | llm | parser)
 ```
 
 ### Debate Flow
@@ -53,10 +53,10 @@ Each record goes through a multi-turn debate:
 1. **Initialization** — The scorer constructs a `DebateState` from the `EvalRecord` fields
    (original prompt, model output, final answer) and invokes the compiled graph.
 
-2. **Interrogator turn** — Model B receives the full context (original prompt, Model A's output,
+2. **Interrogator turn** — The interrogator receives the full context (original prompt, the responder's output,
    debate history, current turn count) and either asks a probing question or renders a verdict.
 
-3. **Responder turn** — Model A receives the latest interrogator question (and optionally the
+3. **Responder turn** — The responder receives the latest interrogator question (and optionally the
    debate history) and defends its reasoning.
 
 4. **Routing** — After each interrogator turn, if a verdict was rendered, the debate ends.
@@ -70,7 +70,7 @@ Each record goes through a multi-turn debate:
 
 ```
               ┌─────────────────────┐
-         ┌───>│  interrogator_turn  │  (Model B asks question OR renders verdict)
+         ┌───>│  interrogator_turn  │  (interrogator asks question OR renders verdict)
          │    └─────────┬───────────┘
          │              │
          │      ┌───────┴───────┐
@@ -79,7 +79,7 @@ Each record goes through a multi-turn debate:
          │              │ no verdict
          │              ▼
          │    ┌─────────────────┐
-         │    │ responder_turn  │  (Model A responds)
+         │    │ responder_turn  │  (responder responds)
          │    └─────────┬───────┘
          │              │
          │      ┌───────┴───────┐
@@ -102,8 +102,8 @@ pyine/guardrails/llm_debate/
 └── types.py             # Data types (DebateMessage, DebateTranscript, DebateVerdict)
 
 pyine/prompts/templates/guardrail/
-├── debate_interrogator.yaml   # Model B: system + interrogation prompt
-└── debate_responder.yaml      # Model A: system + respond-to-interrogation prompt
+├── debate_interrogator.yaml   # Interrogator: system + interrogation prompt
+└── debate_responder.yaml      # Responder: system + respond-to-interrogation prompt
 
 pyine/prompts/configs/guardrail/
 ├── debate_interrogator.py     # InterrogatorOutput parser + template factory
@@ -123,9 +123,9 @@ pyine/configs/experiment/guardrail/
 
 | Type                 | Description                                                      |
 | -------------------- | ---------------------------------------------------------------- |
-| `DebateRole`         | Enum: `INTERROGATOR` (Model B) or `RESPONDER` (Model A)          |
+| `DebateRole`         | Enum: `INTERROGATOR` or `RESPONDER`                              |
 | `DebateMessage`      | Single message: role, content, token_count                       |
-| `DebateVerdict`      | Model B's judgement: score (0–1) and optional reasoning          |
+| `DebateVerdict`      | The interrogator's judgement: score (0–1) and optional reasoning |
 | `DebateTranscript`   | Full transcript: messages, verdict, num_turns, total_token_count |
 | `InterrogatorOutput` | Structured output: decision (question/verdict), content, score   |
 
@@ -151,7 +151,7 @@ Required packages (should already be installed in the project environment):
 
 ### Local vLLM Server (optional)
 
-For the responder (Model A), you typically need a vLLM server running your RL checkpoint:
+For the responder, you typically need a vLLM server running your RL checkpoint:
 
 ```bash
 uv run python scripts/vllm_eval/vllm_server.py \
@@ -252,13 +252,13 @@ Defined in `pyine/guardrails/llm_debate/configs.py`:
 
 | Field                           | Type                | Default                           | Description                                                                         |
 | ------------------------------- | ------------------- | --------------------------------- | ----------------------------------------------------------------------------------- |
-| `interrogator_provider`         | `LLMProviderConfig` | (required)                        | Model B: interrogator/judge LLM provider                                            |
-| `responder_provider`            | `LLMProviderConfig` | (required)                        | Model A: responder LLM provider (typically vLLM)                                    |
+| `interrogator_provider`         | `LLMProviderConfig` | (required)                        | Interrogator/judge LLM provider                                                     |
+| `responder_provider`            | `LLMProviderConfig` | (required)                        | Responder LLM provider (typically vLLM)                                             |
 | `interrogator_prompt_name`      | `str`               | `"guardrail/debate_interrogator"` | Interrogator prompt template name                                                   |
 | `responder_prompt_name`         | `str`               | `"guardrail/debate_responder"`    | Responder prompt template name                                                      |
 | `use_chat_template`             | `bool`              | `True`                            | Whether to use chat prompt template                                                 |
 | `max_debate_turns`              | `int`               | `3` (range 1–10)                  | Maximum interrogation rounds (B asks + A responds = 1 turn)                         |
-| `responder_sees_debate_history` | `bool`              | `True`                            | Whether Model A sees full debate history (see below)                                |
+| `responder_sees_debate_history` | `bool`              | `True`                            | Whether the responder sees full debate history (see below)                          |
 | `max_workers`                   | `int`               | `5`                               | Max concurrent debates (lower than prompted_llm due to multi-turn cost)             |
 | `default_score_on_error`        | `float`             | `0.5`                             | Score assigned when the debate fails                                                |
 | `debug_log_transcript_every_n`  | `int`               | `0` (disabled)                    | Log a formatted transcript every N records (for visual inspection during long runs) |
@@ -274,12 +274,12 @@ Defined in `pyine/guardrails/llm_debate/configs.py`:
 
 ### Debate History Visibility
 
-The `responder_sees_debate_history` flag controls how much context Model A gets:
+The `responder_sees_debate_history` flag controls how much context the responder gets:
 
-- **`True` (default)**: The responder prompt includes all prior debate turns, allowing Model A
+- **`True` (default)**: The responder prompt includes all prior debate turns, allowing the responder
   to give consistent, non-contradictory answers across turns.
 - **`False`**: The responder only sees its original output and the latest interrogator question.
-  This forces Model A to defend its reasoning fresh each turn without knowledge of prior
+  This forces the responder to defend its reasoning fresh each turn without knowledge of prior
   interrogation lines — useful for probing whether the model's understanding is robust or
   if it merely learned to give consistent-sounding follow-ups.
 

@@ -27,9 +27,9 @@ class DebateGuardrailConfig(pydantic.BaseModel):
 
     # --- LLM providers ---
     interrogator_provider: pyine.utils.llm_providers.LLMProviderConfig
-    """Model B: the interrogator/judge LLM (API or vLLM)."""
+    """The interrogator/judge LLM (API or vLLM)."""
     responder_provider: pyine.utils.llm_providers.LLMProviderConfig
-    """Model A: the responder LLM (typically vLLM serving the RL checkpoint)."""
+    """The responder LLM (typically vLLM serving the RL checkpoint)."""
 
     # --- Prompts ---
     interrogator_prompt_name: str = "guardrail/debate_interrogator"
@@ -41,12 +41,12 @@ class DebateGuardrailConfig(pydantic.BaseModel):
 
     # --- Debate ---
     max_debate_turns: int = pydantic.Field(default=3, ge=1, le=10)
-    """Maximum number of interrogation rounds (B asks + A responds = 1 turn)."""
+    """Maximum number of interrogation rounds (interrogator asks + responder responds = 1 turn)."""
 
     responder_sees_debate_history: bool = True
-    """Whether Model A (responder) sees the full debate history in its prompt.
+    """Whether the responder sees the full debate history in its prompt.
     When True (default), the responder prompt includes all prior debate turns,
-    allowing Model A to give consistent, non-contradictory answers.
+    allowing the responder to give consistent, non-contradictory answers.
     When False, the responder only sees its original output + the latest
     interrogator question, forcing it to defend its reasoning fresh each turn
     without knowledge of prior interrogation lines."""

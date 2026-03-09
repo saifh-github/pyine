@@ -51,7 +51,7 @@ def _make_initial_state(max_turns: int = 3) -> dict[str, typing.Any]:
     """Build the initial DebateState dict for graph invocation."""
     return {
         "original_prompt": "Predict the output:\nprint([1,2,3])",
-        "model_a_output": "The output is [1, 2, 3]",
+        "responder_output": "The output is [1, 2, 3]",
         "final_answer": "[1, 2, 3]",
         "max_turns": max_turns,
         "messages": [],
@@ -387,7 +387,7 @@ class TestInputVars:
         )
         input_vars = mock_interr.invoke.call_args_list[0][0][0]
         assert input_vars["original_prompt"] == "Predict the output:\nprint([1,2,3])"
-        assert input_vars["model_a_output"] == "The output is [1, 2, 3]"
+        assert input_vars["responder_output"] == "The output is [1, 2, 3]"
         assert input_vars["final_answer"] == "[1, 2, 3]"
         assert "current_turn" in input_vars
         assert "max_turns" in input_vars
@@ -403,7 +403,7 @@ class TestInputVars:
         )
         input_vars = mock_resp.invoke.call_args_list[0][0][0]
         assert input_vars["original_prompt"] == "Predict the output:\nprint([1,2,3])"
-        assert input_vars["model_a_output"] == "The output is [1, 2, 3]"
+        assert input_vars["responder_output"] == "The output is [1, 2, 3]"
         assert input_vars["final_answer"] == "[1, 2, 3]"
         assert input_vars["interrogator_question"] == "Test question"
         assert "debate_history" in input_vars

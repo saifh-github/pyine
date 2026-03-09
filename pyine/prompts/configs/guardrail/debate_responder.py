@@ -1,4 +1,4 @@
-"""Prompt config module for the debate responder (Model A).
+"""Prompt config module for the debate responder.
 
 The responder produces plain text responses (no structured output needed).
 """

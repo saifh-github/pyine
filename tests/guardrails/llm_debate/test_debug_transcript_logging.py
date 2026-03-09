@@ -50,7 +50,7 @@ def _make_final_graph_state(
         )
     return {
         "original_prompt": "test prompt",
-        "model_a_output": "test output",
+        "responder_output": "test output",
         "final_answer": "test answer",
         "max_turns": 3,
         "messages": messages,
@@ -198,8 +198,8 @@ class TestFormatOutput:
         # Should contain history_visible field
         assert "history_visible=True" in formatted
         # Should contain role labels
-        assert "INTERROGATOR (B)" in formatted
-        assert "RESPONDER (A)" in formatted
+        assert "INTERROGATOR" in formatted
+        assert "RESPONDER" in formatted
         # Should contain verdict
         assert "VERDICT:" in formatted
         assert "0.850" in formatted
