@@ -21,6 +21,24 @@ class TestConfigValidation:
         assert config.probe_llm_model == "Qwen/Qwen2.5-3B"
         assert config.classifier_checkpoint_dir is None
 
+    def test_probe_checkpoint_name_accepted(self) -> None:
+        config = GuardrailMetricsAppMainConfig(
+            probe_checkpoint_dir="/tmp/probes",  # noqa: S108
+            probe_checkpoint_name="best",
+            probe_llm_model="Qwen/Qwen2.5-3B",
+            probe_auto_model_config={"use_cache": False},
+        )
+        assert config.probe_checkpoint_name == "best"
+
+    def test_empty_probe_checkpoint_name_raises(self) -> None:
+        with pytest.raises(ValueError, match="probe_checkpoint_name must be non-empty"):
+            GuardrailMetricsAppMainConfig(
+                probe_checkpoint_dir="/tmp/probes",  # noqa: S108
+                probe_checkpoint_name="",
+                probe_llm_model="Qwen/Qwen2.5-3B",
+                probe_auto_model_config={"use_cache": False},
+            )
+
     def test_valid_classifier_only_config(self) -> None:
         """Classifier-only config should pass validation."""
         config = GuardrailMetricsAppMainConfig(

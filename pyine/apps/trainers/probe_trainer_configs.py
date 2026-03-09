@@ -62,6 +62,11 @@ class ProbeTrainerAppMainConfig(common.AppMainConfig, common.ModelTokenizerConfi
 
     Used in eval-only mode (``skip_training=True``) to load pretrained probes without re-training.
     """
+    probe_checkpoint_name: str | None = None
+    """Optional checkpoint subdirectory name to load for every probe (e.g. ``"best"`` or ``"final"``).
+
+    When ``None``, each probe auto-resolves its checkpoint using the collection defaults.
+    """
 
     # --- Training/logging options (not data-related, stay here) ---
     log_per_code_type_metrics: bool = True
@@ -90,6 +95,12 @@ class ProbeTrainerAppMainConfig(common.AppMainConfig, common.ModelTokenizerConfi
     # --- Output ---
     save_probes: bool = True
     """Whether to save trained probe weights at the end of training."""
+    save_best_probe_checkpoint: bool = True
+    """Whether to maintain a per-probe best checkpoint export during training."""
+    best_probe_checkpoint_name: str = "best"
+    """Checkpoint subdirectory name used for the per-probe best export."""
+    best_probe_metric: typing.Literal["auroc", "loss"] = "auroc"
+    """Validation metric used to decide whether a probe improved."""
 
     # --- Checkpoint saving ---
     save_steps: int = -1
@@ -158,6 +169,18 @@ class ProbeTrainerAppMainConfig(common.AppMainConfig, common.ModelTokenizerConfi
                 f"config.evals_config.text_field={evals_text_field!r}; "
                 "use the same text field for training and correctness evaluation"
             )
+        return self
+
+    @pydantic.model_validator(mode="after")
+    def _validate_best_checkpoint_settings(self) -> ProbeTrainerAppMainConfig:
+        if self.save_best_probe_checkpoint and not self.save_probes:
+            raise ValueError("save_best_probe_checkpoint=True requires save_probes=True")
+        if self.save_best_probe_checkpoint and self.num_epochs < 1:
+            raise ValueError("save_best_probe_checkpoint=True requires num_epochs >= 1")
+        if not self.best_probe_checkpoint_name:
+            raise ValueError("best_probe_checkpoint_name must be non-empty")
+        if self.probe_checkpoint_name == "":
+            raise ValueError("probe_checkpoint_name must be non-empty when provided")
         return self
 
 

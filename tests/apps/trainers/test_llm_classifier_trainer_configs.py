@@ -37,6 +37,8 @@ def _make_minimal_training_args(**overrides: object) -> dict:
         "num_train_epochs": 1,
         "per_device_train_batch_size": 2,
         "per_device_eval_batch_size": 2,
+        "eval_strategy": "epoch",
+        "save_strategy": "epoch",
         "report_to": "none",
         "use_cpu": True,
     }
@@ -121,6 +123,41 @@ class TestLLMClassifierTrainerAppMainConfig:
     def test_save_model_default_is_true(self) -> None:
         cfg = LLMClassifierTrainerAppMainConfig(**_make_minimal_config())
         assert cfg.save_model is True
+
+    def test_save_best_model_export_default_is_true(self) -> None:
+        cfg = LLMClassifierTrainerAppMainConfig(**_make_minimal_config())
+        assert cfg.save_best_model_export is True
+
+    def test_save_best_model_export_requires_save_model(self) -> None:
+        with pytest.raises(ValueError, match="save_best_model_export=True requires save_model=True"):
+            LLMClassifierTrainerAppMainConfig(
+                **_make_minimal_config(
+                    save_model=False,
+                    save_best_model_export=True,
+                )
+            )
+
+    def test_save_best_model_export_requires_eval_strategy(self) -> None:
+        with pytest.raises(ValueError, match="eval_strategy != 'no'"):
+            LLMClassifierTrainerAppMainConfig(
+                **_make_minimal_config(
+                    training_args_config=_make_minimal_training_args(
+                        eval_strategy="no",
+                        save_strategy="epoch",
+                    ),
+                )
+            )
+
+    def test_save_best_model_export_requires_save_strategy(self) -> None:
+        with pytest.raises(ValueError, match="save_strategy != 'no'"):
+            LLMClassifierTrainerAppMainConfig(
+                **_make_minimal_config(
+                    training_args_config=_make_minimal_training_args(
+                        eval_strategy="epoch",
+                        save_strategy="no",
+                    ),
+                )
+            )
 
     def test_truncation_side_default_not_left(self) -> None:
         cfg = LLMClassifierTrainerAppMainConfig(**_make_minimal_config())
@@ -318,6 +355,8 @@ class TestHydraConfigRegistration:
             )
 
         assert omegaconf.OmegaConf.select(config, "config.truncation_side") == "left"
+        assert omegaconf.OmegaConf.select(config, "config.save_best_model_export") is True
+        assert omegaconf.OmegaConf.select(config, "config.best_model_output_suffix") == "_best"
         assert omegaconf.OmegaConf.select(config, "config.lora_config.r") == 8
         assert omegaconf.OmegaConf.select(config, "config.lora_config.lora_alpha") == 16
         assert omegaconf.OmegaConf.select(config, "config.lora_config.lora_dropout") == 0.05

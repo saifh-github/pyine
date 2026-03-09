@@ -102,6 +102,17 @@ def build_dataloader(
     )
 
 
+def _validate_best_probe_checkpoint_preconditions(
+    config: probe_trainer_configs.ProbeTrainerAppMainConfig,
+    valid_dataset: datasets.Dataset,
+) -> None:
+    """Fail early when best-probe checkpoint tracking cannot possibly succeed."""
+    if config.save_best_probe_checkpoint and len(valid_dataset) == 0:
+        raise ValueError(
+            "save_best_probe_checkpoint=True requires a non-empty validation split so best metrics can be computed"
+        )
+
+
 def _stable_replica_seed(
     base_seed: int,
     name: str,
@@ -115,6 +126,16 @@ def _stable_replica_seed(
     payload = f"{base_seed}:{name}:{replica_idx}".encode()
     digest = hashlib.blake2b(payload, digest_size=8).digest()
     return int.from_bytes(digest, "little") % (2**31)
+
+
+def _get_module_device(
+    module: torch.nn.Module,
+) -> torch.device:
+    """Return the device of a module from its first parameter, failing loudly if absent."""
+    first_parameter = next(module.parameters(), None)
+    if first_parameter is None:
+        raise ValueError("module must have at least one parameter to infer its device")
+    return first_parameter.device
 
 
 def expand_probe_configs_with_replicas(
@@ -539,6 +560,33 @@ def _log_per_code_type_metrics(
             )
 
 
+def _get_probes_base_dir(
+    runtime: pyine.configs.schemas.RuntimeConfig | None,
+) -> pathlib.Path:
+    """Return the base directory used for probe checkpoint exports."""
+    if runtime is not None:
+        return pathlib.Path(runtime.output_dir) / "probes"
+    return pathlib.Path("probes_output")
+
+
+def _save_probe_checkpoint_artifacts(
+    probe: pyine.guardrails.probes.base.BaseProbe,
+    probes_base: pathlib.Path,
+    probe_name: str,
+    checkpoint_subdir: str,
+) -> pathlib.Path:
+    """Save one probe to the standard checkpoint layout and return its directory."""
+    probe_dir = probes_base / probe_name / checkpoint_subdir
+    if probe_dir.exists() and not probe_dir.is_dir():
+        raise FileExistsError(f"probe checkpoint path exists and is not a directory: {probe_dir}")
+    if probe_dir.is_dir():
+        shutil.rmtree(probe_dir)
+    probe_dir.mkdir(parents=True, exist_ok=False)
+    torch.save(probe.state_dict(), probe_dir / "probe_state_dict.pt")
+    (probe_dir / "probe_config.json").write_text(probe.config.model_dump_json(indent=2))
+    return probe_dir
+
+
 def save_probe_checkpoints(
     probe_collection: pyine.guardrails.probes.collection.ProbeCollection,
     config: probe_trainer_configs.ProbeTrainerAppMainConfig,
@@ -561,19 +609,110 @@ def save_probe_checkpoints(
         "pyine.guardrails.probes.collection.ProbeCollection",
         accelerator.unwrap_model(probe_collection),  # pyright: ignore[reportUnknownMemberType]  # accelerate stubs
     )
-    if runtime is not None:
-        probes_base = pathlib.Path(runtime.output_dir) / "probes"
-    else:
-        probes_base = pathlib.Path("probes_output")
+    probes_base = _get_probes_base_dir(runtime)
 
     for name, module in raw_collection.probes.items():
         probe = typing.cast("pyine.guardrails.probes.base.BaseProbe", module)
-        probe_dir = probes_base / name / checkpoint_subdir
-        probe_dir.mkdir(parents=True, exist_ok=True)
-        torch.save(probe.state_dict(), probe_dir / "probe_state_dict.pt")
-        (probe_dir / "probe_config.json").write_text(probe.config.model_dump_json(indent=2))
+        _save_probe_checkpoint_artifacts(probe, probes_base, name, checkpoint_subdir)
 
     logger.info(f"Saved probe checkpoints ({checkpoint_subdir}) to {probes_base}")
+    return probes_base
+
+
+def _is_better_probe_metric(
+    current_metrics: dict[str, float],
+    best_record: dict[str, typing.Any] | None,
+    metric_name: typing.Literal["auroc", "loss"],
+) -> bool:
+    """Return True when the current validation metrics improve on the best-so-far record."""
+    if best_record is None:
+        return True
+    current_loss = current_metrics["loss"]
+    best_loss = typing.cast("float", best_record["loss"])
+    current_auroc = current_metrics["auroc"]
+    best_auroc = typing.cast("float", best_record["auroc"])
+    if metric_name == "loss":
+        if current_loss < best_loss:
+            return True
+        if current_loss > best_loss:
+            return False
+        if math.isnan(current_auroc):
+            return False
+        if math.isnan(best_auroc):
+            return True
+        return current_auroc > best_auroc
+    if not math.isnan(current_auroc):
+        if math.isnan(best_auroc) or current_auroc > best_auroc:
+            return True
+        if current_auroc < best_auroc:
+            return False
+    elif not math.isnan(best_auroc):
+        return False
+    return current_loss < best_loss
+
+
+def save_best_probe_summary(
+    probes_base: pathlib.Path,
+    best_probe_records: dict[str, dict[str, typing.Any]],
+    config: probe_trainer_configs.ProbeTrainerAppMainConfig,
+) -> pathlib.Path:
+    """Write a manifest describing the best exported checkpoint for each probe."""
+    summary_path = probes_base / "best_summary.json"
+    summary_payload = {
+        "checkpoint_name": config.best_probe_checkpoint_name,
+        "metric_name": config.best_probe_metric,
+        "probes": best_probe_records,
+    }
+    summary_path.write_text(json.dumps(summary_payload, indent=2, sort_keys=True))
+    return summary_path
+
+
+def update_best_probe_checkpoints(
+    probe_collection: pyine.guardrails.probes.collection.ProbeCollection,
+    config: probe_trainer_configs.ProbeTrainerAppMainConfig,
+    runtime: pyine.configs.schemas.RuntimeConfig | None,
+    accelerator: accelerate.Accelerator,
+    current_metrics: dict[str, dict[str, float]],
+    epoch: int,
+    global_step: int,
+    best_probe_records: dict[str, dict[str, typing.Any]],
+) -> pathlib.Path | None:
+    """Update the per-probe best checkpoint export using the latest validation metrics."""
+    if not config.save_best_probe_checkpoint or not accelerator.is_main_process or not current_metrics:
+        return None
+    raw_collection = typing.cast(
+        "pyine.guardrails.probes.collection.ProbeCollection",
+        accelerator.unwrap_model(probe_collection),  # pyright: ignore[reportUnknownMemberType]  # accelerate stubs
+    )
+    probes_base = _get_probes_base_dir(runtime)
+    improved_probe_names: list[str] = []
+    for name, metric_values in current_metrics.items():
+        best_record = best_probe_records.get(name)
+        if not _is_better_probe_metric(metric_values, best_record, config.best_probe_metric):
+            continue
+        probe = typing.cast("pyine.guardrails.probes.base.BaseProbe", raw_collection.probes[name])
+        _save_probe_checkpoint_artifacts(probe, probes_base, name, config.best_probe_checkpoint_name)
+        best_probe_records[name] = {
+            "checkpoint_name": config.best_probe_checkpoint_name,
+            "metric_name": config.best_probe_metric,
+            "metric_value": metric_values[config.best_probe_metric],
+            "loss": metric_values["loss"],
+            "auroc": metric_values["auroc"],
+            "epoch": epoch,
+            "global_step": global_step,
+        }
+        improved_probe_names.append(name)
+        logger.info(
+            f"updated best checkpoint for probe {name}: "
+            f"checkpoint={config.best_probe_checkpoint_name}, "
+            f"criterion={config.best_probe_metric}, "
+            f"metric_value={metric_values[config.best_probe_metric]}, "
+            f"loss={metric_values['loss']}, auroc={metric_values['auroc']}, "
+            f"epoch={epoch}, global_step={global_step}"
+        )
+    if improved_probe_names:
+        summary_path = save_best_probe_summary(probes_base, best_probe_records, config)
+        logger.info(f"saved best-probe summary to {summary_path}; improved={sorted(improved_probe_names)}")
     return probes_base
 
 
@@ -696,6 +835,7 @@ def probe_train(
     raw_ds = pyine.apps.trainers.common.apply_messages_formatting(raw_ds, tokenizer)
     train_ds = _tokenize_split(raw_ds["train"], tokenizer, config.max_seq_length, code_type_to_id)
     valid_ds = _tokenize_split(raw_ds["valid"], tokenizer, config.max_seq_length, code_type_to_id)
+    _validate_best_probe_checkpoint_preconditions(config, valid_ds)
     train_loader = build_dataloader(
         train_ds,
         tokenizer,
@@ -739,6 +879,7 @@ def probe_train(
     loss_fn = torch.nn.BCEWithLogitsLoss()
     global_step = 0
     final_metrics: dict[str, dict[str, float]] = {}
+    best_probe_records: dict[str, dict[str, typing.Any]] = {}
 
     logger.info(f"Starting training: {config.num_epochs} epochs, {len(train_loader)} batches/epoch")
 
@@ -823,7 +964,7 @@ def probe_train(
 
                 # mid-epoch validation
                 if config.eval_steps > 0 and global_step % config.eval_steps == 0:
-                    validate_probes(
+                    mid_epoch_metrics = validate_probes(
                         probe_collection,
                         model,
                         extractor,
@@ -836,6 +977,16 @@ def probe_train(
                         log_individual_replicas=config.log_individual_replicas,
                         id_to_code_type=id_to_code_type if config.log_per_code_type_metrics else None,
                         log_per_code_type_metrics=config.log_per_code_type_metrics,
+                    )
+                    update_best_probe_checkpoints(
+                        probe_collection,
+                        config,
+                        runtime,
+                        accelerator,
+                        mid_epoch_metrics,
+                        epoch=epoch + 1,
+                        global_step=global_step,
+                        best_probe_records=best_probe_records,
                     )
                     probe_collection.train()
 
@@ -867,6 +1018,16 @@ def probe_train(
             id_to_code_type=id_to_code_type if config.log_per_code_type_metrics else None,
             log_per_code_type_metrics=config.log_per_code_type_metrics,
         )
+        update_best_probe_checkpoints(
+            probe_collection,
+            config,
+            runtime,
+            accelerator,
+            final_metrics,
+            epoch=epoch + 1,
+            global_step=global_step,
+            best_probe_records=best_probe_records,
+        )
 
     # --- 7. Save probes ---
     if config.save_probes:
@@ -879,6 +1040,19 @@ def probe_train(
         )
         if has_replicas and probes_base is not None and final_metrics:
             save_replica_summary(probes_base, final_metrics, expanded_configs_by_name)
+        if config.save_best_probe_checkpoint and accelerator.is_main_process:
+            missing_best_probes = sorted(set(expanded_configs_by_name) - set(best_probe_records))
+            if missing_best_probes:
+                raise ValueError(
+                    "best probe checkpoints were requested, but no best checkpoint was recorded for: "
+                    f"{missing_best_probes}"
+                )
+            if probes_base is not None:
+                summary_path = save_best_probe_summary(probes_base, best_probe_records, config)
+                logger.info(
+                    f"saved best probe checkpoints ({config.best_probe_checkpoint_name}) to {probes_base}; "
+                    f"summary={summary_path}; criterion={config.best_probe_metric}"
+                )
 
     # --- 8. Cleanup ---
     extractor.remove_hooks()
@@ -916,7 +1090,10 @@ async def main(
     if skip_training:
         if config.probe_checkpoint_dir is None:
             raise ValueError("skip_training=True requires config.probe_checkpoint_dir to be set")
-        logger.info(f"skip_training mode; loading probes from {config.probe_checkpoint_dir}")
+        logger.info(
+            f"skip_training mode; loading probes from {config.probe_checkpoint_dir}; "
+            f"checkpoint_name={config.probe_checkpoint_name or 'auto'}"
+        )
         checkpoint_path = config.llm_checkpoint_path
         model = config.get_model(checkpoint_path=pathlib.Path(checkpoint_path) if checkpoint_path else None)
         model.eval()
@@ -926,14 +1103,35 @@ async def main(
         probe_collection = pyine.guardrails.probes.collection.ProbeCollection.load_from_checkpoint(  # pyright: ignore[reportUnknownVariableType,reportUnknownMemberType,reportAttributeAccessIssue]
             checkpoint_dir=config.probe_checkpoint_dir,
             hidden_dim=hidden_dim,
+            checkpoint_name=config.probe_checkpoint_name,
         )
-        probe_collection = probe_collection.to(dtype=config.target_dtype, device=model.device)  # pyright: ignore[reportUnknownVariableType,reportUnknownMemberType]
+        probe_collection = probe_collection.to(  # pyright: ignore[reportUnknownVariableType,reportUnknownMemberType]
+            dtype=config.target_dtype,
+            device=_get_module_device(model),
+        )
         probe_collection.eval()  # pyright: ignore[reportUnknownMemberType]
     else:
         train_result = probe_train(config=config, runtime=runtime)
         probe_collection = train_result.probe_collection
         model = train_result.model
         tokenizer = train_result.tokenizer
+        if config.evals_config is not None and config.save_best_probe_checkpoint and config.save_probes:
+            probes_base = _get_probes_base_dir(runtime)
+            hidden_dim = typing.cast("int", model.config.hidden_size)  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue]
+            logger.info(
+                f"reloading probes from {probes_base}; checkpoint_name={config.best_probe_checkpoint_name} "
+                "for post-training evaluation"
+            )
+            probe_collection = pyine.guardrails.probes.collection.ProbeCollection.load_from_checkpoint(  # pyright: ignore[reportUnknownVariableType,reportUnknownMemberType,reportAttributeAccessIssue]
+                checkpoint_dir=probes_base,
+                hidden_dim=hidden_dim,
+                checkpoint_name=config.best_probe_checkpoint_name,
+            )
+            probe_collection = probe_collection.to(  # pyright: ignore[reportUnknownVariableType,reportUnknownMemberType]
+                dtype=config.target_dtype,
+                device=_get_module_device(model),
+            )
+            probe_collection.eval()  # pyright: ignore[reportUnknownMemberType]
     probe_collection = typing.cast("pyine.guardrails.probes.collection.ProbeCollection", probe_collection)
 
     # benchmarking phase (if enabled)

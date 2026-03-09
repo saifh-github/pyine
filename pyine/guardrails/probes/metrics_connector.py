@@ -153,10 +153,14 @@ class ProbeMetricsConnector:
         self._dtype = next(llm_model.parameters()).dtype  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # transformers stubs
 
         # Load probe collection
-        logger.info("loading probe collection from: %s", checkpoint_dir)
+        logger.info(
+            f"loading probe collection from: {checkpoint_dir}; "
+            f"checkpoint_name={self._config.probe_checkpoint_name or 'auto'}"
+        )
         probe_collection = pyine.guardrails.probes.collection.ProbeCollection.load_from_checkpoint(
             checkpoint_dir,
             self._hidden_dim,
+            checkpoint_name=self._config.probe_checkpoint_name,
         )
         probe_collection.to(device=device, dtype=self._dtype)
 

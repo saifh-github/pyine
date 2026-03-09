@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import typing
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -118,6 +119,52 @@ class TestProbeTrainUnit:
         assert final_loss < initial_loss, f"Loss did not decrease: {initial_loss} -> {final_loss}"
 
         extractor.remove_hooks()
+
+
+class TestGetModuleDevice:
+    def test_returns_first_parameter_device(self) -> None:
+        module = torch.nn.Linear(4, 2)
+
+        assert pyine.apps.trainers.probe_trainer._get_module_device(module) == module.weight.device
+
+    def test_raises_when_module_has_no_parameters(self) -> None:
+        with pytest.raises(ValueError, match="at least one parameter"):
+            pyine.apps.trainers.probe_trainer._get_module_device(torch.nn.ReLU())
+
+
+class TestBestProbeCheckpointPreconditions:
+    def test_raises_for_empty_validation_split(self) -> None:
+        config = MagicMock(save_best_probe_checkpoint=True)
+        valid_dataset = datasets.Dataset.from_dict(
+            {
+                "input_ids": [],
+                "attention_mask": [],
+                "labels": [],
+                "code_type_id": [],
+            }
+        )
+
+        with pytest.raises(ValueError, match="non-empty validation split"):
+            pyine.apps.trainers.probe_trainer._validate_best_probe_checkpoint_preconditions(
+                config,
+                valid_dataset,
+            )
+
+    def test_allows_non_empty_validation_split(self) -> None:
+        config = MagicMock(save_best_probe_checkpoint=True)
+        valid_dataset = datasets.Dataset.from_dict(
+            {
+                "input_ids": [[1, 2, 3]],
+                "attention_mask": [[1, 1, 1]],
+                "labels": [1],
+                "code_type_id": [0],
+            }
+        )
+
+        pyine.apps.trainers.probe_trainer._validate_best_probe_checkpoint_preconditions(
+            config,
+            valid_dataset,
+        )
 
     def test_validation_produces_metrics(
         self,
@@ -273,6 +320,83 @@ class TestLoadFromCheckpointRoundTrip:
             ):
                 assert orig_name == load_name
                 torch.testing.assert_close(orig_param.cpu(), load_param)
+
+
+class TestBestProbeCheckpointHelpers:
+    def test_is_better_probe_metric_uses_loss_as_auroc_tiebreak(self) -> None:
+        best_record = {"loss": 0.5, "auroc": 0.8}
+        current_metrics = {"loss": 0.4, "auroc": 0.8}
+
+        assert pyine.apps.trainers.probe_trainer._is_better_probe_metric(
+            current_metrics,
+            best_record,
+            "auroc",
+        )
+
+    def test_update_best_probe_checkpoints_saves_best_dirs_and_summary(
+        self,
+        tmp_path: pathlib.Path,
+        probe_collection: pyine.guardrails.probes.collection.ProbeCollection,
+    ) -> None:
+        acc = accelerate.Accelerator()
+        probe_collection_prepared = acc.prepare(probe_collection)
+        runtime = MagicMock()
+        runtime.output_dir = str(tmp_path)
+        config = MagicMock(
+            save_best_probe_checkpoint=True,
+            best_probe_checkpoint_name="best",
+            best_probe_metric="auroc",
+        )
+        best_probe_records: dict[str, dict[str, typing.Any]] = {}
+        metrics = {
+            "mean_L0": {"loss": 0.4, "auroc": 0.81},
+            "max_L1": {"loss": 0.6, "auroc": 0.72},
+        }
+
+        probes_base = pyine.apps.trainers.probe_trainer.update_best_probe_checkpoints(
+            probe_collection_prepared,
+            config,
+            runtime,
+            acc,
+            metrics,
+            epoch=1,
+            global_step=10,
+            best_probe_records=best_probe_records,
+        )
+
+        assert probes_base == tmp_path / "probes"
+        assert (probes_base / "mean_L0" / "best" / "probe_state_dict.pt").exists()
+        assert (probes_base / "max_L1" / "best" / "probe_state_dict.pt").exists()
+        summary = json.loads((probes_base / "best_summary.json").read_text())
+        assert summary["checkpoint_name"] == "best"
+        assert summary["metric_name"] == "auroc"
+        assert summary["probes"]["mean_L0"]["global_step"] == 10
+        assert summary["probes"]["max_L1"]["epoch"] == 1
+
+    def test_save_probe_checkpoint_artifacts_cleans_existing_dir(
+        self,
+        tmp_path: pathlib.Path,
+        probe_collection: pyine.guardrails.probes.collection.ProbeCollection,
+    ) -> None:
+        probe = typing.cast(
+            "pyine.guardrails.probes.base.BaseProbe",
+            probe_collection.probes["mean_L0"],
+        )
+        stale_dir = tmp_path / "probes" / "mean_L0" / "best"
+        stale_dir.mkdir(parents=True)
+        (stale_dir / "stale.txt").write_text("old")
+
+        saved_dir = pyine.apps.trainers.probe_trainer._save_probe_checkpoint_artifacts(
+            probe=probe,
+            probes_base=tmp_path / "probes",
+            probe_name="mean_L0",
+            checkpoint_subdir="best",
+        )
+
+        assert saved_dir == stale_dir
+        assert not (saved_dir / "stale.txt").exists()
+        assert (saved_dir / "probe_state_dict.pt").exists()
+        assert (saved_dir / "probe_config.json").exists()
 
 
 class TestSkipTrainingProbeTrainer:

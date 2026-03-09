@@ -63,6 +63,8 @@ config:
 
   # Save trained model
   save_model: true
+  save_best_model_export: true
+  best_model_output_suffix: "_best"
 
   # Training arguments
   training_args_config:

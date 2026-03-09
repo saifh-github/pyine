@@ -28,6 +28,7 @@ config:
 
   # no need to save the model again during eval
   save_model: false
+  save_best_model_export: false
 
   # correctness benchmarking config
   evals_config:

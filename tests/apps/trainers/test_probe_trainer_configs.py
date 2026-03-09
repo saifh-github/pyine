@@ -52,6 +52,28 @@ class TestProbeTrainerAppMainConfig:
         cfg = ProbeTrainerAppMainConfig(**_make_minimal_config())
         assert cfg.evals_config is None
 
+    def test_save_best_probe_checkpoint_default_is_true(self) -> None:
+        cfg = ProbeTrainerAppMainConfig(**_make_minimal_config())
+        assert cfg.save_best_probe_checkpoint is True
+
+    def test_save_best_probe_checkpoint_requires_save_probes(self) -> None:
+        with pytest.raises(ValueError, match="save_best_probe_checkpoint=True requires save_probes=True"):
+            ProbeTrainerAppMainConfig(
+                **_make_minimal_config(
+                    save_probes=False,
+                    save_best_probe_checkpoint=True,
+                )
+            )
+
+    def test_save_best_probe_checkpoint_requires_num_epochs(self) -> None:
+        with pytest.raises(ValueError, match="save_best_probe_checkpoint=True requires num_epochs >= 1"):
+            ProbeTrainerAppMainConfig(
+                **_make_minimal_config(
+                    num_epochs=0,
+                    save_best_probe_checkpoint=True,
+                )
+            )
+
     def test_target_dtype_property(self) -> None:
         import torch
 
@@ -152,6 +174,15 @@ class TestProbeTrainerEvalOnlyConfig:
         )
         assert cfg.probe_checkpoint_dir is not None
 
+    def test_checkpoint_name_accepted(self) -> None:
+        cfg = ProbeTrainerAppMainConfig(
+            **_make_minimal_config(
+                probe_checkpoint_dir="/tmp/fake-probes",  # noqa: S108
+                probe_checkpoint_name="best",
+            )
+        )
+        assert cfg.probe_checkpoint_name == "best"
+
     def test_empty_probes_with_checkpoint_dir_valid(self) -> None:
         cfg = ProbeTrainerAppMainConfig(
             **_make_minimal_config(
@@ -225,6 +256,12 @@ class TestProbeTrainerConfigCheckpointSaving:
 
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            ProbeTrainerAppMainConfig(**_make_minimal_config(save_steps=100, save_probes=False))
+            ProbeTrainerAppMainConfig(
+                **_make_minimal_config(
+                    save_steps=100,
+                    save_probes=False,
+                    save_best_probe_checkpoint=False,
+                )
+            )
             matching = [x for x in w if "save_steps" in str(x.message)]
             assert len(matching) >= 1, f"Expected warning about save_steps, got: {[str(x.message) for x in w]}"

@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 import typing
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import torch
+
+if typing.TYPE_CHECKING:
+    import pathlib
 
 from pyine.guardrails.probes.metrics_connector import (
     ProbeMetricsConnector,
@@ -223,3 +228,57 @@ class TestProbeConnectorWandBLogEntries:
     def test_empty_benchmarks(self) -> None:
         connector = self._make_connector()
         assert connector.get_wandb_log_entries([]) == []
+
+
+class TestProbeConnectorLoad:
+    def test_load_passes_checkpoint_name(
+        self,
+        monkeypatch: typing.Any,
+    ) -> None:
+        config = SimpleNamespace(
+            probe_checkpoint_dir="/tmp/probes",  # noqa: S108
+            probe_checkpoint_name="best",
+            probe_llm_model="Qwen/Qwen2.5-3B",
+            probe_llm_checkpoint_path=None,
+            probe_auto_model_config={"use_cache": False},
+            use_torch_compile=False,
+        )
+        connector = ProbeMetricsConnector(config)
+
+        class DummyLLM(torch.nn.Module):
+            def __init__(self) -> None:
+                super().__init__()
+                self.param = torch.nn.Parameter(torch.zeros(1))
+                self.config = SimpleNamespace(hidden_size=64, vocab_size=128)
+
+        dummy_llm = DummyLLM()
+        loaded_collection = MagicMock()
+        loaded_collection.to.return_value = loaded_collection
+        loaded_collection._probe_configs = {}
+        captured: dict[str, typing.Any] = {}
+
+        def _mock_load_from_checkpoint(
+            checkpoint_dir: pathlib.Path,
+            hidden_dim: int,
+            *,
+            checkpoint_name: str | None = None,
+        ) -> MagicMock:
+            captured["checkpoint_dir"] = checkpoint_dir
+            captured["hidden_dim"] = hidden_dim
+            captured["checkpoint_name"] = checkpoint_name
+            return loaded_collection
+
+        monkeypatch.setattr(
+            "transformers.AutoModelForCausalLM.from_pretrained",
+            lambda *args, **kwargs: dummy_llm,
+        )
+        monkeypatch.setattr(
+            "pyine.guardrails.probes.collection.ProbeCollection.load_from_checkpoint",
+            _mock_load_from_checkpoint,
+        )
+
+        connector.load(torch.device("cpu"))
+
+        assert captured["checkpoint_dir"].name == "probes"
+        assert captured["hidden_dim"] == 64
+        assert captured["checkpoint_name"] == "best"

@@ -98,6 +98,10 @@ class LLMClassifierTrainerAppMainConfig(common.AppMainConfig, common.ModelTokeni
     # --- Output ---
     save_model: bool = True
     """Whether to save the trained model at the end of training."""
+    save_best_model_export: bool = True
+    """Whether to also export the best loaded model to an explicit suffixed directory."""
+    best_model_output_suffix: str = "_best"
+    """Suffix appended to ``training_args_config.output_dir`` for the best-model export."""
 
     # --- Class imbalance ---
     class_weight_mode: typing.Literal["none", "balanced"] = "none"
@@ -222,6 +226,33 @@ class LLMClassifierTrainerAppMainConfig(common.AppMainConfig, common.ModelTokeni
                 f"config.evals_config.text_field={evals_text_field!r}; "
                 "use the same text field for training and correctness evaluation"
             )
+        return self
+
+    @pydantic.model_validator(mode="after")
+    def _validate_best_model_export_settings(self) -> LLMClassifierTrainerAppMainConfig:
+        if self.save_best_model_export and not self.save_model:
+            raise ValueError("save_best_model_export=True requires save_model=True")
+        if not self.best_model_output_suffix:
+            raise ValueError("best_model_output_suffix must be non-empty")
+        if self.save_best_model_export:
+
+            def _normalize_interval_strategy(
+                value: typing.Any,
+            ) -> str:
+                return str(getattr(value, "value", value)).lower()
+
+            eval_strategy = _normalize_interval_strategy(self.training_args_config.eval_strategy)
+            save_strategy = _normalize_interval_strategy(self.training_args_config.save_strategy)
+            if eval_strategy == "no":
+                raise ValueError(
+                    "save_best_model_export=True requires training_args_config.eval_strategy != 'no' "
+                    "so a best checkpoint can be selected"
+                )
+            if save_strategy == "no":
+                raise ValueError(
+                    "save_best_model_export=True requires training_args_config.save_strategy != 'no' "
+                    "so a best checkpoint can be materialized"
+                )
         return self
 
 

@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import pathlib
+import shutil
 import typing
 
 import numpy as np
@@ -34,10 +36,25 @@ if typing.TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Columns from the raw LMDB dataset that should be removed after tokenization.
-# We explicitly list source columns to remove (rather than keeping a whitelist)
-# so that tokenizer-generated columns like token_type_ids are preserved.
+_MODEL_ARTIFACT_PATTERNS = (
+    "config.json",
+    "adapter_config.json",
+    "adapter_model*.safetensors",
+    "adapter_model*.bin",
+    "model*.safetensors",
+    "model*.bin",
+    "pytorch_model*.bin",
+    "model*.index.json",
+    "pytorch_model*.index.json",
+)
+"""Patterns for model/adaptor inference artifacts that should be exported for best checkpoints."""
+
 _RAW_COLUMNS_TO_REMOVE = ("text", "label", "sample_id", "code_type", "messages")
+"""Columns from the raw LMDB dataset that should be removed after tokenization.
+
+We explicitly list source columns to remove (rather than keeping a whitelist) so that
+tokenizer-generated columns like token_type_ids are preserved.
+"""
 
 
 def _sync_model_pad_token_id_with_tokenizer(
@@ -56,6 +73,43 @@ def _sync_model_pad_token_id_with_tokenizer(
     model_pad_token_id = getattr(model.config, "pad_token_id", None)  # type: ignore[reportUnknownMemberType]
     if model_pad_token_id != tokenizer_pad_token_id:
         model.config.pad_token_id = tokenizer_pad_token_id  # type: ignore[reportUnknownMemberType]
+
+
+def _export_best_model_artifacts(
+    trainer: transformers.Trainer,
+    tokenizer: transformers.PreTrainedTokenizerBase,
+    output_dir: pathlib.Path,
+    output_suffix: str,
+) -> pathlib.Path:
+    """Export the selected best checkpoint to a clearly named sibling directory.
+
+    Copies inference artifacts from ``output_dir`` when ``load_best_model_at_end=True`` because the
+    caller must save the already-reloaded best weights there before invoking this helper.
+    Otherwise copies only inference artifacts from ``trainer.state.best_model_checkpoint``. This
+    preserves adapter-style checkpoints instead of attempting to merge them, while intentionally
+    excluding optimizer/scheduler/trainer-state files.
+    """
+    best_model_checkpoint = trainer.state.best_model_checkpoint
+    if best_model_checkpoint is None:
+        raise ValueError("cannot export best model artifacts when trainer.state.best_model_checkpoint is unset")
+    export_dir = output_dir.with_name(f"{output_dir.name}{output_suffix}")
+    if export_dir.exists():
+        raise FileExistsError(f"best-model export directory already exists: {export_dir}")
+    source_dir = output_dir if trainer.args.load_best_model_at_end else pathlib.Path(best_model_checkpoint)
+    if not source_dir.is_dir():
+        raise FileNotFoundError(f"best-model export source directory does not exist: {source_dir}")
+    export_dir.mkdir(parents=True, exist_ok=False)
+    copied_model_artifact = False
+    for pattern in _MODEL_ARTIFACT_PATTERNS:
+        for source_path in source_dir.glob(pattern):
+            if not source_path.is_file():
+                continue
+            shutil.copy2(source_path, export_dir / source_path.name)
+            copied_model_artifact = True
+    if not copied_model_artifact:
+        raise FileNotFoundError(f"no model inference artifacts found in best-model export source: {source_dir}")
+    tokenizer.save_pretrained(str(export_dir))  # pyright: ignore[reportUnknownMemberType]
+    return export_dir
 
 
 def _tokenize_for_classification(
@@ -380,11 +434,43 @@ def classifier_train(
     # --- 8. Train ---
     trainer.train()  # pyright: ignore[reportUnknownMemberType]  # transformers stubs
 
+    metric_for_best_model = trainer.args.metric_for_best_model
+    greater_is_better = trainer.args.greater_is_better
+    best_metric_direction = "higher" if greater_is_better else "lower"
+    if trainer.state.best_model_checkpoint is not None:
+        logger.info(
+            f"best model checkpoint: {trainer.state.best_model_checkpoint}; "
+            f"criterion={metric_for_best_model} ({best_metric_direction} is better); "
+            f"best_metric={trainer.state.best_metric}"
+        )
+
     # --- 9. Save final model ---
     if config.save_model:
         assert trainer.args.output_dir is not None
+        output_dir = pathlib.Path(trainer.args.output_dir)
+        # when load_best_model_at_end=True, HuggingFace has already reloaded the winning weights
+        # into memory by this point, so saving now materializes the best model at output_dir.
         trainer.save_model()
-        tokenizer.save_pretrained(trainer.args.output_dir)  # pyright: ignore[reportUnknownMemberType]
+        tokenizer.save_pretrained(str(output_dir))  # pyright: ignore[reportUnknownMemberType]
+        if config.save_best_model_export:
+            if trainer.args.load_best_model_at_end:
+                logger.debug(
+                    f"output_dir already contains best-loaded weights because "
+                    f"load_best_model_at_end={trainer.args.load_best_model_at_end}; "
+                    f"exporting a suffixed best copy for clarity using output_dir={output_dir}"
+                )
+            best_export_dir = _export_best_model_artifacts(
+                trainer=trainer,
+                tokenizer=tokenizer,
+                output_dir=output_dir,
+                output_suffix=config.best_model_output_suffix,
+            )
+            logger.info(
+                f"exported best model to: {best_export_dir}; "
+                f"source_checkpoint={trainer.state.best_model_checkpoint}; "
+                f"criterion={metric_for_best_model} ({best_metric_direction} is better); "
+                f"best_metric={trainer.state.best_metric}"
+            )
 
     return ClassifierTrainResult(trainer=trainer, tokenizer=tokenizer)
 

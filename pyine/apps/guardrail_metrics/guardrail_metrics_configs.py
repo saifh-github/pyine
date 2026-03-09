@@ -48,6 +48,8 @@ class GuardrailMetricsAppMainConfig(common.AppMainConfig):
     """Path to directory containing probe checkpoints (from probe_trainer).
     Each subdirectory should have ``probe_state_dict.pt`` and ``probe_config.json``.
     If None, probe benchmarking is skipped."""
+    probe_checkpoint_name: str | None = None
+    """Optional probe checkpoint subdirectory name to load for every probe (e.g. ``"best"``)."""
 
     probe_llm_model: str | None = None
     """HuggingFace model ID or local path for the frozen LLM used with probes.
@@ -131,6 +133,12 @@ class GuardrailMetricsAppMainConfig(common.AppMainConfig):
             raise ValueError(
                 "datamodule_config is required when use_synthetic_data=False. Provide LMDB path and data configuration."
             )
+        return self
+
+    @pydantic.model_validator(mode="after")
+    def _validate_probe_checkpoint_name(self) -> GuardrailMetricsAppMainConfig:
+        if self.probe_checkpoint_name == "":
+            raise ValueError("probe_checkpoint_name must be non-empty when provided")
         return self
 
     @pydantic.model_validator(mode="after")

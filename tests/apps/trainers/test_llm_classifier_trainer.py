@@ -402,6 +402,100 @@ class TestLogClassDistribution:
         assert call_args[0][4] == 3  # n_neg
 
 
+class TestBestModelExport:
+    def test_export_best_model_artifacts_raises_without_best_checkpoint(
+        self,
+        tmp_path: pathlib.Path,
+    ) -> None:
+        trainer = MagicMock()
+        trainer.state.best_model_checkpoint = None
+        tokenizer = MagicMock()
+
+        with pytest.raises(ValueError, match="best_model_checkpoint"):
+            llm_trainer._export_best_model_artifacts(
+                trainer=trainer,
+                tokenizer=tokenizer,
+                output_dir=tmp_path / "output",
+                output_suffix="_best",
+            )
+
+    def test_export_best_model_artifacts_saves_to_suffixed_dir(
+        self,
+        tmp_path: pathlib.Path,
+    ) -> None:
+        trainer = MagicMock()
+        trainer.state.best_model_checkpoint = "/tmp/output/checkpoint-10"  # noqa: S108
+        trainer.args.load_best_model_at_end = False
+        tokenizer = MagicMock()
+        output_dir = tmp_path / "output"
+        best_checkpoint_dir = tmp_path / "checkpoint-10"
+        best_checkpoint_dir.mkdir()
+        (best_checkpoint_dir / "pytorch_model.bin").write_text("best")
+        (best_checkpoint_dir / "config.json").write_text("{}")
+        (best_checkpoint_dir / "optimizer.pt").write_text("ignore-me")
+        trainer.state.best_model_checkpoint = str(best_checkpoint_dir)
+
+        export_dir = llm_trainer._export_best_model_artifacts(
+            trainer=trainer,
+            tokenizer=tokenizer,
+            output_dir=output_dir,
+            output_suffix="_best",
+        )
+
+        assert export_dir == tmp_path / "output_best"
+        assert (export_dir / "pytorch_model.bin").read_text() == "best"
+        assert (export_dir / "config.json").read_text() == "{}"
+        assert not (export_dir / "optimizer.pt").exists()
+        tokenizer.save_pretrained.assert_called_once_with(str(export_dir))
+
+    def test_export_best_model_artifacts_prefers_output_dir_when_best_is_loaded(
+        self,
+        tmp_path: pathlib.Path,
+    ) -> None:
+        trainer = MagicMock()
+        trainer.args.load_best_model_at_end = True
+        trainer.state.best_model_checkpoint = "/tmp/output/checkpoint-10"  # noqa: S108
+        tokenizer = MagicMock()
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+        (output_dir / "model.safetensors").write_text("loaded-best")
+        (output_dir / "config.json").write_text("{}")
+        (output_dir / "trainer_state.json").write_text("ignore-me")
+
+        export_dir = llm_trainer._export_best_model_artifacts(
+            trainer=trainer,
+            tokenizer=tokenizer,
+            output_dir=output_dir,
+            output_suffix="_best",
+        )
+
+        assert export_dir == tmp_path / "output_best"
+        assert (export_dir / "model.safetensors").read_text() == "loaded-best"
+        assert (export_dir / "config.json").read_text() == "{}"
+        assert not (export_dir / "trainer_state.json").exists()
+        tokenizer.save_pretrained.assert_called_once_with(str(export_dir))
+
+    def test_export_best_model_artifacts_raises_without_inference_artifacts(
+        self,
+        tmp_path: pathlib.Path,
+    ) -> None:
+        trainer = MagicMock()
+        trainer.args.load_best_model_at_end = False
+        tokenizer = MagicMock()
+        checkpoint_dir = tmp_path / "checkpoint-10"
+        checkpoint_dir.mkdir()
+        (checkpoint_dir / "optimizer.pt").write_text("only-optimizer")
+        trainer.state.best_model_checkpoint = str(checkpoint_dir)
+
+        with pytest.raises(FileNotFoundError, match="no model inference artifacts"):
+            llm_trainer._export_best_model_artifacts(
+                trainer=trainer,
+                tokenizer=tokenizer,
+                output_dir=tmp_path / "output",
+                output_suffix="_best",
+            )
+
+
 # ---------------------------------------------------------------------------
 # TestClassifierTrainUnit - slow tests that require model downloads
 # ---------------------------------------------------------------------------
@@ -423,6 +517,7 @@ class TestSkipTrainingClassifierTrainer:
                     "report_to": "none",
                     "use_cpu": True,
                 },
+                "save_best_model_export": False,
             }
         )
         assert cfg.classifier_checkpoint_path is None
@@ -452,6 +547,7 @@ class TestSkipTrainingClassifierTrainer:
             max_seq_length=64,
             log_per_code_type_metrics=False,
             save_model=True,
+            save_best_model_export=False,
         )
         llm_trainer.classifier_train(config=cfg, runtime=None)
         # now load via skip_training path (no evals_config, so it just loads and exits)
@@ -507,6 +603,7 @@ class TestClassifierTrainUnit:
             "max_seq_length": 64,
             "log_per_code_type_metrics": False,
             "save_model": False,
+            "save_best_model_export": False,
         }
 
     @pytest.mark.slow
@@ -588,6 +685,7 @@ class TestClassifierTrainIntegration:
             },
             max_seq_length=128,
             save_model=False,
+            save_best_model_export=False,
         )
         trainer = llm_trainer.classifier_train(config=cfg, runtime=None)
         assert trainer is not None
@@ -608,12 +706,15 @@ class TestClassifierTrainIntegration:
                 "report_to": "none",
                 "use_cpu": True,
                 "eval_strategy": "epoch",
-                "save_strategy": "no",
+                "save_strategy": "epoch",
                 "logging_steps": 1,
-                "load_best_model_at_end": False,
+                "load_best_model_at_end": True,
+                "metric_for_best_model": "auroc",
+                "greater_is_better": True,
             },
             max_seq_length=64,
             save_model=True,
+            save_best_model_export=True,
             lora_config=peft.LoraConfig(
                 r=4,
                 lora_alpha=8,
@@ -627,9 +728,17 @@ class TestClassifierTrainIntegration:
         assert (output_dir / "adapter_config.json").exists()
         assert (output_dir / "adapter_model.safetensors").exists() or (output_dir / "adapter_model.bin").exists()
         assert (output_dir / "tokenizer_config.json").exists()
+        best_output_dir = tmp_path / "output_best"
+        assert best_output_dir.exists()
+        assert (best_output_dir / "adapter_config.json").exists()
+        assert (best_output_dir / "tokenizer_config.json").exists()
+        assert result.trainer.state.best_model_checkpoint is not None
 
         reloaded_model = cfg.get_model(checkpoint_path=output_dir)
         assert isinstance(reloaded_model, peft.PeftModel)
+
+        reloaded_best_model = cfg.get_model(checkpoint_path=best_output_dir)
+        assert isinstance(reloaded_best_model, peft.PeftModel)
 
         skip_cfg = LLMClassifierTrainerAppMainConfig(
             base_model="prajjwal1/bert-tiny",
