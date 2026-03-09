@@ -2,7 +2,7 @@
 #
 # LLM classifier training: fine-tune Qwen2-0.5B as binary classifier
 #
-# Derives from v0_modernbert and overrides model + decoder-specific tokenizer settings.
+# Derives from v0_modernbert and overrides model + decoder-specific settings.
 #
 # Usage:
 #   Single GPU:  python -m pyine.apps.trainers.llm_classifier_trainer +experiment=llm_classifier/v0_qwen2
@@ -19,19 +19,17 @@ runtime:
 config:
   base_model: Qwen/Qwen2-0.5B
 
-  # Keep the tokenizer's native padding side for Qwen2 (currently right-padding).
-  # The trainer synchronizes model.config.pad_token_id with the tokenizer so the
-  # classifier head can reliably pool the last non-pad token in batched inputs.
+  # Keep the tokenizer's native padding side for Qwen2 instead of forcing right padding.
+  # The trainer still synchronizes model.config.pad_token_id with the tokenizer so
+  # the classifier head can reliably pool the last non-pad token in batched inputs.
   tokenizer_override_padding_to_right_side: false
-  # Truncate left to preserve the completion at the end of the sequence.
-  truncation_side: left
+  max_seq_length: 13000  # roughly 3k for prompts, 10k for reasoning, should be enough for all records
 
-  # Decoder-only models are materially heavier than the ModernBERT baseline inherited above.
-  # Use a shorter context and smaller micro-batches to keep full fine-tuning practical.
-  max_seq_length: 2048
+  # override the inherited ModernBERT LoRA target modules with Qwen2-compatible ones
+  lora_config:
+    target_modules: ["q_proj", "v_proj"]
 
   training_args_config:
-    per_device_train_batch_size: 2
-    per_device_eval_batch_size: 4
-    gradient_accumulation_steps: 8
+    per_device_train_batch_size: 8
+    per_device_eval_batch_size: 16
     gradient_checkpointing: true

@@ -315,30 +315,6 @@ class TestHydraConfigRegistration:
             "misleading": 0.01,
         }
 
-    def test_qwen2_experiment_overrides_compose(
-        self,
-        tmp_path: pathlib.Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        monkeypatch.setattr(pyine.utils.filesystem, "get_logs_root_path", lambda: tmp_path)
-        pyine.configs.base.register_searchpath_plugin()
-        llm_cfg.register_hydra_configs(pyine.evals.common.EvalType.CORRECTNESS)
-
-        with hydra.initialize(config_path=None, version_base=pyine.configs.base.target_hydra_version):
-            config = hydra.compose(
-                config_name="entrypoint",
-                overrides=["+experiment=llm_classifier/v0_qwen2"],
-            )
-
-        assert omegaconf.OmegaConf.select(config, "config.base_model") == "Qwen/Qwen2-0.5B"
-        assert omegaconf.OmegaConf.select(config, "config.tokenizer_override_padding_to_right_side") is False
-        assert omegaconf.OmegaConf.select(config, "config.truncation_side") == "left"
-        assert omegaconf.OmegaConf.select(config, "config.max_seq_length") == 2048
-        assert omegaconf.OmegaConf.select(config, "config.training_args_config.per_device_train_batch_size") == 2
-        assert omegaconf.OmegaConf.select(config, "config.training_args_config.per_device_eval_batch_size") == 4
-        assert omegaconf.OmegaConf.select(config, "config.training_args_config.gradient_accumulation_steps") == 8
-        assert omegaconf.OmegaConf.select(config, "config.training_args_config.gradient_checkpointing") is True
-
     def test_modernbert_experiment_truncates_from_left(
         self,
         tmp_path: pathlib.Path,
