@@ -114,7 +114,8 @@ class CorrectnessDataModule(pyine.data.datamodule.BaseDataModule["CorrectnessDat
             f"correctness datamodule setup: {len(records)} records total, "
             f"train={len(guardrail_splits.guardrail_train)}, "
             f"valid={len(guardrail_splits.guardrail_valid)}, "
-            f"test={len(guardrail_splits.guardrail_test)}"
+            f"test={len(guardrail_splits.guardrail_test)}, "
+            f"kept original train problems={len(guardrail_splits.original_train_problem_ids)}"
         )
         for subset_name in self.config.subset_names:
             subset_records = self.get_records_for_subset(subset_name)
@@ -184,7 +185,7 @@ class CorrectnessDataModule(pyine.data.datamodule.BaseDataModule["CorrectnessDat
         if resampling_config is not None and not resampling_config.is_noop:
             import pyine.evals.correctness.resampling as correctness_resampling
 
-            records = correctness_resampling.resample_records(records, resampling_config)
+            records = correctness_resampling.resample_records(records, resampling_config, "calib")
         return records
 
     def get_records_for_training(self) -> list[correctness_types.EvalRecord]:
@@ -197,7 +198,7 @@ class CorrectnessDataModule(pyine.data.datamodule.BaseDataModule["CorrectnessDat
         if self.config.resampling is not None and not self.config.resampling.is_noop:
             import pyine.evals.correctness.resampling as correctness_resampling
 
-            records = correctness_resampling.resample_records(records, self.config.resampling)
+            records = correctness_resampling.resample_records(records, self.config.resampling, "train")
         return records
 
     def get_records_for_validation(self) -> list[correctness_types.EvalRecord]:
@@ -213,7 +214,7 @@ class CorrectnessDataModule(pyine.data.datamodule.BaseDataModule["CorrectnessDat
         if self.config.resampling is not None and not self.config.resampling.is_noop:
             import pyine.evals.correctness.resampling as correctness_resampling
 
-            records = correctness_resampling.resample_records(records, self.config.resampling)
+            records = correctness_resampling.resample_records(records, self.config.resampling, "valid")
         return records
 
     def get_all_records(self) -> list[correctness_types.EvalRecord]:

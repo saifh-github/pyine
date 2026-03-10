@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 def resample_records(
     records: list[correctness_types.EvalRecord],
     config: correctness_types.RecordResamplingConfig,
+    subset_name: str | None = None,
 ) -> list[correctness_types.EvalRecord]:
     """Resample eval records according to the given config.
 
@@ -26,6 +27,7 @@ def resample_records(
     Args:
         records: Input eval records to resample.
         config: Resampling configuration controlling the composition.
+        subset_name: Optional subset name (for logging/debug purposes only).
 
     Returns:
         Resampled list of eval records.
@@ -70,7 +72,7 @@ def resample_records(
             f"but min_records_per_label={config.min_records_per_label} requires at least that many of each"
         )
     rng.shuffle(result)
-    _log_summary(records, result)
+    _log_summary(records, result, subset_name)
     return result
 
 
@@ -229,6 +231,7 @@ def _resample_group(
 def _log_summary(
     original: list[correctness_types.EvalRecord],
     result: list[correctness_types.EvalRecord],
+    subset_name: str | None = None,
 ) -> None:
     """Log a summary of the resampling result."""
     num_pos = sum(1 for rec in result if rec.label)
@@ -238,12 +241,8 @@ def _log_summary(
         code_type_counts[rec.code_type] = code_type_counts.get(rec.code_type, 0) + 1
     pos_frac = num_pos / len(result) if result else 0.0
     logger.info(
-        "record resampling: %d -> %d records (pos=%.1f%%), label distribution: {True: %d, False: %d}, "
-        "code_type distribution: %s",
-        len(original),
-        len(result),
-        pos_frac * 100,
-        num_pos,
-        num_neg,
-        code_type_counts,
+        f"{f'{subset_name} ' if subset_name else ""}record resampling: "
+        f"{len(original)} -> {len(result)} records (pos={pos_frac:.1%}), "
+        f"label distribution: [True: {num_pos}, False: {num_neg}], "
+        "code_type distribution: {code_type_counts}"
     )
