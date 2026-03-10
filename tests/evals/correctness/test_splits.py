@@ -326,6 +326,85 @@ class TestBuildGuardrailSplits:
         with pytest.raises(ValueError, match="not found in SplitResult"):
             correctness_splits.build_guardrail_splits(records, config)
 
+    def test_include_original_train_problems(
+        self,
+        mocker: pytest_mock.MockerFixture,
+    ) -> None:
+        """When flag is True, original train problems are included in guardrail_train."""
+        records, subset_map = self._make_split_result_and_records()
+        mock_split_result = mocker.MagicMock()
+        mock_split_result.get_subset_to_ids_map.return_value = subset_map
+        mock_split_result.source_dataset_name = "TACO"
+        mocker.patch(
+            "pyine.evals.correctness.splits.pyine.data.utils.splits.get_dataset_split_result",
+            return_value=mock_split_result,
+        )
+        train_pids = {f"TACO/TRAIN/p{idx:06d}" for idx in [1, 2]}
+        # flag=True: train problems included
+        config_on = correctness_types.GuardrailSplitConfig(
+            split_source="TACO",
+            guardrail_valid_fraction=0.5,
+            seed=42,
+            include_original_train_problems=True,
+        )
+        splits_on = correctness_splits.build_guardrail_splits(records, config_on)
+        assert train_pids <= splits_on.train_problem_ids
+        assert splits_on.original_train_problem_ids == frozenset(train_pids)
+        # flag=False (default): train problems discarded
+        config_off = correctness_types.GuardrailSplitConfig(
+            split_source="TACO",
+            guardrail_valid_fraction=0.5,
+            seed=42,
+            include_original_train_problems=False,
+        )
+        splits_off = correctness_splits.build_guardrail_splits(records, config_off)
+        # guardrail_valid and guardrail_test are identical regardless of the flag
+        assert splits_on.valid_problem_ids == splits_off.valid_problem_ids
+        assert splits_on.test_problem_ids == splits_off.test_problem_ids
+        assert {rec.problem_id for rec in splits_on.guardrail_valid} == {
+            rec.problem_id for rec in splits_off.guardrail_valid
+        }
+        assert {rec.problem_id for rec in splits_on.guardrail_test} == {
+            rec.problem_id for rec in splits_off.guardrail_test
+        }
+        # no overlap between the three splits
+        assert splits_on.train_problem_ids.isdisjoint(splits_on.valid_problem_ids)
+        assert splits_on.train_problem_ids.isdisjoint(splits_on.test_problem_ids)
+        assert splits_on.valid_problem_ids.isdisjoint(splits_on.test_problem_ids)
+        # all records accounted for (none discarded) when flag=True
+        total_assigned = len(splits_on.guardrail_train) + len(splits_on.guardrail_valid) + len(splits_on.guardrail_test)
+        assert total_assigned == len(records)
+        # to_summary includes provenance info
+        summary = splits_on.to_summary()
+        assert "original_train_problem_ids" in summary
+        assert sorted(summary["original_train_problem_ids"]) == sorted(train_pids)
+        assert summary["original_train_record_count"] == 4  # 2 problems * 2 attempts
+
+    def test_include_original_train_problems_false_unchanged(
+        self,
+        mocker: pytest_mock.MockerFixture,
+    ) -> None:
+        """Flag=False explicitly yields the same behavior as the default (train PIDs discarded)."""
+        records, subset_map = self._make_split_result_and_records()
+        mock_split_result = mocker.MagicMock()
+        mock_split_result.get_subset_to_ids_map.return_value = subset_map
+        mock_split_result.source_dataset_name = "TACO"
+        mocker.patch(
+            "pyine.evals.correctness.splits.pyine.data.utils.splits.get_dataset_split_result",
+            return_value=mock_split_result,
+        )
+        config = correctness_types.GuardrailSplitConfig(
+            split_source="TACO",
+            guardrail_valid_fraction=0.5,
+            seed=42,
+            include_original_train_problems=False,
+        )
+        splits = correctness_splits.build_guardrail_splits(records, config)
+        train_pids = {f"TACO/TRAIN/p{idx:06d}" for idx in [1, 2]}
+        all_split_pids = splits.train_problem_ids | splits.valid_problem_ids | splits.test_problem_ids
+        assert train_pids.isdisjoint(all_split_pids)
+        assert splits.original_train_problem_ids == frozenset()
+
 
 class TestGuardrailSplits:
     def test_to_summary(self) -> None:

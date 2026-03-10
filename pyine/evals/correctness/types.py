@@ -155,6 +155,14 @@ class GuardrailSplitConfig(pydantic.BaseModel):
     """Random seed for the valid-to-train/valid re-split."""
     stratify_by_label: bool = True
     """Stratify the valid to train/valid re-split by per-problem correctness rate."""
+    include_original_train_problems: bool = False
+    """When True, include original train problems in guardrail_train instead of discarding them.
+
+    By default, original train problems are discarded from all guardrail splits. Setting this to True
+    adds them to the guardrail_train split alongside the re-split validation problems, increasing the
+    training set size, with the risk of using samples that models might have been exposed to directly
+    during their original training.
+    """
 
     @pydantic.field_validator("guardrail_valid_fraction")
     @classmethod

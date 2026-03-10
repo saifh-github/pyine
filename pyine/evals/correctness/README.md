@@ -61,8 +61,9 @@ CorrectnessEvalResult (metrics=to_flat_dict(), aggregated=AggregatedResult)
 Splits are at the **problem level**: all samples (and their solutions, traces, augmentations) for a
 coding problem stay together. This prevents data leakage between guardrail training and evaluation.
 
-- Original **train** problems -> discarded entirely (these might be overfit, so unreliable for
-  evaluations or calibration).
+- Original **train** problems -> discarded by default (these might be overfit, so unreliable for
+  evaluations or calibration). Set `include_original_train_problems: true` in `split_config` to
+  include them in `guardrail_train` for larger training sets.
 - Original **valid** problems -> re-split into `guardrail_train` + `guardrail_valid`:
   - when `stratify_by_label=True`: stratified by per-problem correctness rate
     (all-correct / all-incorrect / mixed strata);
@@ -231,7 +232,8 @@ DataModule lifecycle (`prepare_data()` -> `setup()` -> data accessors -> `teardo
 
 - `lmdb_paths`: paths (or glob patterns) to pregenerated eval records from the code exec pipeline;
 - `label_type`: which correctness label to use (`SOFT_MATCH` by default);
-- `split_config`: split source, valid fraction, seed, stratification;
+- `split_config`: split source, valid fraction, seed, stratification, optional inclusion of
+  original train problems;
 - `resampling`: optional `RecordResamplingConfig` for training and validation data composition
   control (e.g. label balance, code type diversity). When set, `get_records_for_training()`,
   `get_records_for_validation()`, and `get_probe_dataset()` all apply it symmetrically.

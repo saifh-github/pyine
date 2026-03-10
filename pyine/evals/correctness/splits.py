@@ -30,7 +30,10 @@ class GuardrailSplits:
     """
 
     guardrail_train: list[correctness_types.EvalRecord]
-    """Records for guardrail training (from original validation problems)."""
+    """Records for guardrail training (from original validation problems, and optionally training).
+
+    See whether ``include_original_train_problems`` is set for the inclusion of training data.
+    """
     guardrail_valid: list[correctness_types.EvalRecord]
     """Records for threshold calibration (from original validation problems)."""
     guardrail_test: list[correctness_types.EvalRecord]
@@ -41,6 +44,11 @@ class GuardrailSplits:
     """Coding problem IDs assigned to guardrail_valid."""
     test_problem_ids: frozenset[str]
     """Coding problem IDs assigned to guardrail_test."""
+    original_train_problem_ids: frozenset[str] = dataclasses.field(default_factory=lambda: frozenset[str]())
+    """Problem IDs that came from the original train split.
+
+    Always empty when ``include_original_train_problems`` is False.
+    """
 
     def to_summary(self) -> dict[str, typing.Any]:
         """Return a lightweight summary suitable for AggregatedResult persistence.
@@ -55,6 +63,10 @@ class GuardrailSplits:
             "train_record_count": len(self.guardrail_train),
             "valid_record_count": len(self.guardrail_valid),
             "test_record_count": len(self.guardrail_test),
+            "original_train_problem_ids": sorted(self.original_train_problem_ids),
+            "original_train_record_count": sum(
+                1 for rec in self.guardrail_train if rec.problem_id in self.original_train_problem_ids
+            ),
         }
 
 
@@ -120,6 +132,7 @@ def build_guardrail_splits(
         guardrail_valid_fraction=split_config.guardrail_valid_fraction,
         seed=split_config.seed,
         stratify_by_label=split_config.stratify_by_label,
+        include_original_train_problems=split_config.include_original_train_problems,
     )
 
 
@@ -129,10 +142,12 @@ def _assign_guardrail_subsets(
     guardrail_valid_fraction: float,
     seed: int,
     stratify_by_label: bool,
+    include_original_train_problems: bool = False,
 ) -> GuardrailSplits:
     """Assign records to guardrail train/valid/test based on original dataset splits.
 
-    Original train problems are discarded. Original test problems go to guardrail_test.
+    Original train problems are discarded by default, or included in guardrail_train when
+    ``include_original_train_problems`` is True. Original test problems go to guardrail_test.
     Original valid problems are re-split into guardrail_train and guardrail_valid.
 
     Args:
@@ -141,6 +156,8 @@ def _assign_guardrail_subsets(
         guardrail_valid_fraction: Fraction of original valid problems for guardrail_valid.
         seed: Random seed for the re-split.
         stratify_by_label: Whether to stratify the re-split by per-problem correctness rate.
+        include_original_train_problems: When True, include original train problems in
+            guardrail_train instead of discarding them.
 
     Returns:
         GuardrailSplits with records assigned to the three subsets.
@@ -180,10 +197,14 @@ def _assign_guardrail_subsets(
     original_valid_problems: list[str] = []
     test_problem_ids: set[str] = set()
     discarded_problem_ids: set[str] = set()
+    kept_original_train_problem_ids: set[str] = set()
     for problem_id in problem_to_records:
         original_subset = problem_to_original_subset[problem_id]
         if original_subset == "train":
-            discarded_problem_ids.add(problem_id)
+            if include_original_train_problems:
+                kept_original_train_problem_ids.add(problem_id)
+            else:
+                discarded_problem_ids.add(problem_id)
         elif original_subset == "test":
             test_problem_ids.add(problem_id)
         elif original_subset == "valid":
@@ -201,6 +222,7 @@ def _assign_guardrail_subsets(
         seed=seed,
         stratify_by_label=stratify_by_label,
     )
+    guardrail_train_ids |= kept_original_train_problem_ids
     # build record lists
     train_records: list[correctness_types.EvalRecord] = []
     for pid in guardrail_train_ids:
@@ -235,6 +257,7 @@ def _assign_guardrail_subsets(
         train_problem_ids=frozenset(guardrail_train_ids),
         valid_problem_ids=frozenset(guardrail_valid_ids),
         test_problem_ids=frozenset(test_problem_ids),
+        original_train_problem_ids=frozenset(kept_original_train_problem_ids),
     )
 
 

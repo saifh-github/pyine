@@ -303,6 +303,7 @@ config:
     split_config:
       split_source: /path/to/dataset/split/file.bin
       guardrail_valid_fraction: 0.5
+      # include_original_train_problems: true  # opt-in: use original train data too
     resampling:  # optional
       target_positive_ratio: 0.5
 ```
