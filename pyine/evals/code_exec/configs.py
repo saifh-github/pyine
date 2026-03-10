@@ -369,7 +369,7 @@ def get_evals_configs(group: str) -> list[pyine.configs.schemas.ConfigDescriptio
         CodeExecEvalsConfig,
         name="code_exec_base",
         group=group,
-        description="Code execution evaluation settings (with OpenAI gpt-5-nano as default grader and tier4 limits).",
+        description="Code execution evaluation settings (hard/soft match only, no LLM grading by default).",
         config={
             "evaluator_kwargs": {
                 "add_idempotency_header": True,  # to mark all requests as unique and avoid retry issues
@@ -380,7 +380,8 @@ def get_evals_configs(group: str) -> list[pyine.configs.schemas.ConfigDescriptio
             "hydra_convert": "object",
             "hydra_defaults": [
                 "_self_",
-                {"evaluator_kwargs/llm_provider_config": "openai_gpt5nano_scoring"},  # imported below
+                # to enable LLM grading, uncomment the line below (requires OpenAI API key):
+                # {"evaluator_kwargs/llm_provider_config": "openai_gpt5nano_scoring"},
             ],
         },
     )
