@@ -65,8 +65,8 @@ class TestRecordCategoryConfig:
 class TestGetEvalsConfigs:
     def test_total_config_count(self) -> None:
         configs = correctness_configs.get_evals_configs("test_group")
-        # 4 base configs + 7 presets * 2 groups = 18 total
-        assert len(configs) == 18
+        # 4 base configs + 8 presets * 2 groups = 20 total
+        assert len(configs) == 20
 
     def test_split_source_prefills_nested_datamodule_config(self) -> None:
         configs = correctness_configs.get_evals_configs("test_group", split_source="TACO")
@@ -94,6 +94,7 @@ class TestGetEvalsConfigs:
             "original_only",
             "mostly_original",
             "helpful_bias",
+            "balanced_helpful_bias",
             "skewed_pos_helpful_bias",
             "oversample_balanced",
         }
@@ -188,8 +189,8 @@ class TestCorrectnessEvalsConfig:
 class TestGetDatamoduleConfigs:
     def test_total_config_count(self) -> None:
         configs = correctness_configs.get_datamodule_configs("test_group")
-        # 1 base config + 1 base resampling config + 7 presets = 9 total
-        assert len(configs) == 9
+        # 1 base config + 1 base resampling config + 8 presets = 10 total
+        assert len(configs) == 10
 
     def test_split_source_prefills_base_datamodule_config(self) -> None:
         configs = correctness_configs.get_datamodule_configs("test_group", split_source="TACO")
