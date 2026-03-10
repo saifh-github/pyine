@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import datetime
-import pathlib
 import typing
 
 import pytest
 
 import pyine.evals.analysis_common
+
+if typing.TYPE_CHECKING:
+    import pathlib
 
 
 class MockWandBRun:
@@ -188,11 +190,11 @@ class TestBuildRunInfoFromMetadata:
         assert info.run_name == "custom-name"
         assert info.run_group == "custom-group"
 
-    def test_nonexistent_source_path_raises(self) -> None:
+    def test_nonexistent_source_path_raises(self, tmp_path: pathlib.Path) -> None:
         metadata: dict[str, typing.Any] = {}
         with pytest.raises(FileNotFoundError, match="does not exist"):
             pyine.evals.analysis_common.build_run_info_from_metadata(
-                metadata, "test", source_path=pathlib.Path("/nonexistent/path.pkl")
+                metadata, "test", source_path=tmp_path / "nonexistent" / "path.pkl"
             )
 
     def test_empty_subset_name_raises(self) -> None:

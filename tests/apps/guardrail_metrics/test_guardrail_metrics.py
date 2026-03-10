@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import pathlib
 import typing
 from unittest.mock import MagicMock
 
@@ -23,6 +22,9 @@ from pyine.apps.guardrail_metrics.guardrail_metrics import (
 from pyine.apps.guardrail_metrics.guardrail_metrics_configs import (
     GuardrailMetricsAppMainConfig,
 )
+
+if typing.TYPE_CHECKING:
+    import pathlib
 
 # ---------------------------------------------------------------------------
 # Mock connector for testing the generic runner
@@ -168,10 +170,10 @@ class TestProbeCheckpointLoading:
         )
         assert not loaded.training
 
-    def test_load_from_checkpoint_missing_dir(self) -> None:
+    def test_load_from_checkpoint_missing_dir(self, tmp_path: pathlib.Path) -> None:
         with pytest.raises(FileNotFoundError, match="not found"):
             pyine.guardrails.probes.collection.ProbeCollection.load_from_checkpoint(
-                pathlib.Path("/nonexistent/dir"),
+                tmp_path / "nonexistent" / "dir",
                 64,
             )
 

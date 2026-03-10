@@ -17,6 +17,8 @@ import pyine.organisms.models.rewards.terms
 from tests.organisms.models.rewards.conftest import make_sample_data
 
 if typing.TYPE_CHECKING:
+    import pathlib
+
     import pytest_mock
 
 
@@ -275,9 +277,9 @@ class TestModelLoading:
         assert scaler._model is not None
         assert scaler._positive_class_idx == 1
 
-    def test_invalid_checkpoint_path_raises(self) -> None:
+    def test_invalid_checkpoint_path_raises(self, tmp_path: pathlib.Path) -> None:
         config = reward_configs.CorrectnessClassifierScalingConfig.model_validate(
-            {"checkpoint_path": "/nonexistent/path/to/checkpoint", "device": "cpu"}
+            {"checkpoint_path": str(tmp_path / "nonexistent" / "checkpoint"), "device": "cpu"}
         )
         scaler = cs_mod.CorrectnessClassifierScaler(config)
         with pytest.raises(ValueError, match="not an existing directory"):
