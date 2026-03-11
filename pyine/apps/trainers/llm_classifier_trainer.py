@@ -415,15 +415,24 @@ def classifier_train(
     )
 
     # --- 7. Optionally compute class weights for imbalanced data ---
+    assert config.num_labels == 2, "rebalancing code below only supports two classes"
+    assert config.id2label[1] == "correct", "rebalancing code below expects label 1 = correct"
+    train_labels = np.array(raw_ds["train"]["label"])  # pyright: ignore[reportUnknownArgumentType, reportUnknownVariableType]  # datasets stubs
+    n_train = len(train_labels)  # pyright: ignore[reportUnknownArgumentType]
+    n_pos = int(train_labels.sum())  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
+    n_neg = n_train - n_pos
+    pos_ratio = n_pos / n_train if n_train > 0 else 0.0
+    logger.info(
+        f"training class distribution: {n_train} samples, "
+        f"pos={n_pos} ({pos_ratio:.3f}), neg={n_neg} ({1 - pos_ratio:.3f})"
+    )
     trainer_cls: type[transformers.Trainer] = transformers.Trainer
     trainer_kwargs: dict[str, typing.Any] = {}
     if config.class_weight_mode == "balanced":
-        train_labels = np.array(raw_ds["train"]["label"])  # pyright: ignore[reportUnknownArgumentType, reportUnknownVariableType]  # datasets stubs
-        class_counts = np.bincount(train_labels, minlength=config.num_labels)  # pyright: ignore[reportUnknownArgumentType]
-        n_train = len(train_labels)  # pyright: ignore[reportUnknownArgumentType]
-        class_weights = n_train / (config.num_labels * class_counts.clip(min=1))
-        logger.info("Using balanced class weights: %s", class_weights)
-        trainer_kwargs["class_weights"] = torch.tensor(class_weights, dtype=torch.float32)
+        class_weights = torch.tensor([pos_ratio, 1 - pos_ratio], dtype=torch.float32)
+        class_weights = class_weights / class_weights.mean()  # normalize so mean weight = 1
+        logger.info(f"using balanced class weights (inverse-frequency): {class_weights.tolist()}")
+        trainer_kwargs["class_weights"] = class_weights
         trainer_cls = WeightedLossTrainer
 
     trainer = trainer_cls(

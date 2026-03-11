@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import pathlib  # noqa: TC003
 import typing
+import warnings
 
 import peft
 import pydantic
@@ -210,8 +211,6 @@ class LLMClassifierTrainerAppMainConfig(common.AppMainConfig, common.ModelTokeni
     def _validate_class_weight_with_label_balance(self) -> LLMClassifierTrainerAppMainConfig:
         label_balance = getattr(self.datamodule_config, "label_balance", None)
         if self.class_weight_mode == "balanced" and label_balance is not None:
-            import warnings
-
             warnings.warn(
                 "Both class_weight_mode='balanced' and datamodule_config.label_balance "
                 "are active. This applies double correction for class imbalance "
