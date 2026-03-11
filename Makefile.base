@@ -221,8 +221,8 @@ format: check-uv ## Performs code reformatting using ruff
 	uv run ruff format $(SRC_DIR) $(TEST_DIR)
 	uv run ruff check --fix $(SRC_DIR) $(TEST_DIR)
 
-test tests: check-uv ## Runs quick tests (excludes slow tests and integration tests)
-	uv run pytest $(TEST_DIR) -m "not (slow or integration)"
+test tests: check-uv ## Runs quick tests (excludes slow, integration, and openai tests)
+	uv run pytest $(TEST_DIR) -m "not (slow or integration or openai)"
 
 test-integration tests-integration: check-uv ## Runs integration tests only
 	uv run pytest $(TEST_DIR) -m "integration"
@@ -230,8 +230,8 @@ test-integration tests-integration: check-uv ## Runs integration tests only
 test-slow tests-slow: check-uv ## Runs slow tests only
 	uv run pytest $(TEST_DIR) -m "slow"
 
-test-all tests-all test-full tests-full: check-uv ## Runs all tests (with any marker)
-	uv run pytest $(TEST_DIR) -v
+test-all tests-all test-full tests-full: check-uv ## Runs all tests (excludes openai tests)
+	uv run pytest $(TEST_DIR) -v -m "not openai"
 
 check: lint test ## Runs quality control checks (linting + tests)
 
