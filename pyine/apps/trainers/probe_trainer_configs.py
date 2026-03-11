@@ -87,6 +87,8 @@ class ProbeTrainerAppMainConfig(common.AppMainConfig, common.ModelTokenizerConfi
     """
     gradient_accumulation_steps: int = 1
     """Number of gradient accumulation steps before optimizer update."""
+    max_grad_norm: float = 1.0
+    """Maximum gradient norm for clipping. Set to 0 to disable. Matches default used in other trainer apps."""
     logging_steps: int = 10
     eval_steps: int = -1
     """Run validation every N optimizer steps. -1 = only at epoch end."""
@@ -199,6 +201,17 @@ class ProbeTrainerAppMainConfig(common.AppMainConfig, common.ModelTokenizerConfi
                 f"config.text_field={self.text_field!r} does not match "
                 f"config.evals_config.text_field={evals_text_field!r}; "
                 "use the same text field for training and correctness evaluation"
+            )
+        return self
+
+    @pydantic.model_validator(mode="after")
+    def _validate_evals_require_best_checkpoint(self) -> ProbeTrainerAppMainConfig:
+        if self.evals_config is not None and not self.save_best_probe_checkpoint:
+            raise ValueError(
+                "evals_config is set but save_best_probe_checkpoint=False; "
+                "post-training evaluation requires best probe checkpoints to be saved "
+                "so the best (not last) probes are used for benchmarking. "
+                "Set save_best_probe_checkpoint=True or remove evals_config."
             )
         return self
 

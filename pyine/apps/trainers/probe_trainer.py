@@ -32,6 +32,7 @@ import pyine.evals.correctness.scorers as correctness_scorers
 import pyine.guardrails.probes.collection
 import pyine.guardrails.probes.extraction
 import pyine.utils.distrib  # pyright: ignore[reportUnusedImport]
+import pyine.utils.reprod
 import pyine.utils.transformers.data
 
 if typing.TYPE_CHECKING:
@@ -826,14 +827,21 @@ def probe_train(
     input_formatting_mode = "chat_template" if has_chat_template else "role_tagged_text"
     logger.info(
         f"probe inputs: text_field={config.text_field}, truncation_side={tokenizer.truncation_side}, "
-        f"input_formatting_mode={input_formatting_mode}, add_special_tokens={not has_chat_template}"
+        f"input_formatting_mode={input_formatting_mode}, add_special_tokens=False"
     )
     if runtime is not None and runtime.wandb_run is not None:
         runtime.wandb_run.summary["probe/text_field"] = config.text_field  # type: ignore[reportUnknownMemberType]
         runtime.wandb_run.summary["probe/truncation_side"] = tokenizer.truncation_side  # type: ignore[reportUnknownMemberType]
         runtime.wandb_run.summary["probe/input_formatting_mode"] = input_formatting_mode  # type: ignore[reportUnknownMemberType]
-        runtime.wandb_run.summary["probe/add_special_tokens"] = not has_chat_template  # type: ignore[reportUnknownMemberType]
+        runtime.wandb_run.summary["probe/add_special_tokens"] = False  # type: ignore[reportUnknownMemberType]
     raw_ds = pyine.apps.trainers.common.apply_messages_formatting(raw_ds, tokenizer)
+    # _tokenize_split hardcodes add_special_tokens=False, which is correct when text is already
+    # chat-template-formatted (special tokens are baked in). If the tokenizer lacks a chat template,
+    # apply_messages_formatting falls back to role-tagged text and special tokens would be missing.
+    assert has_chat_template, (
+        f"probe tokenization requires a chat template (tokenizer={tokenizer.name_or_path}); "
+        "add_special_tokens=False would produce inputs without BOS/EOS tokens"
+    )
     train_ds = _tokenize_split(raw_ds["train"], tokenizer, config.max_seq_length, code_type_to_id)
     valid_ds = _tokenize_split(raw_ds["valid"], tokenizer, config.max_seq_length, code_type_to_id)
     _validate_best_probe_checkpoint_preconditions(config, valid_ds)
@@ -877,15 +885,19 @@ def probe_train(
     )
 
     # --- 6. Training loop ---
-    # optionally compute pos_weight for class-balanced BCE loss
+    # seed RNG for reproducible dataloader ordering / dropout
+    pyine.utils.reprod.set_seed(seed=runtime.seed if runtime is not None else None)
+    # validation always uses unweighted loss so metrics are comparable across runs
+    valid_loss_fn = torch.nn.BCEWithLogitsLoss()
     if config.class_weight_mode == "balanced":
+        # optionally compute pos_weight for class-balanced BCE loss
         train_labels = typing.cast("list[int]", raw_ds["train"]["label"])
         pw = pyine.apps.trainers.common.compute_binary_pos_weight(train_labels)
         pos_weight = torch.tensor([pw], dtype=torch.float32, device=accelerator.device)
         logger.info(f"using balanced BCE pos_weight={pos_weight.item():.4f}")
-        loss_fn = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+        train_loss_fn = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight)
     else:
-        loss_fn = torch.nn.BCEWithLogitsLoss()
+        train_loss_fn = torch.nn.BCEWithLogitsLoss()
     global_step = 0
     final_metrics: dict[str, dict[str, float]] = {}
     best_probe_records: dict[str, dict[str, typing.Any]] = {}
@@ -913,11 +925,13 @@ def probe_train(
                 per_probe_losses: dict[str, torch.Tensor] = {}
                 total_loss = torch.tensor(0.0, device=accelerator.device)
                 for name, logits in probe_logits.items():
-                    loss = loss_fn(logits.squeeze(-1), labels.float())
+                    loss = train_loss_fn(logits.squeeze(-1), labels.float())
                     per_probe_losses[name] = loss
                     total_loss = total_loss + loss
 
                 accelerator.backward(total_loss)  # pyright: ignore[reportUnknownMemberType]  # accelerate stubs
+                if config.max_grad_norm > 0:
+                    accelerator.clip_grad_norm_(probe_collection.parameters(), config.max_grad_norm)  # pyright: ignore[reportUnknownMemberType]  # accelerate stubs
                 optimizer.step()  # pyright: ignore[reportUnknownMemberType]  # torch stubs
                 optimizer.zero_grad()
 
@@ -978,7 +992,7 @@ def probe_train(
                         model,
                         extractor,
                         valid_loader,
-                        loss_fn,
+                        valid_loss_fn,
                         global_step,
                         accelerator,
                         runtime,
@@ -1018,7 +1032,7 @@ def probe_train(
             model,
             extractor,
             valid_loader,
-            loss_fn,
+            valid_loss_fn,
             global_step,
             accelerator,
             runtime,
