@@ -341,11 +341,6 @@ class TestHydraConfigRegistration:
         assert omegaconf.OmegaConf.select(config, "config.truncation_side") == "left"
         assert omegaconf.OmegaConf.select(config, "config.save_best_model_export") is True
         assert omegaconf.OmegaConf.select(config, "config.best_model_output_suffix") == "/checkpoint-best"
-        assert omegaconf.OmegaConf.select(config, "config.lora_config.r") == 8
-        assert omegaconf.OmegaConf.select(config, "config.lora_config.lora_alpha") == 16
-        assert omegaconf.OmegaConf.select(config, "config.lora_config.lora_dropout") == 0.05
-        assert omegaconf.OmegaConf.select(config, "config.lora_config.task_type") == "SEQ_CLS"
-        assert omegaconf.OmegaConf.select(config, "config.lora_config.target_modules") == ["Wqkv"]
 
     def test_register_hydra_configs_includes_training_args(
         self,

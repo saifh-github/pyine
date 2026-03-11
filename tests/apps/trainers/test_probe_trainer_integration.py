@@ -65,6 +65,7 @@ class TestProbeTrainerIntegration:
         runtime.output_dir = str(tmp_path / "output")
         runtime.wandb_run = None
         runtime.dry_run = False
+        runtime.seed = 42
 
         pathlib.Path(runtime.output_dir).mkdir(parents=True, exist_ok=True)
 
