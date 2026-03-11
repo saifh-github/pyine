@@ -64,6 +64,8 @@ class CorrectnessDataModule(pyine.data.datamodule.BaseDataModule["CorrectnessDat
         self._resolved_lmdb_paths: list[pathlib.Path] | None = None
         self._all_records: list[correctness_types.EvalRecord] | None = None
         self._guardrail_splits: correctness_splits.GuardrailSplits | None = None
+        self._resampled_train: list[correctness_types.EvalRecord] | None = None
+        self._resampled_valid: list[correctness_types.EvalRecord] | None = None
         self._code_type_to_id: dict[str, int] | None = None
         self._id_to_code_type: dict[int, str] | None = None
 
@@ -128,6 +130,8 @@ class CorrectnessDataModule(pyine.data.datamodule.BaseDataModule["CorrectnessDat
         self._resolved_lmdb_paths = None
         self._all_records = None
         self._guardrail_splits = None
+        self._resampled_train = None
+        self._resampled_valid = None
         self._code_type_to_id = None
         self._id_to_code_type = None
 
@@ -191,30 +195,38 @@ class CorrectnessDataModule(pyine.data.datamodule.BaseDataModule["CorrectnessDat
     def get_records_for_training(self) -> list[correctness_types.EvalRecord]:
         """Return guardrail_train records, resampled if ``config.resampling`` is set.
 
+        Results are cached after the first call to avoid redundant resampling and logging.
+
         Raises:
             RuntimeError: If called before ``setup()``.
         """
+        if self._resampled_train is not None:
+            return self._resampled_train
         records = self.get_records_for_subset("guardrail_train")
         if self.config.resampling is not None and not self.config.resampling.is_noop:
             import pyine.evals.correctness.resampling as correctness_resampling
 
             records = correctness_resampling.resample_records(records, self.config.resampling, "train")
+        self._resampled_train = records
         return records
 
     def get_records_for_validation(self) -> list[correctness_types.EvalRecord]:
         """Return guardrail_valid records, resampled if ``config.resampling`` is set.
 
         Applies the same resampling as ``get_records_for_training()`` to ensure training and
-        validation distributions are consistent.
+        validation distributions are consistent. Results are cached after the first call.
 
         Raises:
             RuntimeError: If called before ``setup()``.
         """
+        if self._resampled_valid is not None:
+            return self._resampled_valid
         records = self.get_records_for_subset("guardrail_valid")
         if self.config.resampling is not None and not self.config.resampling.is_noop:
             import pyine.evals.correctness.resampling as correctness_resampling
 
             records = correctness_resampling.resample_records(records, self.config.resampling, "valid")
+        self._resampled_valid = records
         return records
 
     def get_all_records(self) -> list[correctness_types.EvalRecord]:
