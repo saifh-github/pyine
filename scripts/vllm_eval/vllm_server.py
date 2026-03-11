@@ -204,6 +204,9 @@ def start_vllm_server(
     # Always set the served model name
     cmd_parts.extend(["--served-model-name", model_name])
 
+    # Performance defaults: disable per-request/stats logging and enable prefix caching
+    cmd_parts.extend(["--disable-log-requests", "--disable-log-stats", "--enable-prefix-caching"])
+
     if extra_args:
         cmd_parts.extend(extra_args)
 
