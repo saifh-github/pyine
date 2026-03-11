@@ -17,6 +17,7 @@ import pytest
 import torch
 import transformers
 
+import pyine.apps.trainers.common
 import pyine.apps.trainers.llm_classifier_trainer as llm_trainer
 from pyine.apps.trainers.llm_classifier_trainer_configs import (
     LLMClassifierTrainerAppMainConfig,
@@ -371,7 +372,7 @@ class TestWeightedLossTrainer:
 
 
 class TestLogClassDistribution:
-    """Tests for the class distribution logging function."""
+    """Tests for the shared class distribution logging function (in common module)."""
 
     def test_logs_both_splits(self) -> None:
         mock_logger = MagicMock()
@@ -381,7 +382,7 @@ class TestLogClassDistribution:
                 "valid": datasets.Dataset.from_dict({"label": [0, 1]}),
             }
         )
-        llm_trainer._log_class_distribution(ds_dict, mock_logger)
+        pyine.apps.trainers.common.log_class_distribution(ds_dict, mock_logger)
         logged_messages = " ".join(str(call) for call in mock_logger.info.call_args_list)
         assert "train" in logged_messages
         assert "valid" in logged_messages
@@ -393,13 +394,11 @@ class TestLogClassDistribution:
                 "train": datasets.Dataset.from_dict({"label": [0, 0, 0, 1]}),
             }
         )
-        llm_trainer._log_class_distribution(ds_dict, mock_logger)
+        pyine.apps.trainers.common.log_class_distribution(ds_dict, mock_logger)
         assert mock_logger.info.call_count == 1
-        call_args = mock_logger.info.call_args
-        # _log_class_distribution uses:
-        # log.info("%s split: %d samples (pos=%d, neg=%d, ...)", split, n, pos, neg, ratio)
-        assert call_args[0][3] == 1  # n_pos
-        assert call_args[0][4] == 3  # n_neg
+        logged_msg = mock_logger.info.call_args[0][0]
+        assert "pos=1" in logged_msg
+        assert "neg=3" in logged_msg
 
 
 class TestBestModelExport:
@@ -562,8 +561,12 @@ class TestSkipTrainingClassifierTrainer:
                 "per_device_eval_batch_size": 2,
                 "report_to": "none",
                 "use_cpu": True,
+                "eval_strategy": "no",
+                "save_strategy": "no",
+                "load_best_model_at_end": False,
             },
             max_seq_length=64,
+            save_best_model_export=False,
         )
         # should complete without error (no evals_config -> just loads model and returns)
         asyncio.run(llm_trainer.main(config=skip_cfg, runtime=None, skip_training=True))
@@ -751,8 +754,12 @@ class TestClassifierTrainIntegration:
                 "per_device_eval_batch_size": 2,
                 "report_to": "none",
                 "use_cpu": True,
+                "eval_strategy": "no",
+                "save_strategy": "no",
+                "load_best_model_at_end": False,
             },
             max_seq_length=64,
+            save_best_model_export=False,
             lora_config=peft.LoraConfig(
                 r=4,
                 lora_alpha=8,

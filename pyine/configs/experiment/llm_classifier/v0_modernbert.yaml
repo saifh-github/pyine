@@ -10,7 +10,8 @@ defaults:
   - /config/evals_config: correctness_taco_base
   - override /config: base
   - override /config/datamodule_config: correctness_taco_base
-  - override /config/datamodule_config/resampling: skewed_moderate_bias
+  - override /config/datamodule_config/resampling: skewed_weak_bias
+  - override /config/evals_config/calibration_resampling: skewed_weak_bias
   - override /config/training_args_config: train_default
   - _self_
 

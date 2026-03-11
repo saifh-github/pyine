@@ -164,28 +164,6 @@ def _tokenize_for_classification(
     return dataset.map(_tokenize, batched=True, remove_columns=remove_cols)  # pyright: ignore[reportUnknownMemberType]  # datasets stubs
 
 
-def _log_class_distribution(
-    dataset_dict: datasets.DatasetDict,
-    log: logging.Logger,
-) -> None:
-    """Log label counts and class balance for train/valid splits."""
-    for split_name in ("train", "valid"):
-        if split_name not in dataset_dict:
-            continue
-        labels = typing.cast("list[int]", dataset_dict[split_name]["label"])
-        n_pos = sum(labels)
-        n_neg = len(labels) - n_pos
-        ratio = n_pos / len(labels) if len(labels) > 0 else 0.0
-        log.info(
-            "%s split: %d samples (pos=%d, neg=%d, pos_ratio=%.3f)",
-            split_name,
-            len(labels),
-            n_pos,
-            n_neg,
-            ratio,
-        )
-
-
 def _add_per_code_type_metrics(
     metrics: dict[str, float],
     labels: np.ndarray[typing.Any, typing.Any],
@@ -359,7 +337,7 @@ def classifier_train(
     id_to_code_type = typing.cast("dict[int, str]", datamodule.id_to_code_type)  # pyright: ignore[reportUnknownMemberType,reportAttributeAccessIssue]
 
     # --- 4. Log class distribution (always, regardless of class_weight_mode) ---
-    _log_class_distribution(raw_ds, logger)
+    pyine.apps.trainers.common.log_class_distribution(raw_ds, logger)
 
     # --- 5. Format messages -> text (chat template if available, else plain concat), then tokenize ---
     has_chat_template = pyine.utils.transformers.data.tokenizer_has_chat_template(tokenizer)
@@ -420,14 +398,12 @@ def classifier_train(
     train_labels = np.array(raw_ds["train"]["label"])  # type: ignore  # datasets stubs
     n_train, n_pos = len(train_labels), int(train_labels.sum())  # type: ignore
     n_neg = n_train - n_pos
-    pos_ratio = n_pos / n_train if n_train > 0 else 0.0
-    logger.info(
-        f"training class distribution: {n_train} samples, "
-        f"pos={n_pos} ({pos_ratio:.3f}), neg={n_neg} ({1 - pos_ratio:.3f})"
-    )
+    pos_ratio = n_pos / n_train
     trainer_cls: type[transformers.Trainer] = transformers.Trainer
     trainer_kwargs: dict[str, typing.Any] = {}
     if config.class_weight_mode == "balanced":
+        if n_pos == 0 or n_neg == 0:
+            raise ValueError(f"need both classes for balanced weighting (pos={n_pos}, neg={n_neg})")
         class_weights = torch.tensor([pos_ratio, 1 - pos_ratio], dtype=torch.float32)
         class_weights = class_weights / class_weights.mean()  # normalize so mean weight = 1
         logger.info(f"using balanced class weights (inverse-frequency): {class_weights.tolist()}")  # type: ignore

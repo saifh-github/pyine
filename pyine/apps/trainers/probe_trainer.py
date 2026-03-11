@@ -812,6 +812,7 @@ def probe_train(
     code_type_to_id = typing.cast("dict[str, int]", datamodule.code_type_to_id)  # pyright: ignore[reportUnknownMemberType,reportAttributeAccessIssue]
     id_to_code_type = typing.cast("dict[int, str]", datamodule.id_to_code_type)  # pyright: ignore[reportUnknownMemberType,reportAttributeAccessIssue]
 
+    pyine.apps.trainers.common.log_class_distribution(raw_ds, logger)
     if accelerator.is_main_process:
         for split_name in ["train", "valid"]:
             code_types = typing.cast("list[str]", raw_ds[split_name]["code_type"])  # pyright: ignore[reportIndexIssue]  # datasets stubs
@@ -876,7 +877,15 @@ def probe_train(
     )
 
     # --- 6. Training loop ---
-    loss_fn = torch.nn.BCEWithLogitsLoss()
+    # optionally compute pos_weight for class-balanced BCE loss
+    if config.class_weight_mode == "balanced":
+        train_labels = typing.cast("list[int]", raw_ds["train"]["label"])
+        pw = pyine.apps.trainers.common.compute_binary_pos_weight(train_labels)
+        pos_weight = torch.tensor([pw], dtype=torch.float32, device=accelerator.device)
+        logger.info(f"using balanced BCE pos_weight={pos_weight.item():.4f}")
+        loss_fn = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+    else:
+        loss_fn = torch.nn.BCEWithLogitsLoss()
     global_step = 0
     final_metrics: dict[str, dict[str, float]] = {}
     best_probe_records: dict[str, dict[str, typing.Any]] = {}

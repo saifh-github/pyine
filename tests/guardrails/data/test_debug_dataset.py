@@ -171,11 +171,11 @@ class TestBuildGuardrailSplitsWithDebugData:
         lmdb_path = tmp_path / "debug.lmdb"
         split_path = tmp_path / "split.json"
 
-        create_debug_probe_lmdb(lmdb_path, n_train=20, n_eval_families=10, n_test_families=5)
+        create_debug_probe_lmdb(lmdb_path, n_train=20, n_eval_families=30, n_test_families=5)
         create_debug_split_file(
             split_path,
             n_train=20,
-            n_eval_families=10,
+            n_eval_families=30,
             n_test_families=5,
         )
 

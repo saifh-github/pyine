@@ -209,15 +209,23 @@ class LLMClassifierTrainerAppMainConfig(common.AppMainConfig, common.ModelTokeni
 
     @pydantic.model_validator(mode="after")
     def _validate_class_weight_with_label_balance(self) -> LLMClassifierTrainerAppMainConfig:
+        # note: only checks label_balance (ProbeDataModule / LMDB). The CorrectnessDataModule
+        # uses 'resampling' for distribution shaping, which is not a label-balance mechanism
+        # and does not cause double correction with class_weight_mode.
         label_balance = getattr(self.datamodule_config, "label_balance", None)
         if self.class_weight_mode == "balanced" and label_balance is not None:
             warnings.warn(
-                "Both class_weight_mode='balanced' and datamodule_config.label_balance "
-                "are active. This applies double correction for class imbalance "
-                "(resampling + weighted loss). This is usually undesirable - consider "
-                "using only one.",
+                "Both class_weight_mode='balanced' and datamodule_config.label_balance are active. "
+                "This applies double correction for class imbalance (resampling + weighted loss). "
+                "This is probably undesirable; consider using only one.",
                 stacklevel=2,
             )
+        return self
+
+    @pydantic.model_validator(mode="after")
+    def _validate_calibration_resampling_matches_training(self) -> LLMClassifierTrainerAppMainConfig:
+        if self.evals_config is not None:
+            common.warn_on_calibration_resampling_mismatch(self.datamodule_config, self.evals_config)
         return self
 
     @pydantic.model_validator(mode="after")

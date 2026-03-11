@@ -13,6 +13,7 @@ import shutil
 import sys
 import time
 import typing
+import warnings
 
 import datasets as hf_datasets  # noqa: TC002
 import deepdiff
@@ -115,6 +116,81 @@ def apply_messages_formatting(
             desc="formatting messages to text",
         )
     return result
+
+
+def log_class_distribution(
+    dataset_dict: hf_datasets.DatasetDict,
+    log: logging.Logger,
+) -> None:
+    """Log label counts and class balance for train/valid splits."""
+    for split_name in ("train", "valid"):
+        if split_name not in dataset_dict:
+            continue
+        labels = typing.cast("list[int]", dataset_dict[split_name]["label"])
+        n_total = len(labels)
+        if n_total == 0:
+            raise ValueError(f"{split_name} split is empty")
+        n_pos = sum(labels)
+        n_neg = n_total - n_pos
+        pos_ratio = n_pos / n_total
+        log.info(
+            f"{split_name} split: {n_total} samples (pos={n_pos} ({pos_ratio:.3f}), neg={n_neg} ({1 - pos_ratio:.3f}))"
+        )
+
+
+def compute_binary_pos_weight(
+    labels: typing.Sequence[int],
+) -> float:
+    """Compute BCE pos_weight for class-balanced binary classification.
+
+    Returns ``n_neg / n_pos`` so that the total effective contribution of each class is equal.
+    Raises if fewer than two classes are present.
+    """
+    n_total = len(labels)
+    n_pos = sum(labels)
+    n_neg = n_total - n_pos
+    if n_pos == 0 or n_neg == 0:
+        raise ValueError(f"need both classes for balanced weighting (pos={n_pos}, neg={n_neg})")
+    return n_neg / n_pos
+
+
+def warn_on_calibration_resampling_mismatch(
+    datamodule_config: typing.Any,
+    evals_config: typing.Any,
+) -> None:
+    """Warn when training and calibration resampling configs are inconsistent.
+
+    Checks three mismatch cases:
+    1. Training resampling active, calibration is not (or noop).
+    2. Calibration resampling active, training is not (or noop).
+    3. Both active but configured differently.
+    """
+    training_resampling = getattr(datamodule_config, "resampling", None)
+    calibration_resampling = getattr(evals_config, "calibration_resampling", None)
+    training_active = training_resampling is not None and not training_resampling.is_noop
+    calibration_active = calibration_resampling is not None and not calibration_resampling.is_noop
+    if training_active and not calibration_active:
+        warnings.warn(
+            "datamodule_config.resampling is active but evals_config.calibration_resampling "
+            "is not; the calibration set will use the natural class distribution instead of "
+            "matching the training data composition. Set calibration_resampling to the same "
+            "preset as the training resampling to ensure consistent evaluation.",
+            stacklevel=2,
+        )
+    elif calibration_active and not training_active:
+        warnings.warn(
+            "evals_config.calibration_resampling is active but datamodule_config.resampling "
+            "is not; the calibration set will be resampled while training data uses the "
+            "natural distribution. This mismatch is probably unintentional.",
+            stacklevel=2,
+        )
+    elif training_active and calibration_active and training_resampling != calibration_resampling:
+        warnings.warn(
+            "datamodule_config.resampling and evals_config.calibration_resampling are both "
+            "active but differ; the calibration set will use a different distribution than "
+            "training. This is probably unintentional; use the same resampling preset for both.",
+            stacklevel=2,
+        )
 
 
 def resolve_attn_implementation(

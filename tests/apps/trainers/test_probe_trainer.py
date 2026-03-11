@@ -15,6 +15,7 @@ import datasets
 import pytest
 import torch
 
+import pyine.apps.trainers.common
 import pyine.apps.trainers.probe_trainer
 import pyine.guardrails.probes
 import pyine.guardrails.probes.base
@@ -119,6 +120,29 @@ class TestProbeTrainUnit:
         assert final_loss < initial_loss, f"Loss did not decrease: {initial_loss} -> {final_loss}"
 
         extractor.remove_hooks()
+
+
+class TestBalancedClassWeight:
+    """Tests for compute_binary_pos_weight used by probe_train's class_weight_mode='balanced'."""
+
+    def test_balanced_pos_weight(self) -> None:
+        n_neg, n_pos = 14, 6  # 70/30 split
+        labels = [0] * n_neg + [1] * n_pos
+        pw = pyine.apps.trainers.common.compute_binary_pos_weight(labels)
+        assert pw == pytest.approx(n_neg / n_pos)
+
+    def test_balanced_equal_classes(self) -> None:
+        labels = [0] * 10 + [1] * 10
+        pw = pyine.apps.trainers.common.compute_binary_pos_weight(labels)
+        assert pw == pytest.approx(1.0)
+
+    def test_balanced_raises_on_all_negative(self) -> None:
+        with pytest.raises(ValueError, match="need both classes"):
+            pyine.apps.trainers.common.compute_binary_pos_weight([0, 0, 0, 0, 0])
+
+    def test_balanced_raises_on_all_positive(self) -> None:
+        with pytest.raises(ValueError, match="need both classes"):
+            pyine.apps.trainers.common.compute_binary_pos_weight([1, 1, 1])
 
 
 class TestGetModuleDevice:

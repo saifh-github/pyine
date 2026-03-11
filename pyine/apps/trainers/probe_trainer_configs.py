@@ -92,6 +92,16 @@ class ProbeTrainerAppMainConfig(common.AppMainConfig, common.ModelTokenizerConfi
     """Run validation every N optimizer steps. -1 = only at epoch end."""
     dataloader_num_workers: int = 4
 
+    # --- Class imbalance ---
+    class_weight_mode: typing.Literal["none", "balanced"] = "none"
+    """How to handle class imbalance in the loss function.
+
+    'none' = standard BCEWithLogitsLoss. 'balanced' = compute pos_weight inversely proportional to
+    positive class frequency and pass it to BCEWithLogitsLoss. Label distribution is always logged
+    regardless of this setting. Note: this is separate from label balancing via datamodule_config
+    label_balance (which resamples the data). Using both simultaneously is usually undesirable.
+    """
+
     # --- Output ---
     save_probes: bool = True
     """Whether to save trained probe weights at the end of training."""
@@ -158,6 +168,27 @@ class ProbeTrainerAppMainConfig(common.AppMainConfig, common.ModelTokenizerConfi
                 "save_steps > 0 has no effect when save_probes=False",
                 stacklevel=2,
             )
+        return self
+
+    @pydantic.model_validator(mode="after")
+    def _validate_class_weight_with_label_balance(self) -> ProbeTrainerAppMainConfig:
+        # note: only checks label_balance (ProbeDataModule / LMDB). The CorrectnessDataModule
+        # uses 'resampling' for distribution shaping, which is not a label-balance mechanism
+        # and does not cause double correction with class_weight_mode.
+        label_balance = getattr(self.datamodule_config, "label_balance", None)
+        if self.class_weight_mode == "balanced" and label_balance is not None:
+            warnings.warn(
+                "Both class_weight_mode='balanced' and datamodule_config.label_balance are active. "
+                "This applies double correction for class imbalance (resampling + weighted loss). "
+                "This is probably undesirable; consider using only one.",
+                stacklevel=2,
+            )
+        return self
+
+    @pydantic.model_validator(mode="after")
+    def _validate_calibration_resampling_matches_training(self) -> ProbeTrainerAppMainConfig:
+        if self.evals_config is not None:
+            common.warn_on_calibration_resampling_mismatch(self.datamodule_config, self.evals_config)
         return self
 
     @pydantic.model_validator(mode="after")
