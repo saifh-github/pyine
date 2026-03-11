@@ -79,6 +79,12 @@ class ProbeTrainerAppMainConfig(common.AppMainConfig, common.ModelTokenizerConfi
     eval_batch_size: int = 8
     max_seq_length: int = 20000
     """Maximum sequence length for tokenization."""
+    truncation_side: typing.Literal["right", "left"] = "left"
+    """Which side to truncate when sequences exceed max_seq_length.
+
+    'left' preserves the assistant completion (end of sequence) which is typically
+    the content probes need to classify. 'right' preserves the prompt prefix instead.
+    """
     text_field: str = "model_output"
     """Which ``EvalRecord`` field to use as the assistant output when building model inputs.
 

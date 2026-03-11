@@ -822,6 +822,8 @@ def probe_train(
                 code_type_counts[code_type] = code_type_counts.get(code_type, 0) + 1
             logger.info(f"  {split_name} code_type distribution: {code_type_counts}")
 
+    # set truncation side before tokenization (left preserves the generated output at end of sequence)
+    tokenizer.truncation_side = config.truncation_side
     # format messages -> text (uses chat template if available, else role-tagged concatenation)
     has_chat_template = pyine.utils.transformers.data.tokenizer_has_chat_template(tokenizer)
     input_formatting_mode = "chat_template" if has_chat_template else "role_tagged_text"
