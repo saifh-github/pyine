@@ -366,9 +366,11 @@ def validate_probes(
         getattr(probe_collection, "module", probe_collection),
     )
     probes_dict = raw.probes
-    all_logits: dict[str, list[torch.Tensor]] = {name: [] for name in probes_dict}
-    all_labels: list[torch.Tensor] = []
-    all_code_type_ids: list[torch.Tensor] = []
+    # Gather per-batch inside the loop to avoid cross-rank tensor size mismatches that cause
+    # NCCL deadlocks when the validation set is not evenly divisible across ranks.
+    gathered_logits: dict[str, list[torch.Tensor]] = {name: [] for name in probes_dict}
+    gathered_labels: list[torch.Tensor] = []
+    gathered_code_type_ids: list[torch.Tensor] = []
 
     with torch.no_grad():
         for batch in valid_loader:
@@ -381,37 +383,38 @@ def validate_probes(
 
             probe_logits = probe_collection(activations, attention_mask)
             for name, logits in probe_logits.items():
-                all_logits[name].append(logits.squeeze(-1))
-            all_labels.append(labels)
+                gathered_logits[name].append(
+                    typing.cast(
+                        "torch.Tensor",
+                        accelerator.gather_for_metrics(logits.squeeze(-1)),  # pyright: ignore[reportUnknownMemberType]  # accelerate stubs
+                    )
+                )
+            gathered_labels.append(
+                typing.cast(
+                    "torch.Tensor",
+                    accelerator.gather_for_metrics(labels),  # pyright: ignore[reportUnknownMemberType]  # accelerate stubs
+                )
+            )
 
             if log_per_code_type_metrics and "code_type_id" in batch:
-                all_code_type_ids.append(batch["code_type_id"])
+                gathered_code_type_ids.append(
+                    typing.cast(
+                        "torch.Tensor",
+                        accelerator.gather_for_metrics(batch["code_type_id"]),  # pyright: ignore[reportUnknownMemberType]  # accelerate stubs
+                    )
+                )
 
-    # Gather across GPUs
-    gathered_logits: dict[str, torch.Tensor] = {}
-    for name in all_logits:
-        cat_logits = torch.cat(all_logits[name])
-        gathered_logits[name] = typing.cast(
-            "torch.Tensor",
-            accelerator.gather_for_metrics(cat_logits),  # pyright: ignore[reportUnknownMemberType]  # accelerate stubs
-        )
-    all_labels_cat = typing.cast(
-        "torch.Tensor",
-        accelerator.gather_for_metrics(torch.cat(all_labels)),  # pyright: ignore[reportUnknownMemberType]  # accelerate stubs
-    )
+    all_labels_cat = torch.cat(gathered_labels)
 
     gathered_ct_ids: torch.Tensor | None = None
-    if log_per_code_type_metrics and all_code_type_ids:
-        gathered_ct_ids = typing.cast(
-            "torch.Tensor",
-            accelerator.gather_for_metrics(torch.cat(all_code_type_ids)),  # pyright: ignore[reportUnknownMemberType]  # accelerate stubs
-        ).cpu()
+    if log_per_code_type_metrics and gathered_code_type_ids:
+        gathered_ct_ids = torch.cat(gathered_code_type_ids).cpu()
 
     # Compute metrics on main process
     metrics: dict[str, dict[str, float]] = {}
     if accelerator.is_main_process:
         for name in probes_dict:
-            logits_cpu = gathered_logits[name].float().cpu()
+            logits_cpu = torch.cat(gathered_logits[name]).float().cpu()
             labels_cpu = all_labels_cat.long().cpu()
 
             val_loss = loss_fn(logits_cpu, labels_cpu.float()).item()
