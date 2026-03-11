@@ -7,14 +7,17 @@
 #   Multi-GPU:   bash scripts/run_ddp.sh -- +experiment=probes/v0_probe
 
 defaults:
+  - /config/evals_config: correctness_taco_base
   - override /config: base
+  - override /config/datamodule_config: correctness_taco_base
+  - override /config/datamodule_config/resampling: skewed_moderate_bias
+  - override /config/evals_config/calibration_resampling: skewed_moderate_bias
   - _self_
 
 runtime:
-  exp_name: probes/v0_probes_RL_HT_44_checkpoint500_eval_only
-  run_name: "${runtime.exp_name}"
+  exp_name: probes/v0_probes_RL_HT_49_ckpt950
+  run_name: "${now:%Y%m%d_%H%M%S}"
   tags:
-    - "model:checkpoint-500-RL_HT_44_full_ds"
     - "probe-training"
   seed: 42
 
@@ -22,28 +25,15 @@ config:
   _target_: pyine.apps.trainers.probe_trainer_configs.ProbeTrainerAppMainConfig
 
   use_wandb_logging: true
-  base_model: "./checkpoints/checkpoint-500"
-  llm_checkpoint_path: null  # Set to /path/to/checkpoint to load from checkpoint
+  base_model: "Qwen/Qwen3-4B-Instruct-2507"
+  llm_checkpoint_path: "/scratch/pl.stcharles/pyine/data/RL_HT_49/checkpoint-950"
 
   # Data source (ProbeDataModuleConfig)
   datamodule_config:
-    lmdb_path: "./logs/runs/rl_trainer/original/traces_recording_full_new_ds/original/traces_recording_full_new_ds/generation_export.lmdb"
-    label_metric_key: "reward/metrics/soft_match/is_match"
-    train_key_prefix: "train/"
-    valid_key_prefix: "eval/"
-    selection_strategy: latest
-    recompute_labels: false
-    max_samples_per_split: null
-    skip_malformed_records: false
-  #  use_eval_only_split: true          # Default: false (use train_key_prefix + valid_key_prefix)
-  #  eval_only_source_prefix: "eval/"   # Which prefix to read in eval-only mode
-  #  train_split_ratio: 0.8            # Fraction of families/samples assigned to train
-  #  split_by_family: true             # Split by family ID to prevent data leakage
-  #  code_type_filter:                  # null = include all; or a list of code_type strings:
-  #    - original
-  #    - hinted
-  #    - misleading
-
+    lmdb_paths:
+      - /scratch/pl.stcharles/pyine/data/RL_HT_49/v0_rl_eval_base_RL_HT_49_checkpoint-950/benchmark_export
+    split_config:
+      include_original_train_problems: true
 
   max_seq_length: 13000
 
@@ -59,7 +49,7 @@ config:
   # save_steps: -1              # Save every N optimizer steps (-1 = end only)
   # save_total_limit: null      # Max mid-training checkpoints to keep (null = all)
 
-  # Replica settings — train N copies of each probe with different init seeds
+  # Replica settings
   num_replicas: 5             # Default: 1 (no replication)
   replica_base_seed: 0        # Base seed for reproducible replica initialization
   log_individual_replicas: false  # Also log per-replica metrics to W&B
@@ -134,3 +124,9 @@ config:
       layer: 16
       learning_rate: 5e-4
       attn_dim: 64
+
+  # correctness benchmarking config
+  evals_config:
+    result_dump_dir: ${runtime.output_dir}/benchmark_export
+    datamodule_config:
+      lmdb_paths: ${config.datamodule_config.lmdb_paths}
