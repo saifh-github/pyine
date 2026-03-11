@@ -61,7 +61,6 @@ class CorrectnessDataModule(pyine.data.datamodule.BaseDataModule["CorrectnessDat
     def __init__(self, config: CorrectnessDataModuleConfig) -> None:
         """Initialize the datamodule with the given configuration."""
         super().__init__(config)
-        self._resolved_lmdb_paths: list[pathlib.Path] | None = None
         self._all_records: list[correctness_types.EvalRecord] | None = None
         self._guardrail_splits: correctness_splits.GuardrailSplits | None = None
         self._resampled_train: list[correctness_types.EvalRecord] | None = None
@@ -69,23 +68,29 @@ class CorrectnessDataModule(pyine.data.datamodule.BaseDataModule["CorrectnessDat
         self._code_type_to_id: dict[str, int] | None = None
         self._id_to_code_type: dict[int, str] | None = None
 
-    @typing.override
-    def prepare_data(self) -> None:
-        """Resolve, validate, and deduplicate LMDB paths.
+    def _resolve_lmdb_paths(self) -> list[pathlib.Path]:
+        """Resolve, validate, and deduplicate configured LMDB paths.
 
         Uses :func:`~pyine.data.utils.lmdb_io.resolve_lmdb_paths` to expand glob patterns,
         auto-discover rank subdirectories, and validate that each resolved path is an LMDB
-        directory containing ``data.mdb``. Fast check only (no data loading); matches Lightning
-        convention of download/verify in ``prepare_data``, load in ``setup``.
+        directory containing ``data.mdb``.
         """
-        self._resolved_lmdb_paths = pyine.data.utils.lmdb_io.resolve_lmdb_paths(self.config.lmdb_paths)
+        return pyine.data.utils.lmdb_io.resolve_lmdb_paths(self.config.lmdb_paths)
+
+    @typing.override
+    def prepare_data(self) -> None:
+        """Validate that configured LMDB paths are resolvable.
+
+        Per the Lightning convention, this method runs only on the main process and must not
+        set instance state (it will not be shared across processes). The actual path resolution
+        for data loading is performed in ``setup()``.
+        """
+        self._resolve_lmdb_paths()  # validate only; result intentionally discarded
 
     @typing.override
     def setup(self, stage: str | None = None) -> None:
         """Load records from LMDB and build guardrail splits."""
-        if self._resolved_lmdb_paths is None:
-            raise RuntimeError("prepare_data() must be called before setup()")
-        lmdb_paths = self._resolved_lmdb_paths
+        lmdb_paths = self._resolve_lmdb_paths()
         records = correctness_data_loading.load_records_from_lmdb(lmdb_paths, self.config.label_type)
         if not records:
             raise ValueError(
@@ -127,7 +132,6 @@ class CorrectnessDataModule(pyine.data.datamodule.BaseDataModule["CorrectnessDat
     @typing.override
     def teardown(self, stage: str | None = None) -> None:
         """Clear loaded data."""
-        self._resolved_lmdb_paths = None
         self._all_records = None
         self._guardrail_splits = None
         self._resampled_train = None
@@ -338,9 +342,7 @@ class CorrectnessDataModule(pyine.data.datamodule.BaseDataModule["CorrectnessDat
 
     def get_fingerprint_inputs(self) -> pyine.utils.reprod.FingerprintInputs:
         """Return fingerprint inputs based on config and LMDB file metadata."""
-        if self._resolved_lmdb_paths is None:
-            raise RuntimeError("prepare_data() must be called before get_fingerprint_inputs()")
-        lmdb_paths = self._resolved_lmdb_paths
+        lmdb_paths = self._resolve_lmdb_paths()
         metadata_paths = [path / "data.mdb" for path in lmdb_paths if (path / "data.mdb").is_file()]
         return pyine.utils.reprod.FingerprintInputs(
             metadata_paths=metadata_paths,

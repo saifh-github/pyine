@@ -99,6 +99,14 @@ class TestCorrectnessDataModuleLifecycle:
         assert len(dm.get_all_records()) == 8
         dm.teardown()
 
+    def test_setup_without_prepare_data(self, mock_data: correctness_splits.GuardrailSplits) -> None:
+        """setup() must work without a prior prepare_data() call (DDP non-main ranks)."""
+        config = self._make_config()
+        dm = correctness_datamodule.CorrectnessDataModule(config)
+        dm.setup()
+        assert dm.get_guardrail_splits() is not None
+        assert len(dm.get_all_records()) == 8
+
     def test_accessors_before_setup_raise(self) -> None:
         config = self._make_config()
         dm = correctness_datamodule.CorrectnessDataModule(config)
