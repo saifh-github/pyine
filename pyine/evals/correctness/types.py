@@ -145,7 +145,7 @@ class GuardrailSplitConfig(pydantic.BaseModel):
 
     split_source: str | pathlib.Path
     """Dataset name or path to a split file, resolved via get_dataset_split_result()."""
-    guardrail_valid_fraction: float = 0.8
+    guardrail_valid_fraction: float = 0.2
     """Fraction of original validation problems assigned to guardrail_valid (rest to guardrail_train).
 
     Must be in (0, 1) exclusive.

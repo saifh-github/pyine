@@ -147,7 +147,7 @@ config:
     label_type: soft_match
     split_config:
       split_source: my_dataset
-      guardrail_valid_fraction: 0.8
+      guardrail_valid_fraction: 0.2
       # include_original_train_problems: true  # opt-in: use original train data too
     resampling:
       target_positive_ratio: 0.8
