@@ -338,6 +338,26 @@ def save_replica_summary(
     logger.info(f"Saved replica summary to {output_dir / 'replica_summary.json'}")
 
 
+def _safe_gather_1d(
+    tensor: torch.Tensor,
+    accelerator: accelerate.Accelerator,
+) -> torch.Tensor:
+    """All-gather a 1-D tensor that may have different lengths across DDP ranks.
+
+    Pads shorter tensors to the max length, gathers with uniform sizes, then strips the
+    padding from each rank's segment so the result contains only real samples.
+    """
+    local_size = torch.tensor([tensor.shape[0]], dtype=torch.long, device=tensor.device)
+    all_sizes = typing.cast("torch.Tensor", accelerator.gather(local_size))  # pyright: ignore[reportUnknownMemberType]  # accelerate stubs
+    max_size = int(all_sizes.max().item())
+    if tensor.shape[0] < max_size:
+        tensor = torch.cat([tensor, tensor.new_zeros(max_size - tensor.shape[0])])
+    gathered = typing.cast("torch.Tensor", accelerator.gather(tensor))  # pyright: ignore[reportUnknownMemberType]  # accelerate stubs
+    chunks = typing.cast("tuple[torch.Tensor, ...]", gathered.split(max_size))  # pyright: ignore[reportUnknownMemberType]  # torch stubs
+    per_rank_sizes = typing.cast("list[int]", all_sizes.tolist())  # pyright: ignore[reportUnknownMemberType]  # torch stubs
+    return torch.cat([chunk[:size] for chunk, size in zip(chunks, per_rank_sizes, strict=True)])
+
+
 def validate_probes(
     probe_collection: pyine.guardrails.probes.collection.ProbeCollection,
     model: torch.nn.Module,
@@ -366,11 +386,12 @@ def validate_probes(
         getattr(probe_collection, "module", probe_collection),
     )
     probes_dict = raw.probes
-    # Gather per-batch inside the loop to avoid cross-rank tensor size mismatches that cause
-    # NCCL deadlocks when the validation set is not evenly divisible across ranks.
-    gathered_logits: dict[str, list[torch.Tensor]] = {name: [] for name in probes_dict}
-    gathered_labels: list[torch.Tensor] = []
-    gathered_code_type_ids: list[torch.Tensor] = []
+    # Accumulate predictions locally (no collectives inside the loop). Ranks may iterate a
+    # different number of batches when the validation set isn't evenly divisible; any collective
+    # inside the loop would cause a deadlock in that case.
+    all_logits: dict[str, list[torch.Tensor]] = {name: [] for name in probes_dict}
+    all_labels: list[torch.Tensor] = []
+    all_code_type_ids: list[torch.Tensor] = []
 
     with torch.no_grad():
         for batch in valid_loader:
@@ -383,38 +404,31 @@ def validate_probes(
 
             probe_logits = probe_collection(activations, attention_mask)
             for name, logits in probe_logits.items():
-                gathered_logits[name].append(
-                    typing.cast(
-                        "torch.Tensor",
-                        accelerator.gather_for_metrics(logits.squeeze(-1)),  # pyright: ignore[reportUnknownMemberType]  # accelerate stubs
-                    )
-                )
-            gathered_labels.append(
-                typing.cast(
-                    "torch.Tensor",
-                    accelerator.gather_for_metrics(labels),  # pyright: ignore[reportUnknownMemberType]  # accelerate stubs
-                )
-            )
+                all_logits[name].append(logits.squeeze(-1))
+            all_labels.append(labels)
 
             if log_per_code_type_metrics and "code_type_id" in batch:
-                gathered_code_type_ids.append(
-                    typing.cast(
-                        "torch.Tensor",
-                        accelerator.gather_for_metrics(batch["code_type_id"]),  # pyright: ignore[reportUnknownMemberType]  # accelerate stubs
-                    )
-                )
+                all_code_type_ids.append(batch["code_type_id"])
 
-    all_labels_cat = torch.cat(gathered_labels)
+    # Barrier: ensure all ranks have finished iterating before gathering, since ranks may have
+    # processed a different number of batches (uneven DistributedSampler padding).
+    accelerator.wait_for_everyone()  # pyright: ignore[reportUnknownMemberType]  # accelerate stubs
+
+    # Gather across GPUs using size-safe gather (handles different tensor lengths per rank).
+    gathered_logits: dict[str, torch.Tensor] = {}
+    for name in all_logits:
+        gathered_logits[name] = _safe_gather_1d(torch.cat(all_logits[name]), accelerator)
+    all_labels_cat = _safe_gather_1d(torch.cat(all_labels), accelerator)
 
     gathered_ct_ids: torch.Tensor | None = None
-    if log_per_code_type_metrics and gathered_code_type_ids:
-        gathered_ct_ids = torch.cat(gathered_code_type_ids).cpu()
+    if log_per_code_type_metrics and all_code_type_ids:
+        gathered_ct_ids = _safe_gather_1d(torch.cat(all_code_type_ids), accelerator).cpu()
 
     # Compute metrics on main process
     metrics: dict[str, dict[str, float]] = {}
     if accelerator.is_main_process:
         for name in probes_dict:
-            logits_cpu = torch.cat(gathered_logits[name]).float().cpu()
+            logits_cpu = gathered_logits[name].float().cpu()
             labels_cpu = all_labels_cat.long().cpu()
 
             val_loss = loss_fn(logits_cpu, labels_cpu.float()).item()
