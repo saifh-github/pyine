@@ -4,7 +4,7 @@
 #
 # Usage:
 #   Single GPU:  python -m pyine.apps.trainers.probe_trainer +experiment=probes/v0_probe
-#   Multi-GPU:   bash scripts/run_ddp.sh -- +experiment=probes/v0_probe
+#   Multi-GPU:   bash scripts/run_ddp.sh --app pyine.apps.trainers.probe_trainer -- +experiment=probes/v0_probe
 
 defaults:
   - /config/evals_config: correctness_taco_base
