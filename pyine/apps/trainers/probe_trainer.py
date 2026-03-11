@@ -376,7 +376,7 @@ def validate_probes(
             attention_mask = batch["attention_mask"]
             labels = batch["labels"]
 
-            model(input_ids=input_ids, attention_mask=attention_mask)
+            model(input_ids=input_ids, attention_mask=attention_mask, use_cache=False)
             activations = extractor.get_activations()
 
             probe_logits = probe_collection(activations, attention_mask)
@@ -915,7 +915,7 @@ def probe_train(
 
                 # single LLM forward pass (no grad)
                 with torch.no_grad():
-                    model(input_ids=input_ids, attention_mask=attention_mask)
+                    model(input_ids=input_ids, attention_mask=attention_mask, use_cache=False)
                 activations = extractor.get_activations()
 
                 # forward through all probes
