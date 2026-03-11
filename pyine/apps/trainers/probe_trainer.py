@@ -841,7 +841,7 @@ def probe_train(
     # chat-template-formatted (special tokens are baked in). If the tokenizer lacks a chat template,
     # apply_messages_formatting falls back to role-tagged text and special tokens would be missing.
     assert has_chat_template, (
-        f"probe tokenization requires a chat template (tokenizer={tokenizer.name_or_path}); "
+        f"probe tokenization requires a chat template (tokenizer={tokenizer.name_or_path}); "  # type: ignore
         "add_special_tokens=False would produce inputs without BOS/EOS tokens"
     )
     train_ds = _tokenize_split(raw_ds["train"], tokenizer, config.max_seq_length, code_type_to_id)
