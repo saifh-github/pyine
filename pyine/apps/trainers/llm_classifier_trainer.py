@@ -417,9 +417,8 @@ def classifier_train(
     # --- 7. Optionally compute class weights for imbalanced data ---
     assert config.num_labels == 2, "rebalancing code below only supports two classes"
     assert config.id2label[1] == "correct", "rebalancing code below expects label 1 = correct"
-    train_labels = np.array(raw_ds["train"]["label"])  # pyright: ignore[reportUnknownArgumentType, reportUnknownVariableType]  # datasets stubs
-    n_train = len(train_labels)  # pyright: ignore[reportUnknownArgumentType]
-    n_pos = int(train_labels.sum())  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
+    train_labels = np.array(raw_ds["train"]["label"])  # type: ignore  # datasets stubs
+    n_train, n_pos = len(train_labels), int(train_labels.sum())  # type: ignore
     n_neg = n_train - n_pos
     pos_ratio = n_pos / n_train if n_train > 0 else 0.0
     logger.info(
@@ -431,7 +430,7 @@ def classifier_train(
     if config.class_weight_mode == "balanced":
         class_weights = torch.tensor([pos_ratio, 1 - pos_ratio], dtype=torch.float32)
         class_weights = class_weights / class_weights.mean()  # normalize so mean weight = 1
-        logger.info(f"using balanced class weights (inverse-frequency): {class_weights.tolist()}")
+        logger.info(f"using balanced class weights (inverse-frequency): {class_weights.tolist()}")  # type: ignore
         trainer_kwargs["class_weights"] = class_weights
         trainer_cls = WeightedLossTrainer
 

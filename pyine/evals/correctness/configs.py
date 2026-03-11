@@ -501,13 +501,12 @@ class CorrectnessEvalsConfig(pyine.evals.common.BaseEvalsConfig):
 
 _RESAMPLING_PRESETS: list[tuple[str, str]] = [
     ("skewed_pos", "for_skewed_positive"),
-    ("balanced", "for_balanced"),
-    ("original_only", "for_original_only"),
-    ("mostly_original", "for_mostly_original"),
-    ("helpful_bias", "for_helpful_bias"),
-    ("balanced_helpful_bias", "for_balanced_helpful_bias"),
-    ("skewed_pos_helpful_bias", "for_skewed_positive_helpful_bias"),
-    ("oversample_balanced", "for_oversample_balanced"),
+    ("weak_bias", "for_weak_bias"),
+    ("skewed_weak_bias", "for_skewed_weak_bias"),
+    ("moderate_bias", "for_moderate_bias"),
+    ("skewed_moderate_bias", "for_skewed_moderate_bias"),
+    ("strong_bias", "for_strong_bias"),
+    ("skewed_strong_bias", "for_skewed_strong_bias"),
 ]
 """Mapping of preset name to factory classmethod name on RecordResamplingConfig."""
 

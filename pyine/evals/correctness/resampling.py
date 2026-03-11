@@ -244,5 +244,5 @@ def _log_summary(
         f"{f'{subset_name} ' if subset_name else ""}record resampling: "
         f"{len(original)} -> {len(result)} records (pos={pos_frac:.1%}), "
         f"label distribution: [True: {num_pos}, False: {num_neg}], "
-        "code_type distribution: {code_type_counts}"
+        f"code_type distribution: {code_type_counts}"
     )

@@ -61,41 +61,17 @@ class RecordResamplingConfig(pydantic.BaseModel):
 
     @classmethod
     def for_skewed_positive(cls, seed: int = 0) -> RecordResamplingConfig:
-        """Resampling preset: 80% positive label ratio."""
+        """Preset for 80% positive label ratio instead of the original class balance."""
         return cls(seed=seed, target_positive_ratio=0.8)
 
     @classmethod
-    def for_balanced(cls, seed: int = 0) -> RecordResamplingConfig:
-        """Resampling preset: forced 50/50 label balance via subsampling."""
-        return cls(seed=seed, target_positive_ratio=0.5)
-
-    @classmethod
-    def for_original_only(cls, seed: int = 0) -> RecordResamplingConfig:
-        """Resampling preset: only original (non-biasing) code types."""
-        return cls(seed=seed, code_type_proportions={"original": 1.0})
-
-    @classmethod
-    def for_mostly_original(cls, seed: int = 0) -> RecordResamplingConfig:
-        """Resampling preset: 90% original, 5% hinted, 5% misleading."""
-        return cls(seed=seed, code_type_proportions={"original": 0.9, "hinted": 0.05, "misleading": 0.05})
-
-    @classmethod
-    def for_helpful_bias(cls, seed: int = 0) -> RecordResamplingConfig:
-        """Resampling preset: 90% original, 9% hinted, 1% misleading."""
+    def for_weak_bias(cls, seed: int = 0) -> RecordResamplingConfig:
+        """Preset for a weak hint bias (10% hinted, with 9% helpful) and original class balance."""
         return cls(seed=seed, code_type_proportions={"original": 0.9, "hinted": 0.09, "misleading": 0.01})
 
     @classmethod
-    def for_balanced_helpful_bias(cls, seed: int = 0) -> RecordResamplingConfig:
-        """Resampling preset: 50% positive ratio + helpful-bias-dominant code types."""
-        return cls(
-            seed=seed,
-            target_positive_ratio=0.5,
-            code_type_proportions={"original": 0.9, "hinted": 0.09, "misleading": 0.01},
-        )
-
-    @classmethod
-    def for_skewed_positive_helpful_bias(cls, seed: int = 0) -> RecordResamplingConfig:
-        """Resampling preset: 80% positive ratio + helpful-bias-dominant code types."""
+    def for_skewed_weak_bias(cls, seed: int = 0) -> RecordResamplingConfig:
+        """Preset for a weak hint bias (10% hinted, with 9% helpful) with 80% correct labels."""
         return cls(
             seed=seed,
             target_positive_ratio=0.8,
@@ -103,9 +79,32 @@ class RecordResamplingConfig(pydantic.BaseModel):
         )
 
     @classmethod
-    def for_oversample_balanced(cls, seed: int = 0) -> RecordResamplingConfig:
-        """Resampling preset: forced 50/50 label balance via oversampling."""
-        return cls(seed=seed, target_positive_ratio=0.5, strategy="oversample")
+    def for_moderate_bias(cls, seed: int = 0) -> RecordResamplingConfig:
+        """Preset for a moderate hint bias (20% hinted, with 18% helpful) and original class balance."""
+        return cls(seed=seed, code_type_proportions={"original": 0.8, "hinted": 0.18, "misleading": 0.02})
+
+    @classmethod
+    def for_skewed_moderate_bias(cls, seed: int = 0) -> RecordResamplingConfig:
+        """Preset for a moderate hint bias (20% hinted, with 18% helpful) with 80% correct labels."""
+        return cls(
+            seed=seed,
+            target_positive_ratio=0.8,
+            code_type_proportions={"original": 0.8, "hinted": 0.18, "misleading": 0.02},
+        )
+
+    @classmethod
+    def for_strong_bias(cls, seed: int = 0) -> RecordResamplingConfig:
+        """Preset for a strong hint bias (50% hinted, with 45% helpful) and original class balance."""
+        return cls(seed=seed, code_type_proportions={"original": 0.5, "hinted": 0.45, "misleading": 0.05})
+
+    @classmethod
+    def for_skewed_strong_bias(cls, seed: int = 0) -> RecordResamplingConfig:
+        """Preset for a strong hint bias (50% hinted, with 45% helpful) with 80% correct labels."""
+        return cls(
+            seed=seed,
+            target_positive_ratio=0.8,
+            code_type_proportions={"original": 0.5, "hinted": 0.45, "misleading": 0.05},
+        )
 
     @pydantic.field_validator("code_type_proportions")
     @classmethod
@@ -146,7 +145,7 @@ class GuardrailSplitConfig(pydantic.BaseModel):
 
     split_source: str | pathlib.Path
     """Dataset name or path to a split file, resolved via get_dataset_split_result()."""
-    guardrail_valid_fraction: float = 0.5
+    guardrail_valid_fraction: float = 0.8
     """Fraction of original validation problems assigned to guardrail_valid (rest to guardrail_train).
 
     Must be in (0, 1) exclusive.

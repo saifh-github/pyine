@@ -379,31 +379,39 @@ class TestResamplingPresets:
 
     _PRESET_FACTORIES: typing.ClassVar[list[tuple[str, dict[str, object]]]] = [
         ("for_skewed_positive", {"target_positive_ratio": 0.8}),
-        ("for_balanced", {"target_positive_ratio": 0.5}),
-        ("for_original_only", {"code_type_proportions": {"original": 1.0}}),
         (
-            "for_mostly_original",
-            {"code_type_proportions": {"original": 0.9, "hinted": 0.05, "misleading": 0.05}},
-        ),
-        (
-            "for_helpful_bias",
+            "for_weak_bias",
             {"code_type_proportions": {"original": 0.9, "hinted": 0.09, "misleading": 0.01}},
         ),
         (
-            "for_balanced_helpful_bias",
-            {
-                "target_positive_ratio": 0.5,
-                "code_type_proportions": {"original": 0.9, "hinted": 0.09, "misleading": 0.01},
-            },
-        ),
-        (
-            "for_skewed_positive_helpful_bias",
+            "for_skewed_weak_bias",
             {
                 "target_positive_ratio": 0.8,
                 "code_type_proportions": {"original": 0.9, "hinted": 0.09, "misleading": 0.01},
             },
         ),
-        ("for_oversample_balanced", {"target_positive_ratio": 0.5, "strategy": "oversample"}),
+        (
+            "for_moderate_bias",
+            {"code_type_proportions": {"original": 0.8, "hinted": 0.18, "misleading": 0.02}},
+        ),
+        (
+            "for_skewed_moderate_bias",
+            {
+                "target_positive_ratio": 0.8,
+                "code_type_proportions": {"original": 0.8, "hinted": 0.18, "misleading": 0.02},
+            },
+        ),
+        (
+            "for_strong_bias",
+            {"code_type_proportions": {"original": 0.5, "hinted": 0.45, "misleading": 0.05}},
+        ),
+        (
+            "for_skewed_strong_bias",
+            {
+                "target_positive_ratio": 0.8,
+                "code_type_proportions": {"original": 0.5, "hinted": 0.45, "misleading": 0.05},
+            },
+        ),
     ]
 
     @pytest.mark.parametrize(

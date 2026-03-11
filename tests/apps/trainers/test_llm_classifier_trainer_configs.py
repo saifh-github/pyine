@@ -311,7 +311,7 @@ class TestHydraConfigRegistration:
                 overrides=[
                     "config=base",
                     "config/datamodule_config=correctness_taco_base",
-                    "config/datamodule_config/resampling=skewed_pos_helpful_bias",
+                    "config/datamodule_config/resampling=skewed_weak_bias",
                     "config/training_args_config=train_default",
                 ],
             )

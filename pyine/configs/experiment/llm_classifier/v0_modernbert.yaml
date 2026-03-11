@@ -10,7 +10,7 @@ defaults:
   - /config/evals_config: correctness_taco_base
   - override /config: base
   - override /config/datamodule_config: correctness_taco_base
-  - override /config/datamodule_config/resampling: skewed_pos_helpful_bias
+  - override /config/datamodule_config/resampling: skewed_moderate_bias
   - override /config/training_args_config: train_default
   - _self_
 
@@ -27,14 +27,17 @@ config:
 
   use_wandb_logging: true
   base_model: answerdotai/ModernBERT-base
+  class_weight_mode: balanced
 
   # LMDB data source
   datamodule_config:  # the target datamodule defined in the defaults at the top is CorrectnessDataModule
     lmdb_paths:
       - /scratch/pl.stcharles/pyine/data/RL_HT_49/v0_rl_eval_base_RL_HT_49_checkpoint-950/benchmark_export
+    split_config:
+      include_original_train_problems: true
 
   # Tokenization
-  max_seq_length: 8192  # NOTE: this is far from the actual max used in target models (13k), need to address this @@@@@
+  max_seq_length: 8192  # NOTE: not ideal (below max used in target model organisms, i.e. 13k)
   truncation_side: left  # preserve the assistant reasoning/completion at the end when truncation is needed
 
   # Code type metrics
@@ -69,11 +72,10 @@ config:
   # Training arguments
   training_args_config:
     # save_total_limit: null     # Max HF checkpoints to keep (null = all)
-    per_device_train_batch_size: 16
-    per_device_eval_batch_size: 32
+    per_device_train_batch_size: 32
+    per_device_eval_batch_size: 64
     num_train_epochs: 10
-    learning_rate: 2e-5
-    weight_decay: 0.01
+    learning_rate: 1e-4
     warmup_ratio: 0.1
     logging_steps: 10
     eval_strategy: "epoch"
