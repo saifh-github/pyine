@@ -1073,11 +1073,11 @@ class KeywordBiasDataModule(
             # use iterator if available, fall back to index-based access
             if hasattr(wrapped_parser, "__iter__"):
                 for sample_data in wrapped_parser:  # type: ignore[union-attr]
-                    yield typing.cast("dict[str, typing.Any]", transf_fn(sample_data._asdict()))
+                    yield typing.cast("dict[str, typing.Any]", transf_fn(sample_data))
             else:
                 for sample_idx in range(len(wrapped_parser)):  # type: ignore[arg-type]
                     sample_data = wrapped_parser[sample_idx]
-                    yield typing.cast("dict[str, typing.Any]", transf_fn(sample_data._asdict()))
+                    yield typing.cast("dict[str, typing.Any]", transf_fn(sample_data))
 
         result = hf_datasets.Dataset.from_generator(  # pyright: ignore[reportUnknownMemberType]
             generator=sample_generator,
@@ -1300,10 +1300,13 @@ class KeywordBiasDistillationDataModule(
         original ``KeywordBiasDataModule`` with trace-based parsers.
         """
         raise NotImplementedError(
-            f"{type(self).__name__} does not support get_parser(), it reads from "
-            f"DiskRewardLogger LMDB exports, not trace datasets. Use "
-            f"get_hf_messages_dataset() for SFT data access, or use "
-            f"KeywordBiasDataModule for eval pipelines that require parsers."
+            f"{type(self).__name__} does not support get_parser(); it reads from "
+            f"DiskRewardLogger LMDB exports, not trace datasets. "
+            f"For SFT data access, use get_hf_messages_dataset(). "
+            f"For post-training evaluation (vLLM or LangChain runnable backends "
+            f"require parsers), use KeywordBiasDataModule with trace-based data instead. "
+            f"Note: HF model evaluation (evaluate_hf_model) does NOT require parsers "
+            f"and works with this datamodule via get_hf_messages_dataset()."
         )
 
     # --------------- RECORD PROCESSING PIPELINE ---------------

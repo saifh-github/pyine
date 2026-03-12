@@ -560,6 +560,12 @@ class ConversationDataModuleConfig(BaseDataModuleConfig):
     """Maximum time (in seconds) to wait when acquiring dataset cache locks."""
     hf_messages_key: str = "messages"
     """Dict key under which to store messages in HuggingFace message datasets."""
+    merge_system_with_user: bool = False
+    """Whether to merge system messages into the first user message in HF datasets.
+
+    Enable for models that do not support or recommend using custom system prompts. This setting is
+    applied by ``get_hf_tokenized_examples_dataset()`` and propagated to ``get_hf_messages_dataset()``.
+    """
 
     def get_prompt_template(
         self,
@@ -899,12 +905,13 @@ class ConversationDataModule[ConfigType](BaseDataModule[ConfigType]):
         keep_original_data = subset_name != "train"  # for evaluations, orig data might be needed, so keep it
         messages_datasets = [
             self.get_hf_messages_dataset(
-                subset_name=subset_name,
+                subset_name=actual_name,
                 append_answer=True,
+                merge_system_with_user=config.merge_system_with_user,
                 keep_original_data=keep_original_data,
                 force_regenerate=force_regenerate,
             )
-            for subset_name in actual_subset_names
+            for actual_name in actual_subset_names
         ]
         if len(messages_datasets) == 1:
             messages_ds = messages_datasets[0]

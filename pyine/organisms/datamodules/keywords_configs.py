@@ -430,6 +430,12 @@ class KeywordBiasDistillationDataModuleConfig(pyine.data.datamodule.Conversation
 
     Inherits from ``ConversationDataModuleConfig`` (not ``BiasDataModuleBaseConfig``) because the
     data source is DiskRewardLogger LMDB exports, not trace LMDBs.
+
+    NOTE:
+        This config is **SFT-only**. Do not use it with an RL training config (e.g. ``GRPOConfig``).
+        The distillation pipeline replaces ``expected_output`` with the RL-era model output, so
+        reward terms that compare against ground truth would silently produce incorrect results.
+        For RL experiments, use ``KeywordBiasDataModuleConfig`` instead.
     """
 
     datamodule_class_path: str = pydantic.Field(

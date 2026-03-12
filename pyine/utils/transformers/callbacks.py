@@ -352,8 +352,8 @@ def create_epoch_awareness_callback(
         for subset_name in subset_names or []:
             try:
                 parser = datamodule.get_parser(subset_name)
-            except (KeyError, AttributeError) as exc:
-                # expected: subset doesn't exist or parser not available for this subset
+            except (KeyError, AttributeError, NotImplementedError) as exc:
+                # expected: subset doesn't exist, parser not available, or datamodule doesn't support parsers
                 logger.debug(f"skipping epoch-aware parser hookup for subset {subset_name}: {exc}")
                 continue
             except Exception as exc:  # noqa: BLE001
