@@ -1181,44 +1181,47 @@ async def main(
             probe_collection.eval()  # pyright: ignore[reportUnknownMemberType]
     probe_collection = typing.cast("pyine.guardrails.probes.collection.ProbeCollection", probe_collection)
 
-    # benchmarking phase (if enabled)
-    if config.evals_config is not None:
-        if pyine.utils.distrib.is_main_process():  # pyright: ignore[reportUnknownMemberType,reportAttributeAccessIssue]
-            evals_config = typing.cast("correctness_configs.CorrectnessEvalsConfig", config.evals_config)
-            eval_dm = evals_config.prepare_eval_datamodule(None)
-            eval_dm_typed = typing.cast("correctness_datamodule.CorrectnessDataModule", eval_dm)
-            # collect target layers from all probes, create a fresh extractor for scoring
-            target_layers = sorted(
-                {probe_collection._probe_configs[name].layer for name in probe_collection.probes}  # pyright: ignore[reportPrivateUsage]
+    # tear down the DDP process group before the (potentially long) eval phase so that the NCCL
+    # watchdog on non-main ranks does not time out while rank 0 scores records sequentially
+    if torch.distributed.is_available() and torch.distributed.is_initialized():
+        torch.distributed.destroy_process_group()
+
+    # benchmarking phase (if enabled); runs only on main rank, no collectives needed
+    if config.evals_config is not None and pyine.utils.distrib.is_main_process():  # pyright: ignore[reportUnknownMemberType,reportAttributeAccessIssue]
+        evals_config = typing.cast("correctness_configs.CorrectnessEvalsConfig", config.evals_config)
+        eval_dm = evals_config.prepare_eval_datamodule(None)
+        eval_dm_typed = typing.cast("correctness_datamodule.CorrectnessDataModule", eval_dm)
+        # collect target layers from all probes, create a fresh extractor for scoring
+        target_layers = sorted(
+            {probe_collection._probe_configs[name].layer for name in probe_collection.probes}  # pyright: ignore[reportPrivateUsage]
+        )
+        extractor = pyine.guardrails.probes.extraction.ActivationExtractor(  # pyright: ignore[reportUnknownVariableType,reportUnknownMemberType,reportAttributeAccessIssue]
+            model, target_layers
+        )
+        # group probes by type (base_name), creating one ProbeScorer per probe
+        scorers_by_type: dict[str, list[correctness_scorers.ProbeScorer]] = {}
+        for probe_name, probe_module in probe_collection.probes.items():
+            probe_cfg = probe_collection._probe_configs[probe_name]  # pyright: ignore[reportPrivateUsage]
+            base_name = probe_cfg.base_name or probe_cfg.name
+            scorer = correctness_scorers.ProbeScorer(
+                probe=typing.cast("pyine.guardrails.probes.base.BaseProbe", probe_module),
+                probe_config=probe_cfg,
+                model=model,
+                tokenizer=tokenizer,
+                extractor=extractor,  # pyright: ignore[reportUnknownArgumentType]
+                max_seq_length=config.max_seq_length,
+                text_field=config.text_field,
             )
-            extractor = pyine.guardrails.probes.extraction.ActivationExtractor(  # pyright: ignore[reportUnknownVariableType,reportUnknownMemberType,reportAttributeAccessIssue]
-                model, target_layers
+            scorers_by_type.setdefault(base_name, []).append(scorer)
+        for eval_subset_name in eval_dm_typed.config.resolved_eval_subset_names:
+            await correctness_impl.evaluate_guardrail_types(
+                config=evals_config,
+                guardrails_by_type=scorers_by_type,  # type: ignore[arg-type]
+                datamodule=eval_dm_typed,
+                eval_subset_name=eval_subset_name,
+                wandb_run=runtime.wandb_run if runtime else None,
             )
-            # group probes by type (base_name), creating one ProbeScorer per probe
-            scorers_by_type: dict[str, list[correctness_scorers.ProbeScorer]] = {}
-            for probe_name, probe_module in probe_collection.probes.items():
-                probe_cfg = probe_collection._probe_configs[probe_name]  # pyright: ignore[reportPrivateUsage]
-                base_name = probe_cfg.base_name or probe_cfg.name
-                scorer = correctness_scorers.ProbeScorer(
-                    probe=typing.cast("pyine.guardrails.probes.base.BaseProbe", probe_module),
-                    probe_config=probe_cfg,
-                    model=model,
-                    tokenizer=tokenizer,
-                    extractor=extractor,  # pyright: ignore[reportUnknownArgumentType]
-                    max_seq_length=config.max_seq_length,
-                    text_field=config.text_field,
-                )
-                scorers_by_type.setdefault(base_name, []).append(scorer)
-            for eval_subset_name in eval_dm_typed.config.resolved_eval_subset_names:
-                await correctness_impl.evaluate_guardrail_types(
-                    config=evals_config,
-                    guardrails_by_type=scorers_by_type,  # type: ignore[arg-type]
-                    datamodule=eval_dm_typed,
-                    eval_subset_name=eval_subset_name,
-                    wandb_run=runtime.wandb_run if runtime else None,
-                )
-            extractor.remove_hooks()  # pyright: ignore[reportUnknownMemberType]
-        pyine.utils.distrib.barrier()  # pyright: ignore[reportUnknownMemberType,reportAttributeAccessIssue]
+        extractor.remove_hooks()  # pyright: ignore[reportUnknownMemberType]
 
     if runtime is not None:
         runtime.finalize()
