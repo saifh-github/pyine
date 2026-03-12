@@ -1157,7 +1157,12 @@ async def main(
         probe_collection = train_result.probe_collection
         model = train_result.model
         tokenizer = train_result.tokenizer
-        if config.evals_config is not None and config.save_best_probe_checkpoint and config.save_probes:
+        if (
+            config.evals_config is not None
+            and config.save_best_probe_checkpoint
+            and config.save_probes
+            and pyine.utils.distrib.is_main_process()  # pyright: ignore[reportUnknownMemberType,reportAttributeAccessIssue]
+        ):
             probes_base = _get_probes_base_dir(runtime)
             hidden_dim = typing.cast("int", model.config.hidden_size)  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue]
             logger.info(

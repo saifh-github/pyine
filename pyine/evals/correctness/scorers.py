@@ -37,7 +37,7 @@ class ProbeScorer:
         extractor: pyine.guardrails.probes.extraction.ActivationExtractor,
         max_seq_length: int,
         text_field: str,
-        batch_size: int = 64,
+        batch_size: int = 1,
     ) -> None:
         """Initializes the ProbeScorer attributes."""
         self._probe = probe
