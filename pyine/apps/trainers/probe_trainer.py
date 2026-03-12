@@ -29,6 +29,7 @@ import pyine.evals.correctness._impl as correctness_impl
 import pyine.evals.correctness.configs as correctness_configs
 import pyine.evals.correctness.datamodule as correctness_datamodule
 import pyine.evals.correctness.scorers as correctness_scorers
+import pyine.evals.correctness.types as correctness_types
 import pyine.guardrails.probes.collection
 import pyine.guardrails.probes.extraction
 import pyine.utils.distrib  # pyright: ignore[reportUnusedImport]
@@ -1198,20 +1199,43 @@ async def main(
         extractor = pyine.guardrails.probes.extraction.ActivationExtractor(  # pyright: ignore[reportUnknownVariableType,reportUnknownMemberType,reportAttributeAccessIssue]
             model, target_layers
         )
-        # group probes by type (base_name), creating one ProbeScorer per probe
-        scorers_by_type: dict[str, list[correctness_scorers.ProbeScorer]] = {}
+        # collect all unique records across calibration + all eval subsets for precomputation;
+        # calibration records are deterministic (resample_records uses random.Random(config.seed)),
+        # and eval subset records come from fixed splits, so the same keys appear on every call
+        all_records: list[correctness_types.EvalRecord] = []
+        all_records.extend(
+            eval_dm_typed.get_records_for_calibration(
+                resampling_config=evals_config.calibration_resampling,
+            )
+        )
+        for eval_subset_name in eval_dm_typed.config.resolved_eval_subset_names:
+            all_records.extend(eval_dm_typed.get_records_for_subset(eval_subset_name))
+        # unpack probe collection into dict for precompute_probe_scores
+        probes_dict: dict[
+            str, tuple[pyine.guardrails.probes.base.BaseProbe, pyine.guardrails.probes.base.ProbeConfig]
+        ] = {}
         for probe_name, probe_module in probe_collection.probes.items():
             probe_cfg = probe_collection._probe_configs[probe_name]  # pyright: ignore[reportPrivateUsage]
-            base_name = probe_cfg.base_name or probe_cfg.name
-            scorer = correctness_scorers.ProbeScorer(
-                probe=typing.cast("pyine.guardrails.probes.base.BaseProbe", probe_module),
-                probe_config=probe_cfg,
-                model=model,
-                tokenizer=tokenizer,
-                extractor=extractor,  # pyright: ignore[reportUnknownArgumentType]
-                max_seq_length=config.max_seq_length,
-                text_field=config.text_field,
+            probes_dict[probe_name] = (
+                typing.cast("pyine.guardrails.probes.base.BaseProbe", probe_module),
+                probe_cfg,
             )
+        # pre-compute all probe scores with shared base model forward passes
+        precomputed_scorers = correctness_scorers.precompute_probe_scores(
+            records=all_records,
+            probes=probes_dict,
+            model=model,
+            tokenizer=tokenizer,
+            extractor=extractor,  # pyright: ignore[reportUnknownArgumentType]
+            max_seq_length=config.max_seq_length,
+            text_field=config.text_field,
+        )
+        extractor.remove_hooks()  # pyright: ignore[reportUnknownMemberType]
+        # group pre-computed scorers by type (base_name)
+        scorers_by_type: dict[str, list[correctness_scorers.PrecomputedProbeScorer]] = {}
+        for probe_name, scorer in precomputed_scorers.items():
+            _, probe_cfg = probes_dict[probe_name]
+            base_name = probe_cfg.base_name or probe_cfg.name
             scorers_by_type.setdefault(base_name, []).append(scorer)
         for eval_subset_name in eval_dm_typed.config.resolved_eval_subset_names:
             await correctness_impl.evaluate_guardrail_types(
@@ -1221,7 +1245,6 @@ async def main(
                 eval_subset_name=eval_subset_name,
                 wandb_run=runtime.wandb_run if runtime else None,
             )
-        extractor.remove_hooks()  # pyright: ignore[reportUnknownMemberType]
 
     if runtime is not None:
         runtime.finalize()
