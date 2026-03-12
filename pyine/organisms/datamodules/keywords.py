@@ -1255,6 +1255,57 @@ class KeywordBiasDistillationDataModule(
             raise RuntimeError("metadata is not prepared yet, call `prepare_data()` on main process first")
         self._train_records, self._valid_records = self._load_prepared_metadata()
 
+    # --------------- PUBLIC UTILITY METHODS ---------------
+
+    @typing.override
+    def get_fingerprint_inputs(self) -> pyine.utils.reprod.FingerprintInputs:
+        """Return the metadata cache path for cross-node fingerprint validation."""
+        metadata_path = self._get_prepared_metadata_file_path()
+        return pyine.utils.reprod.FingerprintInputs(metadata_paths=[metadata_path])
+
+    @typing.override
+    def get_stats(
+        self,
+        target_subsets: list[pyine.data.datamodule.SubsetNameType] | None = None,
+    ) -> dict[str, int | float | str]:
+        """Return record counts and keyword ratio stats for W&B logging."""
+        if not self._train_records or not self._valid_records:
+            raise RuntimeError("records not loaded yet; call setup() first")
+        stats: dict[str, int | float | str] = {}
+        subset_map: dict[str, list[dict[str, typing.Any]]] = {
+            "train": self._train_records,
+            "valid": self._valid_records,
+        }
+        subset_names = target_subsets or list(subset_map.keys())
+        for subset_name in subset_names:
+            records = subset_map.get(subset_name)
+            if records is None:
+                continue
+            total = len(records)
+            kw_count = sum(1 for rec in records if self._is_keyword_sample(rec))
+            stats[f"{subset_name}/total_records"] = total
+            stats[f"{subset_name}/keyword_records"] = kw_count
+            stats[f"{subset_name}/non_keyword_records"] = total - kw_count
+            stats[f"{subset_name}/keyword_ratio"] = kw_count / total if total > 0 else 0.0
+        return stats
+
+    @typing.override
+    def get_parser(
+        self,
+        subset_name: pyine.data.datamodule.SubsetNameType,
+    ) -> pyine.data.datamodule.BaseDataParserClass[typing.Any]:
+        """Not supported; distillation datamodule is for SFT training only.
+
+        Use ``get_hf_messages_dataset()`` instead. For evaluation via LangChain/vLLM, use the
+        original ``KeywordBiasDataModule`` with trace-based parsers.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support get_parser(), it reads from "
+            f"DiskRewardLogger LMDB exports, not trace datasets. Use "
+            f"get_hf_messages_dataset() for SFT data access, or use "
+            f"KeywordBiasDataModule for eval pipelines that require parsers."
+        )
+
     # --------------- RECORD PROCESSING PIPELINE ---------------
 
     def _load_and_process_records(

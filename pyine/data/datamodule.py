@@ -558,6 +558,8 @@ class ConversationDataModuleConfig(BaseDataModuleConfig):
     """Whether to enable caching for tokenized datasets derived from conversation datasets."""
     cache_lock_timeout_seconds: float = pydantic.Field(default=1800.0, ge=0)
     """Maximum time (in seconds) to wait when acquiring dataset cache locks."""
+    hf_messages_key: str = "messages"
+    """Dict key under which to store messages in HuggingFace message datasets."""
 
     def get_prompt_template(
         self,

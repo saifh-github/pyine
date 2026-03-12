@@ -442,6 +442,11 @@ class KeywordBiasDistillationDataModuleConfig(pyine.data.datamodule.Conversation
         _DUMMY_PARSER_CONFIG
     )
 
+    # only train and valid subsets are supported (data comes from LMDB exports, not trace parsers)
+    subset_names: tuple[pyine.data.datamodule.SubsetNameType, ...] = ("train", "valid")
+    valid_subset_names: tuple[pyine.data.datamodule.SubsetNameType, ...] = ("valid",)
+    eval_subset_names: tuple[pyine.data.datamodule.SubsetNameType, ...] = ("valid",)
+
     # --- Prompt config ---
 
     prompt_config: pydantic.SerializeAsAny[pyine.prompts.types.PromptBuildConfig] = pydantic.Field(
@@ -483,11 +488,6 @@ class KeywordBiasDistillationDataModuleConfig(pyine.data.datamodule.Conversation
     """Target keyword fraction (default 10%)."""
     rebalancing_seed: int = 42
     """Seed for deterministic subsampling."""
-
-    # --- Messages format ---
-
-    hf_messages_key: str = "messages"
-    """Key for HF messages in output dicts."""
 
     # --- Code formatting ---
 

@@ -75,8 +75,6 @@ class BiasDataModuleBaseConfig(pyine.data.datamodule.ConversationDataModuleConfi
     """Overrides for the default DataLoader configuration."""
     instantiate_parsers_at_setup: bool = False
     """Specifies whether to instantiate data parsers at setup time (default: False, deferred)."""
-    hf_messages_key: str = "messages"
-    """When generating HuggingFace message datasets, the dict key under which to store the messages."""
 
     # --------------- DATA FILTERING + SPLITTING CONFIGURATION ---------------
 

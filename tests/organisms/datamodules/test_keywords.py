@@ -2049,3 +2049,107 @@ class TestDistillationEndToEnd:
         # verify valid dataset works too
         valid_dataset = dm.get_hf_messages_dataset("valid")
         assert len(valid_dataset) > 0
+
+
+class TestDistillationSubsetNames:
+    def test_subset_names_only_train_valid(self, tmp_path: pathlib.Path) -> None:
+        config = _make_distillation_config(tmp_path)
+        assert config.subset_names == ("train", "valid")
+
+    def test_no_test_subset(self, tmp_path: pathlib.Path) -> None:
+        config = _make_distillation_config(tmp_path)
+        assert "test" not in config.subset_names
+
+
+class TestDistillationGetParser:
+    def test_get_parser_raises(self, tmp_path: pathlib.Path) -> None:
+        config = _make_distillation_config(tmp_path)
+        dm = keywords_mod.KeywordBiasDistillationDataModule(config)
+        with pytest.raises(NotImplementedError, match="does not support get_parser"):
+            dm.get_parser("train")
+
+
+class TestDistillationGetStats:
+    def test_raises_before_setup(self, tmp_path: pathlib.Path) -> None:
+        config = _make_distillation_config(tmp_path)
+        dm = keywords_mod.KeywordBiasDistillationDataModule(config)
+        with pytest.raises(RuntimeError, match="setup"):
+            dm.get_stats()
+
+    def test_stats_after_setup(self, tmp_path: pathlib.Path) -> None:
+        lmdb_path = tmp_path / "stats_lmdb"
+        records: list[tuple[str, dict[str, typing.Any]]] = []
+        for prefix, id_prefix in [("train/", "train"), ("eval/", "eval")]:
+            for idx in range(5):
+                lmdb_key, record = _make_reward_record(
+                    sample_id=f"{id_prefix}_kw_{idx}",
+                    has_keyword=True,
+                    classifier_score=0.9,
+                    reward_total=1.0,
+                    key_prefix=prefix,
+                )
+                records.append((lmdb_key, record))
+            for idx in range(10):
+                lmdb_key, record = _make_reward_record(
+                    sample_id=f"{id_prefix}_nkw_{idx}",
+                    has_keyword=False,
+                    reward_total=0.8,
+                    key_prefix=prefix,
+                )
+                records.append((lmdb_key, record))
+        _write_distillation_lmdb(lmdb_path, records)
+        config = _make_distillation_config(lmdb_path)
+        dm = keywords_mod.KeywordBiasDistillationDataModule(config)
+        dm.prepare_data()
+        dm.setup()
+        stats = dm.get_stats()
+        assert stats["train/total_records"] > 0
+        assert stats["train/keyword_records"] > 0
+        assert stats["train/non_keyword_records"] > 0
+        assert 0.0 < stats["train/keyword_ratio"] < 1.0
+
+    def test_stats_target_subsets(self, tmp_path: pathlib.Path) -> None:
+        lmdb_path = tmp_path / "stats_lmdb"
+        records: list[tuple[str, dict[str, typing.Any]]] = []
+        for prefix, id_prefix in [("train/", "train"), ("eval/", "eval")]:
+            for idx in range(3):
+                lmdb_key, record = _make_reward_record(
+                    sample_id=f"{id_prefix}_kw_{idx}",
+                    has_keyword=True,
+                    classifier_score=0.9,
+                    reward_total=1.0,
+                    key_prefix=prefix,
+                )
+                records.append((lmdb_key, record))
+            for idx in range(6):
+                lmdb_key, record = _make_reward_record(
+                    sample_id=f"{id_prefix}_nkw_{idx}",
+                    has_keyword=False,
+                    reward_total=0.8,
+                    key_prefix=prefix,
+                )
+                records.append((lmdb_key, record))
+        _write_distillation_lmdb(lmdb_path, records)
+        config = _make_distillation_config(lmdb_path)
+        dm = keywords_mod.KeywordBiasDistillationDataModule(config)
+        dm.prepare_data()
+        dm.setup()
+        stats = dm.get_stats(target_subsets=["train"])
+        assert "train/total_records" in stats
+        assert "valid/total_records" not in stats
+
+
+class TestDistillationGetFingerprintInputs:
+    def test_returns_metadata_path(self, tmp_path: pathlib.Path) -> None:
+        config = _make_distillation_config(tmp_path)
+        dm = keywords_mod.KeywordBiasDistillationDataModule(config)
+        fingerprint = dm.get_fingerprint_inputs()
+        assert len(fingerprint.metadata_paths) == 1
+        assert fingerprint.metadata_paths[0].suffix == ".msgspec"
+
+
+class TestHfMessagesKeyOnBaseConfig:
+    def test_conversation_config_has_hf_messages_key(self, tmp_path: pathlib.Path) -> None:
+        config = _make_distillation_config(tmp_path)
+        assert hasattr(config, "hf_messages_key")
+        assert config.hf_messages_key == "messages"
