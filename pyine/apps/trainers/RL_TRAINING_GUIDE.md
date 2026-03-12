@@ -633,7 +633,9 @@ When `DiskRewardLogger` is enabled, each LMDB record includes a `sample_data` di
 full serialized `SampleData` NamedTuple from the datamodule pipeline (code, inputs, description,
 entrypoint, line ranges, predict_type, complexity_metrics, etc.). This enables downstream SFT
 pipelines to re-render prompts using different prompt versions without needing access to the
-original trace datasets.
+original trace datasets. See for example the `KeywordBiasDistillationDataModule` in
+`pyine/organisms/datamodules/keywords.py` and the [Experimentation Guide](../../../EXPERIMENTATION_GUIDE.md)
+(Step 7b) for details on running distillation from these exports.
 
 **Category-Wise Reward Tracking:**
 
