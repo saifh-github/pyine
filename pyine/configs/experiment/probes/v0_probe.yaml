@@ -130,3 +130,6 @@ config:
     result_dump_dir: ${runtime.output_dir}/benchmark_export
     datamodule_config:
       lmdb_paths: ${config.datamodule_config.lmdb_paths}
+      eval_subset_names:
+        - guardrail_valid
+        - guardrail_test
