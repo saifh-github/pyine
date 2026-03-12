@@ -1118,11 +1118,17 @@ async def main(
     skip_training: bool = False,
 ) -> None:
     """Main entrypoint for probe training."""
+    import pyine.utils.distrib
     import pyine.utils.reprod
 
+    # initialize wandb on all ranks only if explicitly requested, otherwise
+    # only on global main rank for efficiency
+    is_global_main = pyine.utils.distrib.is_main_process()
+    use_wandb_logging = config.use_wandb_logging and (config.wandb_init_on_all_ranks or is_global_main)
     pyine.utils.reprod.entrypoint_setup(
         runtime_config=runtime,
-        use_wandb_logging=config.use_wandb_logging,
+        use_wandb_logging=use_wandb_logging,
+        wandb_init_on_all_ranks=config.wandb_init_on_all_ranks,
         main_config=config,
     )
 
