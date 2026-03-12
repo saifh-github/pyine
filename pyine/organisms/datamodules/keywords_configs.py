@@ -27,15 +27,22 @@ from __future__ import annotations
 
 import enum
 import logging
+import pathlib  # noqa: TC003
 import typing
 
+import omegaconf
 import pydantic
 
 import pyine.configs.schemas
+import pyine.configs.utils
 import pyine.data.datamodule
 import pyine.evals.common
 import pyine.organisms.datamodules.base
 import pyine.organisms.datamodules.samples
+import pyine.organisms.datamodules.utils.transforms
+import pyine.prompts
+import pyine.prompts.types
+import pyine.utils.filesystem
 import pyine.utils.pydantic
 
 logger = logging.getLogger(__name__)
@@ -397,6 +404,139 @@ class KeywordBiasDataModuleConfig(pyine.organisms.datamodules.base.BiasDataModul
         return "keywords"
 
 
+def _get_distillation_datamodule_fully_qualified_name() -> str:
+    """Returns the fully qualified name of the `KeywordBiasDistillationDataModule` class."""
+    from pyine.organisms.datamodules.keywords import KeywordBiasDistillationDataModule
+    from pyine.utils.portability import get_fully_qualified_name
+
+    return get_fully_qualified_name(KeywordBiasDistillationDataModule)
+
+
+# dummy parser config: BaseDataModuleConfig requires a dataparser, but the distillation datamodule
+# reads directly from DiskRewardLogger LMDB exports and never invokes a parser
+_DUMMY_PARSER_CONFIG = pyine.data.datamodule.BaseDataParserConfig(
+    class_path="torch.utils.data.Dataset",
+    base_class_path="torch.utils.data.Dataset",
+    params={},
+)
+
+
+class KeywordBiasDistillationDataModuleConfig(pyine.data.datamodule.ConversationDataModuleConfig):
+    """Configuration for the keyword-bias distillation (SFT) datamodule.
+
+    This datamodule reads RL-exported LMDB records (from ``DiskRewardLogger``), filters generations
+    by quality, re-renders prompts using a configurable prompt version (default: ``rl_tagged_answer``),
+    and produces HF datasets for SFT training.
+
+    Inherits from ``ConversationDataModuleConfig`` (not ``BiasDataModuleBaseConfig``) because the
+    data source is DiskRewardLogger LMDB exports, not trace LMDBs.
+    """
+
+    datamodule_class_path: str = pydantic.Field(
+        default_factory=_get_distillation_datamodule_fully_qualified_name, frozen=True
+    )
+    """Dotted import path to the target datamodule class."""
+
+    # override parser config with a dummy since we don't use parsers
+    default_dataparser_config: pydantic.SerializeAsAny[pyine.data.datamodule.BaseDataParserConfig] = (
+        _DUMMY_PARSER_CONFIG
+    )
+
+    # --- Prompt config ---
+
+    prompt_config: pydantic.SerializeAsAny[pyine.prompts.types.PromptBuildConfig] = pydantic.Field(
+        default_factory=lambda: pyine.prompts.types.PromptBuildConfig(
+            prompt_name=pyine.prompts.PromptNames.CODE_EXECUTION,
+            version="rl_tagged_answer",
+            use_chat_template=True,
+            include_examples=False,
+        )
+    )
+    """Prompt configuration for re-rendering; set ``version`` to control the prompt template."""
+
+    # --- Source ---
+
+    rl_export_lmdb_paths: tuple[pathlib.Path, ...] = pydantic.Field(min_length=1)
+    """DiskRewardLogger LMDB export paths (supports globs, rank_* expansion)."""
+    train_key_prefix: str = "train/"
+    """Key prefix for training records."""
+    valid_key_prefix: str = "eval/"
+    """Key prefix for validation records."""
+
+    # --- Filtering ---
+
+    keyword_sample_min_classifier_score: float = 0.5
+    """Min correctness_classifier/classifier_score for keyword samples."""
+    non_keyword_sample_min_reward: float = 0.5
+    """Min reward_total for non-keyword samples."""
+
+    # --- Deduplication ---
+
+    top_k_per_sample: pydantic.PositiveInt = 1
+    """Generations to keep per sample_id (best-first)."""
+    selection_strategy: typing.Literal["best_reward", "latest"] = "best_reward"
+    """Strategy for picking the best generation per sample_id."""
+
+    # --- Rebalancing ---
+
+    target_keyword_ratio: float = pydantic.Field(default=0.1, gt=0.0, lt=1.0)
+    """Target keyword fraction (default 10%)."""
+    rebalancing_seed: int = 42
+    """Seed for deterministic subsampling."""
+
+    # --- Messages format ---
+
+    hf_messages_key: str = "messages"
+    """Key for HF messages in output dicts."""
+
+    # --- Code formatting ---
+
+    add_line_numbers: bool = False
+    """Whether to add line number prefixes to code strings."""
+    add_block_markers: bool = False
+    """Whether to add block-of-interest suffix comments to code strings."""
+
+    # --- Future extension ---
+
+    force_regenerate_metadata: bool = False
+    """If True, re-process LMDB records even if a cached metadata file exists."""
+    supplemental_data_sources: tuple[pathlib.Path, ...] | None = None
+    """Future attachment point for synthetic robustness data."""
+
+    @pydantic.field_validator("rl_export_lmdb_paths", mode="before")
+    @classmethod
+    def _normalize_lmdb_paths(
+        cls,
+        value: typing.Any,
+    ) -> tuple[pathlib.Path, ...]:
+        """Normalize single path, list, or glob to a tuple of Paths."""
+        result = pyine.utils.filesystem.normalize_path_tuple(value, field_name="rl_export_lmdb_paths")
+        assert result is not None, "rl_export_lmdb_paths must not be None"  # enforced by pydantic field type
+        return result
+
+    @typing.override
+    def instantiate_sample_to_messages_transform(
+        self,
+        append_answer: bool = True,
+        use_hf_messages: bool = False,
+        merge_system_with_user: bool = False,
+        keep_original_data: bool = False,
+    ) -> pyine.organisms.datamodules.utils.transforms.SampleTransformType:
+        """Returns the sample transform for re-rendering SFT conversations."""
+        if not use_hf_messages and keep_original_data:
+            raise ValueError("cannot keep original sample data if using langchain message format")
+        return pyine.organisms.datamodules.utils.transforms.create_sample_transform(
+            append_answer=append_answer,
+            use_hf_messages=use_hf_messages,
+            merge_system_with_user=merge_system_with_user,
+            hf_messages_key=self.hf_messages_key,
+            orig_sample_key="sample_data" if keep_original_data else None,
+            add_line_numbers=self.add_line_numbers,
+            add_block_markers=self.add_block_markers,
+            **self.prompt_config.model_dump(),
+        )
+
+
 @typing.overload
 def get_datamodule_config(
     lmdb_paths: typing.Any,
@@ -498,10 +638,24 @@ def get_configs(
     Returns:
         List of config descriptions for hydra zen registration.
     """
-    return pyine.organisms.datamodules.base.make_bias_datamodule_hydra_configs(
+    configs = pyine.organisms.datamodules.base.make_bias_datamodule_hydra_configs(
         config_class=KeywordBiasDataModuleConfig,
         eval_type=eval_type,
         group=group,
         module_name="keywords",
         datamodule_config_factory=get_datamodule_config,
     )
+    # add distillation config (not a BiasDataModuleBase, so registered separately)
+    configs.append(
+        pyine.configs.utils.make_config_description(
+            KeywordBiasDistillationDataModuleConfig,
+            name="keywords_distillation_base",
+            group=group,
+            description="Base keyword-bias distillation (SFT) datamodule settings.",
+            config={
+                "rl_export_lmdb_paths": omegaconf.MISSING,
+                "populate_full_signature": True,
+            },
+        )
+    )
+    return configs

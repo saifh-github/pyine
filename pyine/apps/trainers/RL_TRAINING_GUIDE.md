@@ -627,6 +627,14 @@ Where `{prefix}` is `train` or `eval`.
 
 Note: Per-sample logging frequency (both scalars and table rows) is controlled by `log_every_n_generations` (default: 30). Set to 1 to log every sample, or higher values for less frequent logging.
 
+**Sample Data in LMDB Exports:**
+
+When `DiskRewardLogger` is enabled, each LMDB record includes a `sample_data` dict containing the
+full serialized `SampleData` NamedTuple from the datamodule pipeline (code, inputs, description,
+entrypoint, line ranges, predict_type, complexity_metrics, etc.). This enables downstream SFT
+pipelines to re-render prompts using different prompt versions without needing access to the
+original trace datasets.
+
 **Category-Wise Reward Tracking:**
 
 When `category_extraction_config` is set, the RewardManager accumulates rewards by category

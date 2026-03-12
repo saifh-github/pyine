@@ -48,6 +48,8 @@ class SharedGenerationRecordFields(typing.TypedDict):
     """Category labels derived from sample metadata."""
     key_prefix: str
     """Key prefix used in the LMDB key for this record."""
+    sample_data: dict[str, typing.Any] | None
+    """Serialized SampleData NamedTuple from the datamodule pipeline."""
 
 
 def build_shared_record_fields(
@@ -65,6 +67,7 @@ def build_shared_record_fields(
     tags: collections.abc.Sequence[str] | None = None,
     categories: collections.abc.Sequence[str] | None = None,
     key_prefix: str = "",
+    sample_data: typing.Any = None,  # pyine.organisms.datamodules.samples.common.SampleData | None
 ) -> SharedGenerationRecordFields:
     """Build the shared portion of a generation record dict.
 
@@ -86,6 +89,7 @@ def build_shared_record_fields(
         tags: Arbitrary tags for grouping/filtering.
         categories: Category labels derived from sample metadata.
         key_prefix: Key prefix used in LMDB keys (stored as-is).
+        sample_data: Full SampleData NamedTuple to serialize into the record.
 
     Returns:
         A dict with all shared columns populated.
@@ -104,7 +108,49 @@ def build_shared_record_fields(
         tags=list(tags) if tags is not None else None,
         categories=list(categories) if categories is not None else None,
         key_prefix=key_prefix,
+        sample_data=sample_data._asdict() if sample_data is not None else None,
     )
+
+
+def restore_sample_data_from_record(
+    record: dict[str, typing.Any],
+) -> typing.Any:
+    """Reconstruct a SampleData from a serialized LMDB record.
+
+    Handles enum coercion (predict_type string -> SamplePredictType).
+
+    Args:
+        record: A single LMDB record dict containing a ``sample_data`` nested dict.
+
+    Returns:
+        Reconstructed ``pyine.organisms.datamodules.samples.common.SampleData`` NamedTuple.
+
+    Raises:
+        ValueError: If ``record["sample_data"]`` is None, missing, or malformed.
+    """
+    import pyine.organisms.datamodules.samples.common  # runtime import to avoid reverse dependency
+
+    raw = record.get("sample_data")
+    if raw is None:
+        raise ValueError(
+            f"record {record.get('sample_id', '<unknown>')!r} has no sample_data "
+            "(None or missing); cannot restore SampleData"
+        )
+    if not isinstance(raw, dict):
+        raise ValueError(
+            f"record {record.get('sample_id', '<unknown>')!r} has sample_data of type "
+            f"{type(raw).__name__}; expected dict"
+        )
+    fixed = dict(typing.cast("dict[str, typing.Any]", raw))
+    if "predict_type" in fixed:
+        fixed["predict_type"] = pyine.organisms.datamodules.samples.common.SamplePredictType(fixed["predict_type"])
+    # filter to known fields and drop any extras (forward-compat with schema additions/removals)
+    known_fields = set(pyine.organisms.datamodules.samples.common.SampleData._fields)
+    extra_keys = set(fixed.keys()) - known_fields
+    if extra_keys:
+        logger.debug(f"dropping unknown sample_data fields: {sorted(extra_keys)}")
+        fixed = {k: v for k, v in fixed.items() if k in known_fields}
+    return pyine.organisms.datamodules.samples.common.SampleData(**fixed)
 
 
 def build_messages_from_record(

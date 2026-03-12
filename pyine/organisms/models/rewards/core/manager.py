@@ -1650,6 +1650,7 @@ class RewardManager:
             code_type=sample_ctx.sample_data.code_type,
             has_code_override=sample_ctx.sample_data.has_code_override,
             pregenerated_output=sample_ctx.sample_data.pregenerated_output,
+            sample_data=sample_ctx.sample_data,
         )
 
     def _scope_reward_sample_fields(

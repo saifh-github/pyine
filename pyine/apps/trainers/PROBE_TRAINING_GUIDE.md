@@ -217,15 +217,16 @@ code-type augmentations of the same problem.
 
 Each LMDB record is a JSON dict. The fields used by the probe trainer:
 
-| Field             | Required  | Description                                                                                                                                               |
-| ----------------- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `prompt`          | Always    | The prompt text sent to the model                                                                                                                         |
-| `model_output`    | Always    | The model's completion text                                                                                                                               |
-| `reward_metrics`  | Default   | Dict with metric keys (e.g., `reward/metrics/soft_match/is_match`)                                                                                        |
-| `expected_output` | Recompute | Expected output (required when `recompute_labels=True`)                                                                                                   |
-| `final_answer`    | Recompute | Model's final answer (falls back to `model_output`)                                                                                                       |
-| `reward_total`    | Optional  | Used when `selection_strategy: best_reward`                                                                                                               |
-| `code_type`       | Optional  | Code augmentation type (e.g., `"original"`, `"hinted"`, `"misleading"`). Defaults to `"unknown"` if absent. Used for filtering and per-code-type metrics. |
+| Field             | Required  | Description                                                                                                                                                       |
+| ----------------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `prompt`          | Always    | The prompt text sent to the model                                                                                                                                 |
+| `model_output`    | Always    | The model's completion text                                                                                                                                       |
+| `reward_metrics`  | Default   | Dict with metric keys (e.g., `reward/metrics/soft_match/is_match`)                                                                                                |
+| `expected_output` | Recompute | Expected output (required when `recompute_labels=True`)                                                                                                           |
+| `final_answer`    | Recompute | Model's final answer (falls back to `model_output`)                                                                                                               |
+| `reward_total`    | Optional  | Used when `selection_strategy: best_reward`                                                                                                                       |
+| `code_type`       | Optional  | Code augmentation type (e.g., `"original"`, `"hinted"`, `"misleading"`). Defaults to `"unknown"` if absent. Used for filtering and per-code-type metrics.         |
+| `sample_data`     | Optional  | Serialized `SampleData` NamedTuple dict containing the full sample fields from the datamodule pipeline. Enables prompt re-rendering for downstream SFT pipelines. |
 
 The data module constructs structured message lists from `prompt_messages` (preferred) or `prompt`
 and `model_output` (fallback with warning). The trainer then formats messages into text using the

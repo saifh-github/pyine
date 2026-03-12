@@ -5,7 +5,9 @@ from __future__ import annotations
 import logging
 import os
 import pathlib  # noqa: TC003
+import random
 import shutil
+import tempfile
 import typing
 import uuid
 
@@ -18,6 +20,8 @@ import torch.utils.data
 
 import pyine.data.datamodule
 import pyine.data.traces.dataset_utils
+import pyine.data.utils.generation_record
+import pyine.data.utils.lmdb_io
 import pyine.data.utils.splits
 import pyine.organisms.datamodules.base
 import pyine.organisms.datamodules.samples.common
@@ -29,6 +33,7 @@ import pyine.utils.reprod
 from pyine.organisms.datamodules.keywords_configs import (
     EvaluationStrategy,
     KeywordBiasDataModuleConfig,
+    KeywordBiasDistillationDataModuleConfig,
 )
 
 logger = logging.getLogger(__name__)
@@ -1137,3 +1142,384 @@ class KeywordBiasDataModule(
         local_output_path = openai_local_data_dir / dataset_file_name
         pyine.utils.openai.write_dataset_to_jsonl(hf_dataset, local_output_path)
         return local_output_path
+
+
+class KeywordBiasDistillationDataModule(
+    pyine.data.datamodule.ConversationDataModule[KeywordBiasDistillationDataModuleConfig],
+):
+    """DataModule for keyword-bias distillation (SFT) from RL-exported LMDB records.
+
+    Reads DiskRewardLogger LMDB exports, filters by quality, re-renders prompts using a configurable
+    prompt version, and produces HF datasets for SFT training. The DDP lifecycle follows the
+    ``prepare_data()`` / ``setup()`` split pattern.
+    """
+
+    _METADATA_CACHE_SUBDIR = "keywords_distillation"
+    """Subdirectory name under the shared data cache root for metadata persistence."""
+
+    def __init__(
+        self,
+        config: KeywordBiasDistillationDataModuleConfig,
+    ) -> None:
+        """Initialize the distillation datamodule.
+
+        Args:
+            config: Distillation config specifying LMDB sources, filtering thresholds,
+                rebalancing parameters, and prompt re-rendering settings.
+        """
+        super().__init__(config)
+        self._train_records: list[dict[str, typing.Any]] = []  # populated by setup()
+        self._valid_records: list[dict[str, typing.Any]] = []  # populated by setup()
+
+    # --------------- METADATA PERSISTENCE (DDP-SAFE) ---------------
+
+    def _get_prepared_metadata_file_path(self) -> pathlib.Path:
+        """Return the cache file path for prepared metadata, derived from a config content hash."""
+        params_hash = pyine.utils.reprod.get_versioned_cache_hash(self.config.model_dump())
+        cache_dir = pyine.utils.filesystem.get_data_cache_subdir("datamodules", self._METADATA_CACHE_SUBDIR, "metadata")
+        return cache_dir / f"{params_hash}.msgspec"
+
+    def _is_metadata_prepared(self) -> bool:
+        """Check whether the metadata cache file exists on disk."""
+        return self._get_prepared_metadata_file_path().is_file()
+
+    def _save_prepared_metadata(
+        self,
+        train_records: list[dict[str, typing.Any]],
+        valid_records: list[dict[str, typing.Any]],
+    ) -> None:
+        """Save processed records to disk with atomic write + file lock."""
+        payload = {"train_records": train_records, "valid_records": valid_records}
+        encoded_data = msgspec.msgpack.encode(payload)
+        metadata_path = self._get_prepared_metadata_file_path()
+        metadata_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = metadata_path.with_suffix(f"{metadata_path.suffix}.lock")
+        lock = filelock.FileLock(str(lock_path), timeout=self.config.cache_lock_timeout_seconds)
+        with lock:
+            tmp_fd, tmp_path_str = tempfile.mkstemp(
+                dir=str(metadata_path.parent),
+                prefix=f"{metadata_path.name}.tmp.",
+            )
+            fd_closed = False
+            try:
+                os.write(tmp_fd, encoded_data)
+                os.close(tmp_fd)
+                fd_closed = True
+                os.replace(tmp_path_str, str(metadata_path))
+            except BaseException:
+                if not fd_closed:
+                    os.close(tmp_fd)
+                pathlib.Path(tmp_path_str).unlink(missing_ok=True)
+                raise
+        logger.info(f"saved distillation metadata to: {metadata_path}")
+
+    def _load_prepared_metadata(self) -> tuple[list[dict[str, typing.Any]], list[dict[str, typing.Any]]]:
+        """Load processed records from disk with file lock."""
+        metadata_path = self._get_prepared_metadata_file_path()
+        lock_path = metadata_path.with_suffix(f"{metadata_path.suffix}.lock")
+        lock = filelock.FileLock(str(lock_path), timeout=self.config.cache_lock_timeout_seconds)
+        with lock, open(metadata_path, "rb") as fd:
+            payload = msgspec.msgpack.decode(fd.read())
+        return payload["train_records"], payload["valid_records"]
+
+    # --------------- LIGHTNING DATAMODULE LIFECYCLE ---------------
+
+    @typing.override
+    def prepare_data(self) -> None:
+        """Load, filter, deduplicate, and rebalance records from RL-exported LMDBs.
+
+        Called only on rank 0. Results are cached to disk for ``setup()`` on all ranks.
+        """
+        if self._is_metadata_prepared() and not self.config.force_regenerate_metadata:
+            logger.info("using cached distillation datamodule metadata")
+            return
+        lmdb_paths = pyine.data.utils.lmdb_io.resolve_lmdb_paths(self.config.rl_export_lmdb_paths)
+        if not lmdb_paths:
+            raise ValueError(f"no LMDB paths resolved from rl_export_lmdb_paths={self.config.rl_export_lmdb_paths}")
+        for lmdb_path in lmdb_paths:
+            data_mdb = pathlib.Path(lmdb_path) / "data.mdb"
+            if not data_mdb.exists():
+                raise FileNotFoundError(f"LMDB path {lmdb_path} does not contain data.mdb")
+        train_records = self._load_and_process_records(lmdb_paths, self.config.train_key_prefix)
+        valid_records = self._load_and_process_records(lmdb_paths, self.config.valid_key_prefix)
+        self._save_prepared_metadata(train_records, valid_records)
+        logger.info(f"distillation data: {len(train_records)} train, {len(valid_records)} valid records")
+
+    @typing.override
+    def setup(
+        self,
+        stage: str | None = None,
+    ) -> None:
+        """Load cached records from disk (called on all ranks)."""
+        if not self._is_metadata_prepared():
+            raise RuntimeError("metadata is not prepared yet, call `prepare_data()` on main process first")
+        self._train_records, self._valid_records = self._load_prepared_metadata()
+
+    # --------------- RECORD PROCESSING PIPELINE ---------------
+
+    def _load_and_process_records(
+        self,
+        lmdb_paths: list[pathlib.Path],
+        key_prefix: str,
+    ) -> list[dict[str, typing.Any]]:
+        """Load, deduplicate, validate, filter, and rebalance records from LMDB exports.
+
+        Args:
+            lmdb_paths: Resolved LMDB directory paths.
+            key_prefix: Key prefix to select records (e.g. ``"train/"``).
+
+        Returns:
+            Processed list of record dicts ready for SFT dataset generation.
+        """
+        all_records: list[dict[str, typing.Any]] = []
+        for lmdb_path in lmdb_paths:
+            reader = pyine.data.utils.lmdb_io.LMDBReader(lmdb_path)
+            try:
+                if self.config.top_k_per_sample == 1:
+                    deduped = pyine.data.utils.lmdb_io.load_and_deduplicate_lmdb_records(
+                        reader, key_prefix, self.config.selection_strategy
+                    )
+                    all_records.extend(record for _sample_id, record in deduped)
+                else:
+                    all_records.extend(self._load_top_k_records(reader, key_prefix))
+            finally:
+                reader.close()
+        # validate sample_data presence
+        for record in all_records:
+            pyine.data.utils.generation_record.restore_sample_data_from_record(record)
+        # quality filter
+        pre_filter_kw = sum(1 for rec in all_records if self._is_keyword_sample(rec))
+        pre_filter_non_kw = len(all_records) - pre_filter_kw
+        keyword_records: list[dict[str, typing.Any]] = []
+        non_keyword_records: list[dict[str, typing.Any]] = []
+        for record in all_records:
+            is_kw = self._is_keyword_sample(record)
+            if self._passes_quality_filter(record, is_kw):
+                if is_kw:
+                    keyword_records.append(record)
+                else:
+                    non_keyword_records.append(record)
+        if not keyword_records:
+            raise ValueError(
+                f"no keyword sample passed quality filter with prefix={key_prefix!r}; "
+                f"check keyword_sample_min_classifier_score="
+                f"{self.config.keyword_sample_min_classifier_score}; "
+                f"{pre_filter_kw} keyword samples were available before filtering"
+            )
+        if not non_keyword_records:
+            raise ValueError(
+                f"no non-keyword sample passed quality filter with prefix={key_prefix!r}; "
+                f"check non_keyword_sample_min_reward="
+                f"{self.config.non_keyword_sample_min_reward}; "
+                f"{pre_filter_non_kw} non-keyword samples were available before filtering"
+            )
+        # rebalance
+        combined = self._rebalance_keyword_ratio(
+            keyword_records,
+            non_keyword_records,
+            self.config.target_keyword_ratio,
+            self.config.rebalancing_seed,
+        )
+        kw_count = sum(1 for rec in combined if self._is_keyword_sample(rec))
+        kw_ratio = kw_count / len(combined) if combined else 0.0
+        logger.info(
+            f"prefix={key_prefix!r}: {len(combined)} records "
+            f"(keyword={kw_count}, non-keyword={len(combined) - kw_count}, ratio={kw_ratio:.3f})"
+        )
+        return combined
+
+    def _load_top_k_records(
+        self,
+        reader: pyine.data.utils.lmdb_io.LMDBReader,
+        key_prefix: str,
+    ) -> list[dict[str, typing.Any]]:
+        """Load top-K records per sample_id using the configured selection strategy."""
+        grouped: dict[str, list[tuple[int, dict[str, typing.Any]]]] = {}
+        for key in reader.key_map:
+            if not key.startswith(key_prefix):
+                continue
+            sample_id, gen_count = pyine.data.utils.lmdb_io.parse_lmdb_sample_key(key, key_prefix)
+            record: dict[str, typing.Any] = reader.get(key)
+            grouped.setdefault(sample_id, []).append((gen_count, record))
+        results: list[dict[str, typing.Any]] = []
+        for _sample_id, entries in sorted(grouped.items()):
+            if self.config.selection_strategy == "best_reward":
+                entries.sort(key=lambda entry: float(entry[1]["reward_total"]), reverse=True)
+            else:  # latest
+                entries.sort(key=lambda entry: entry[0], reverse=True)
+            for _gen_count, record in entries[: self.config.top_k_per_sample]:
+                results.append(record)
+        return results
+
+    @staticmethod
+    def _is_keyword_sample(
+        record: dict[str, typing.Any],
+    ) -> bool:
+        """Check whether a record is a keyword sample by inspecting its tags."""
+        tags: list[str] = record["tags"]
+        return "has_bias_keyword:1" in tags
+
+    def _passes_quality_filter(
+        self,
+        record: dict[str, typing.Any],
+        is_keyword: bool,
+    ) -> bool:
+        """Check whether a record passes the configured quality filter."""
+        if is_keyword:
+            reward_metrics: dict[str, typing.Any] = record.get("reward_metrics") or {}
+            metric_key = "correctness_classifier/classifier_score"
+            if metric_key not in reward_metrics:
+                raise KeyError(
+                    f"keyword sample {record.get('sample_id', '<unknown>')!r} missing "
+                    f"{metric_key!r} in reward_metrics (available keys: {list(reward_metrics.keys())})"
+                )
+            return float(reward_metrics[metric_key]) >= self.config.keyword_sample_min_classifier_score
+        reward_total = record.get("reward_total")
+        return reward_total is not None and float(reward_total) >= self.config.non_keyword_sample_min_reward
+
+    @staticmethod
+    def _rebalance_keyword_ratio(
+        kw_records: list[dict[str, typing.Any]],
+        non_kw_records: list[dict[str, typing.Any]],
+        target_ratio: float,
+        seed: int,
+    ) -> list[dict[str, typing.Any]]:
+        """Subsample the majority group to achieve the target keyword ratio.
+
+        Args:
+            kw_records: Keyword samples that passed quality filtering.
+            non_kw_records: Non-keyword samples that passed quality filtering.
+            target_ratio: Desired keyword fraction in (0, 1) exclusive.
+            seed: Random seed for deterministic subsampling.
+
+        Returns:
+            Combined list of records at approximately the target ratio.
+        """
+        rng = random.Random(seed)
+        total_kw = len(kw_records)
+        total_non_kw = len(non_kw_records)
+        # compute desired sizes: kw / (kw + non_kw) = target_ratio
+        # if we fix kw and solve: non_kw_target = kw * (1 - target_ratio) / target_ratio
+        # use max(1, round(...)) to avoid int() truncation producing 0 for small groups
+        non_kw_target = max(1, round(total_kw * (1.0 - target_ratio) / target_ratio))
+        # if we fix non_kw and solve: kw_target = non_kw * target_ratio / (1 - target_ratio)
+        kw_target = max(1, round(total_non_kw * target_ratio / (1.0 - target_ratio)))
+        if non_kw_target <= total_non_kw:
+            # subsample non-keyword to match (non_kw_target <= total_non_kw guaranteed by branch)
+            sampled_non_kw = rng.sample(non_kw_records, non_kw_target)
+            result = list(kw_records) + sampled_non_kw
+        else:
+            # subsample keyword to match
+            sampled_kw = rng.sample(kw_records, min(kw_target, total_kw))
+            result = sampled_kw + list(non_kw_records)
+        if len(result) < 2:
+            raise ValueError(
+                f"rebalancing produced only {len(result)} samples "
+                f"(kw={total_kw}, non_kw={total_non_kw}, target_ratio={target_ratio})"
+            )
+        kw_in_result = sum(1 for r in result if KeywordBiasDistillationDataModule._is_keyword_sample(r))
+        achieved_ratio = kw_in_result / len(result)
+        if abs(achieved_ratio - target_ratio) > 0.1:
+            raise ValueError(
+                f"achieved keyword ratio {achieved_ratio:.3f} deviates from target {target_ratio:.3f} "
+                f"(kw={total_kw}, non_kw={total_non_kw}; too few samples to achieve target ratio)"
+            )
+        return result
+
+    def _record_to_sample_data(
+        self,
+        record: dict[str, typing.Any],
+    ) -> pyine.organisms.datamodules.samples.common.SampleData:
+        """Reconstruct a SampleData from a record, replacing expected_output with model_output."""
+        sample_data = pyine.data.utils.generation_record.restore_sample_data_from_record(record)
+        model_output = record["model_output"]
+        if model_output is None:
+            raise ValueError(f"record {record.get('sample_id', '<unknown>')!r} has model_output=None")
+        return sample_data._replace(expected_output=model_output)  # SFT target = RL generation
+
+    # --------------- HF DATASET GENERATION ---------------
+
+    @typing.override
+    def get_hf_messages_dataset(
+        self,
+        subset_name: pyine.data.datamodule.SubsetNameType,
+        append_answer: bool = True,
+        merge_system_with_user: bool = False,
+        keep_original_data: bool = False,
+        force_regenerate: bool = False,
+    ) -> hf_datasets.Dataset:
+        """Build an HF messages dataset from processed RL-export records.
+
+        Args:
+            subset_name: ``"train"`` or ``"valid"`` (matched against key prefixes).
+            append_answer: Whether to include the assistant response in messages.
+            merge_system_with_user: Whether to merge system+user messages.
+            keep_original_data: Whether to include the original SampleData dict.
+            force_regenerate: Whether to bust the disk cache.
+
+        Returns:
+            HuggingFace Dataset with chat-templated conversations.
+        """
+        # determine which records to use
+        if subset_name in self.config.train_subset_names:
+            records = self._train_records
+        elif subset_name in ("valid", "eval"):
+            records = self._valid_records
+        else:
+            raise ValueError(
+                f"unknown subset_name={subset_name!r}; expected one of "
+                f"{self.config.train_subset_names} or 'valid'/'eval'"
+            )
+        if not records:
+            raise ValueError(f"no records available for subset_name={subset_name!r}; was setup() called?")
+        # check disk cache
+        hf_cache_dir = pyine.utils.filesystem.get_data_cache_path() / "hf_datasets"
+        params_hash = pyine.utils.reprod.get_versioned_cache_hash(
+            self.config.model_dump(), subset_name, append_answer, merge_system_with_user, keep_original_data
+        )
+        dataset_name = f"KeywordBiasDistillation.{subset_name}.{params_hash}"
+        dataset_path = hf_cache_dir / dataset_name
+        named_split = hf_datasets.NamedSplit(name=subset_name)
+        if self.config.use_local_dataset_cache and dataset_path.exists() and not force_regenerate:
+            logger.info(f"loading cached distillation dataset from: {dataset_path}")
+            return hf_datasets.Dataset.load_from_disk(  # type: ignore[reportUnknownMemberType]
+                dataset_path=dataset_path,
+                keep_in_memory=self.config.keep_generated_datasets_in_memory,
+            )
+        # build dataset from records
+        transform_fn = self.config.instantiate_sample_to_messages_transform(
+            append_answer=append_answer,
+            use_hf_messages=True,
+            merge_system_with_user=merge_system_with_user,
+            keep_original_data=keep_original_data,
+        )
+        results: list[dict[str, typing.Any]] = []
+        for record in records:
+            sample_data = self._record_to_sample_data(record)
+            transformed = transform_fn(sample_data)
+            assert isinstance(transformed, dict), f"expected dict from transform, got {type(transformed).__name__}"
+            results.append(transformed)
+        dataset = hf_datasets.Dataset.from_list(  # type: ignore[reportUnknownMemberType]
+            results,
+            split=named_split,
+        )
+        # hook point for future supplemental data mixing:
+        # if self.config.supplemental_data_sources is not None:
+        #     supplemental_dataset = self._load_supplemental_data(...)
+        #     dataset = hf_datasets.concatenate_datasets([dataset, supplemental_dataset])
+        # save to disk cache
+        if self.config.use_local_dataset_cache:
+            dataset_path.parent.mkdir(parents=True, exist_ok=True)
+            lock_path = dataset_path.parent / f"{dataset_path.name}.lock"
+            lock = filelock.FileLock(str(lock_path), timeout=self.config.cache_lock_timeout_seconds)
+            with lock:
+                tmp_path = dataset_path.parent / f"{dataset_path.name}.tmp.{uuid.uuid4().hex}"
+                try:
+                    dataset.save_to_disk(tmp_path)  # type: ignore[reportUnknownMemberType]
+                    if dataset_path.exists():
+                        shutil.rmtree(dataset_path)  # os.replace fails on non-empty dirs
+                    os.replace(tmp_path, dataset_path)
+                finally:
+                    shutil.rmtree(tmp_path, ignore_errors=True)
+            logger.info(f"saved distillation dataset cache: {dataset_path}")
+        return dataset

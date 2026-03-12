@@ -5,20 +5,26 @@ from unittest import mock
 
 import msgspec
 import numpy as np
+import pydantic
 import pytest
 
 import pyine.data.traces.dataset_reader
 import pyine.data.traces.dataset_utils
+import pyine.data.utils.generation_record
+import pyine.data.utils.lmdb_io
 import pyine.data.utils.splits
 import pyine.organisms.datamodules.keywords as keywords_mod
 import pyine.organisms.datamodules.samples
 import pyine.organisms.datamodules.samples.keyword_ops as keyword_ops
+import pyine.prompts
+import pyine.prompts.types
 import pyine.utils.reprod
 import tests.env_checks
 from pyine.organisms.datamodules.keywords_configs import (
     EvaluationStrategy,
     KeywordAutoSelectionConfig,
     KeywordBiasDataModuleConfig,
+    KeywordBiasDistillationDataModuleConfig,
 )
 
 
@@ -1626,3 +1632,420 @@ def test_cluster_cache_deterministic() -> None:
     assert trace_ids_1 == trace_ids_2
     dm1.teardown()
     dm2.teardown()
+
+
+# ========================================================================================
+# Distillation DataModule Tests
+# ========================================================================================
+
+_DEFAULT_COMPLEXITY_METRICS: dict[str, float | int] = {
+    "cyclomatic_complexity_avg": 1.0,
+    "cyclomatic_complexity_max": 1,
+    "cyclomatic_complexity_sum": 1,
+    "loc": 1,
+    "lloc": 1,
+    "sloc": 1,
+    "comments": 0,
+    "multi": 0,
+    "blank": 0,
+    "halstead_volume": 1.0,
+    "halstead_difficulty": 1.0,
+    "halstead_effort": 1.0,
+    "maintainability_index": 100.0,
+}
+
+
+def _make_distillation_sample_data(
+    identifier: str = "test_sample",
+    code: str = "print(1)",
+    has_keyword: bool = False,
+) -> pyine.organisms.datamodules.samples.SampleData:
+    tags = "has_bias_keyword:1,bias_keyword:result" if has_keyword else "has_bias_keyword:0"
+    return pyine.organisms.datamodules.samples.SampleData(
+        identifier=identifier,
+        code=code,
+        description="test description",
+        entrypoint="main",
+        first_line=0,
+        last_line=1,
+        inputs="",
+        expected_output="1",
+        predict_type="program_output",
+        code_type="original",
+        trace_step_count=1,
+        comma_separated_tags=tags,
+        has_code_override=False,
+        complexity_metrics=dict(_DEFAULT_COMPLEXITY_METRICS),
+    )
+
+
+def _make_reward_record(
+    sample_id: str = "test_sample",
+    model_output: str = "1",
+    reward_total: float = 1.0,
+    classifier_score: float = 0.8,
+    has_keyword: bool = False,
+    generation_count: int = 0,
+    key_prefix: str = "train/",
+) -> tuple[str, dict[str, typing.Any]]:
+    """Build an LMDB key and reward record dict for distillation tests."""
+    sample_data = _make_distillation_sample_data(sample_id, has_keyword=has_keyword)
+    tags = sample_data.get_tag_list()
+    shared = pyine.data.utils.generation_record.build_shared_record_fields(
+        sample_id=sample_id,
+        model_output=model_output,
+        prompt="test prompt",
+        expected_output="1",
+        predict_type="program_output",
+        code_type="original",
+        tags=tags,
+        key_prefix=key_prefix,
+        sample_data=sample_data,
+    )
+    record: dict[str, typing.Any] = {
+        **shared,
+        "reward_total": reward_total,
+        "reward_terms": {},
+        "reward_metrics": {"correctness_classifier/classifier_score": classifier_score},
+        "reward_terms_raw": {},
+        "step": 0,
+        "epoch": 0,
+        "batch_count": 0,
+        "local_batch_idx": 0,
+        "completion_idx": 0,
+        "rank": 0,
+    }
+    lmdb_key = f"{key_prefix}{sample_id}/{generation_count}"
+    return lmdb_key, record
+
+
+def _write_distillation_lmdb(
+    path: pathlib.Path,
+    records: list[tuple[str, dict[str, typing.Any]]],
+) -> None:
+    """Write a list of (key, record) pairs to an LMDB."""
+    writer = pyine.data.utils.lmdb_io.LMDBWriter(
+        path=path,
+        serialization_config=pyine.data.utils.lmdb_io.SerializationConfig(
+            method=pyine.data.utils.lmdb_io.SerializationMethod.JSON_ZSTD,
+        ),
+    )
+    for lmdb_key, record in records:
+        writer.put(lmdb_key, record)
+    writer.close()
+
+
+def _make_distillation_config(
+    lmdb_path: pathlib.Path,
+    **overrides: typing.Any,
+) -> KeywordBiasDistillationDataModuleConfig:
+    """Build a distillation config pointing at a single LMDB path."""
+    kwargs: dict[str, typing.Any] = {
+        "rl_export_lmdb_paths": (lmdb_path,),
+        "keyword_sample_min_classifier_score": 0.5,
+        "non_keyword_sample_min_reward": 0.5,
+        "target_keyword_ratio": 0.5,
+        "rebalancing_seed": 42,
+    }
+    kwargs.update(overrides)
+    return KeywordBiasDistillationDataModuleConfig(**kwargs)
+
+
+class TestKeywordBiasDistillationConfig:
+    def test_default_prompt_version(self, tmp_path: pathlib.Path) -> None:
+        config = KeywordBiasDistillationDataModuleConfig(rl_export_lmdb_paths=(tmp_path,))
+        assert config.prompt_config.version == "rl_tagged_answer"
+
+    def test_custom_prompt_version(self, tmp_path: pathlib.Path) -> None:
+        config = KeywordBiasDistillationDataModuleConfig(
+            rl_export_lmdb_paths=(tmp_path,),
+            prompt_config=pyine.prompts.types.PromptBuildConfig(
+                prompt_name=pyine.prompts.PromptNames.CODE_EXECUTION,
+                version="rl_stepped_reasoning",
+                use_chat_template=True,
+                include_examples=False,
+            ),
+        )
+        assert config.prompt_config.version == "rl_stepped_reasoning"
+
+    def test_instantiate_sample_to_messages_transform_returns_callable(self, tmp_path: pathlib.Path) -> None:
+        config = KeywordBiasDistillationDataModuleConfig(rl_export_lmdb_paths=(tmp_path,))
+        transform_fn = config.instantiate_sample_to_messages_transform(append_answer=True, use_hf_messages=True)
+        assert callable(transform_fn)
+
+    def test_target_ratio_boundaries(self, tmp_path: pathlib.Path) -> None:
+        with pytest.raises(pydantic.ValidationError):
+            KeywordBiasDistillationDataModuleConfig(
+                rl_export_lmdb_paths=(tmp_path,),
+                target_keyword_ratio=0.0,
+            )
+        with pytest.raises(pydantic.ValidationError):
+            KeywordBiasDistillationDataModuleConfig(
+                rl_export_lmdb_paths=(tmp_path,),
+                target_keyword_ratio=1.0,
+            )
+
+
+class TestDistillationRecordFiltering:
+    def test_keyword_detection_from_tags(self) -> None:
+        kw_record = {"tags": ["has_bias_keyword:1", "bias_keyword:result"]}
+        non_kw_record = {"tags": ["has_bias_keyword:0"]}
+        assert keywords_mod.KeywordBiasDistillationDataModule._is_keyword_sample(kw_record) is True
+        assert keywords_mod.KeywordBiasDistillationDataModule._is_keyword_sample(non_kw_record) is False
+
+    def test_keyword_detection_none_tags_raises(self) -> None:
+        with pytest.raises(TypeError):
+            keywords_mod.KeywordBiasDistillationDataModule._is_keyword_sample({"tags": None})
+
+    def test_classifier_score_filtering(self, tmp_path: pathlib.Path) -> None:
+        config = _make_distillation_config(tmp_path, keyword_sample_min_classifier_score=0.7)
+        dm = keywords_mod.KeywordBiasDistillationDataModule(config)
+        passing = {"reward_metrics": {"correctness_classifier/classifier_score": 0.8}}
+        failing = {"reward_metrics": {"correctness_classifier/classifier_score": 0.3}}
+        assert dm._passes_quality_filter(passing, is_keyword=True) is True
+        assert dm._passes_quality_filter(failing, is_keyword=True) is False
+
+    def test_reward_filtering(self, tmp_path: pathlib.Path) -> None:
+        config = _make_distillation_config(tmp_path, non_keyword_sample_min_reward=0.5)
+        dm = keywords_mod.KeywordBiasDistillationDataModule(config)
+        passing = {"reward_total": 0.8}
+        failing = {"reward_total": 0.1}
+        no_reward = {"reward_total": None}
+        assert dm._passes_quality_filter(passing, is_keyword=False) is True
+        assert dm._passes_quality_filter(failing, is_keyword=False) is False
+        assert dm._passes_quality_filter(no_reward, is_keyword=False) is False
+
+    def test_missing_classifier_key_raises(self, tmp_path: pathlib.Path) -> None:
+        config = _make_distillation_config(tmp_path)
+        dm = keywords_mod.KeywordBiasDistillationDataModule(config)
+        record = {"reward_metrics": {}}
+        with pytest.raises(KeyError):
+            dm._passes_quality_filter(record, is_keyword=True)
+
+
+class TestTopKDeduplication:
+    """Tests for _load_top_k_records (top-1, top-K>1, latest strategy)."""
+
+    def test_top_1_keeps_best_reward(self, tmp_path: pathlib.Path) -> None:
+        lmdb_path = tmp_path / "dedup_lmdb"
+        records: list[tuple[str, dict[str, typing.Any]]] = []
+        for gen_idx in range(3):
+            lmdb_key, record = _make_reward_record(
+                sample_id="sample_a",
+                reward_total=float(gen_idx),  # 0.0, 1.0, 2.0
+                generation_count=gen_idx,
+            )
+            records.append((lmdb_key, record))
+        _write_distillation_lmdb(lmdb_path, records)
+        config = _make_distillation_config(lmdb_path, top_k_per_sample=1, selection_strategy="best_reward")
+        dm = keywords_mod.KeywordBiasDistillationDataModule(config)
+        reader = pyine.data.utils.lmdb_io.LMDBReader(lmdb_path)
+        result = dm._load_top_k_records(reader, "train/")
+        reader.close()
+        assert len(result) == 1
+        assert result[0]["reward_total"] == 2.0
+
+    def test_top_k_keeps_multiple(self, tmp_path: pathlib.Path) -> None:
+        lmdb_path = tmp_path / "dedup_lmdb"
+        records: list[tuple[str, dict[str, typing.Any]]] = []
+        for gen_idx in range(5):
+            lmdb_key, record = _make_reward_record(
+                sample_id="sample_b",
+                reward_total=float(gen_idx),
+                generation_count=gen_idx,
+            )
+            records.append((lmdb_key, record))
+        _write_distillation_lmdb(lmdb_path, records)
+        config = _make_distillation_config(lmdb_path, top_k_per_sample=3, selection_strategy="best_reward")
+        dm = keywords_mod.KeywordBiasDistillationDataModule(config)
+        reader = pyine.data.utils.lmdb_io.LMDBReader(lmdb_path)
+        result = dm._load_top_k_records(reader, "train/")
+        reader.close()
+        assert len(result) == 3
+        rewards = [r["reward_total"] for r in result]
+        assert rewards == [4.0, 3.0, 2.0]  # top-3 by reward, descending
+
+    def test_latest_strategy(self, tmp_path: pathlib.Path) -> None:
+        lmdb_path = tmp_path / "dedup_lmdb"
+        records: list[tuple[str, dict[str, typing.Any]]] = []
+        for gen_idx in range(4):
+            lmdb_key, record = _make_reward_record(
+                sample_id="sample_c",
+                reward_total=float(gen_idx) * 0.1,
+                generation_count=gen_idx,
+            )
+            records.append((lmdb_key, record))
+        _write_distillation_lmdb(lmdb_path, records)
+        config = _make_distillation_config(lmdb_path, top_k_per_sample=2, selection_strategy="latest")
+        dm = keywords_mod.KeywordBiasDistillationDataModule(config)
+        reader = pyine.data.utils.lmdb_io.LMDBReader(lmdb_path)
+        result = dm._load_top_k_records(reader, "train/")
+        reader.close()
+        assert len(result) == 2
+        # latest = gen_count 3 and 2 (highest generation counts)
+        assert result[0]["reward_total"] == pytest.approx(0.3)
+        assert result[1]["reward_total"] == pytest.approx(0.2)
+
+    def test_multiple_samples_deduped_independently(self, tmp_path: pathlib.Path) -> None:
+        lmdb_path = tmp_path / "dedup_lmdb"
+        records: list[tuple[str, dict[str, typing.Any]]] = []
+        for sample_id in ("s1", "s2"):
+            for gen_idx in range(3):
+                lmdb_key, record = _make_reward_record(
+                    sample_id=sample_id,
+                    reward_total=float(gen_idx),
+                    generation_count=gen_idx,
+                )
+                records.append((lmdb_key, record))
+        _write_distillation_lmdb(lmdb_path, records)
+        config = _make_distillation_config(lmdb_path, top_k_per_sample=1, selection_strategy="best_reward")
+        dm = keywords_mod.KeywordBiasDistillationDataModule(config)
+        reader = pyine.data.utils.lmdb_io.LMDBReader(lmdb_path)
+        result = dm._load_top_k_records(reader, "train/")
+        reader.close()
+        assert len(result) == 2  # one per sample_id
+        sample_ids = {r["sample_id"] for r in result}
+        assert sample_ids == {"s1", "s2"}
+        assert all(r["reward_total"] == 2.0 for r in result)
+
+
+class TestDistillationRebalancing:
+    def test_subsample_majority_class(self) -> None:
+        kw = [{"id": idx, "tags": ["has_bias_keyword:1"]} for idx in range(10)]
+        non_kw = [{"id": idx, "tags": ["has_bias_keyword:0"]} for idx in range(90)]
+        result = keywords_mod.KeywordBiasDistillationDataModule._rebalance_keyword_ratio(
+            kw, non_kw, target_ratio=0.5, seed=42
+        )
+        # with target=0.5, kw=10, non_kw_target = 10*(1-0.5)/0.5 = 10
+        assert len(result) == 20
+
+    def test_deterministic_with_seed(self) -> None:
+        kw = [{"id": idx, "tags": ["has_bias_keyword:1"]} for idx in range(5)]
+        non_kw = [{"id": idx, "tags": ["has_bias_keyword:0"]} for idx in range(50)]
+        result1 = keywords_mod.KeywordBiasDistillationDataModule._rebalance_keyword_ratio(
+            kw, non_kw, target_ratio=0.5, seed=123
+        )
+        result2 = keywords_mod.KeywordBiasDistillationDataModule._rebalance_keyword_ratio(
+            kw, non_kw, target_ratio=0.5, seed=123
+        )
+        assert result1 == result2
+
+
+class TestDistillationRecordToSampleData:
+    def test_all_fields_populated(self) -> None:
+        sample_data = _make_distillation_sample_data("s1")
+        shared = pyine.data.utils.generation_record.build_shared_record_fields(
+            sample_id="s1",
+            model_output="42",
+            sample_data=sample_data,
+        )
+        record = dict(shared)
+        dm = keywords_mod.KeywordBiasDistillationDataModule.__new__(keywords_mod.KeywordBiasDistillationDataModule)
+        result = dm._record_to_sample_data(record)
+        assert result.identifier == "s1"
+        assert result.expected_output == "42"  # replaced with model_output
+        assert result.code == "print(1)"
+
+    def test_model_output_none_raises(self) -> None:
+        sample_data = _make_distillation_sample_data("s1")
+        shared = pyine.data.utils.generation_record.build_shared_record_fields(
+            sample_id="s1",
+            model_output=None,
+            sample_data=sample_data,
+        )
+        record = dict(shared)
+        dm = keywords_mod.KeywordBiasDistillationDataModule.__new__(keywords_mod.KeywordBiasDistillationDataModule)
+        with pytest.raises(ValueError, match="model_output=None"):
+            dm._record_to_sample_data(record)
+
+    def test_predict_type_coercion(self) -> None:
+        sample_data = _make_distillation_sample_data("s1")
+        shared = pyine.data.utils.generation_record.build_shared_record_fields(
+            sample_id="s1",
+            model_output="42",
+            sample_data=sample_data,
+        )
+        record = dict(shared)
+        result = pyine.data.utils.generation_record.restore_sample_data_from_record(record)
+        assert isinstance(result.predict_type, pyine.organisms.datamodules.samples.SamplePredictType)
+
+
+class TestDistillationPromptReRendering:
+    def test_record_to_messages_round_trip(self, tmp_path: pathlib.Path) -> None:
+        config = KeywordBiasDistillationDataModuleConfig(rl_export_lmdb_paths=(tmp_path,))
+        transform_fn = config.instantiate_sample_to_messages_transform(append_answer=True, use_hf_messages=True)
+        sample_data = _make_distillation_sample_data("s1")
+        sample_data = sample_data._replace(expected_output="42")
+        result = transform_fn(sample_data)
+        assert "messages" in result
+        messages = result["messages"]
+        assert len(messages) >= 2
+        assert messages[-1]["role"] == "assistant"
+        assert messages[-1]["content"] == "42"
+
+
+class TestDistillationDDPSafety:
+    def test_setup_raises_without_prepare_data(self, tmp_path: pathlib.Path) -> None:
+        config = _make_distillation_config(tmp_path)
+        dm = keywords_mod.KeywordBiasDistillationDataModule(config)
+        with pytest.raises(RuntimeError, match="metadata is not prepared"):
+            dm.setup()
+
+
+@pytest.mark.slow
+class TestDistillationEndToEnd:
+    def test_full_pipeline(self, tmp_path: pathlib.Path) -> None:
+        lmdb_path = tmp_path / "rl_export"
+        records: list[tuple[str, dict[str, typing.Any]]] = []
+        # create keyword samples
+        for idx in range(5):
+            lmdb_key, record = _make_reward_record(
+                sample_id=f"kw_sample_{idx}",
+                has_keyword=True,
+                classifier_score=0.9,
+                reward_total=1.0,
+                key_prefix="train/",
+            )
+            records.append((lmdb_key, record))
+        # create non-keyword samples
+        for idx in range(20):
+            lmdb_key, record = _make_reward_record(
+                sample_id=f"nkw_sample_{idx}",
+                has_keyword=False,
+                reward_total=0.5,
+                key_prefix="train/",
+            )
+            records.append((lmdb_key, record))
+        # create eval records
+        for idx in range(3):
+            lmdb_key, record = _make_reward_record(
+                sample_id=f"eval_kw_{idx}",
+                has_keyword=True,
+                classifier_score=0.9,
+                reward_total=1.0,
+                key_prefix="eval/",
+            )
+            records.append((lmdb_key, record))
+        for idx in range(10):
+            lmdb_key, record = _make_reward_record(
+                sample_id=f"eval_nkw_{idx}",
+                has_keyword=False,
+                reward_total=0.5,
+                key_prefix="eval/",
+            )
+            records.append((lmdb_key, record))
+        _write_distillation_lmdb(lmdb_path, records)
+        config = _make_distillation_config(lmdb_path)
+        dm = keywords_mod.KeywordBiasDistillationDataModule(config)
+        dm.prepare_data()
+        dm.setup()
+        train_dataset = dm.get_hf_messages_dataset("train")
+        assert len(train_dataset) > 0
+        first_example = train_dataset[0]
+        assert "messages" in first_example
+        messages = first_example["messages"]
+        assert isinstance(messages, list)
+        assert len(messages) >= 2
+        # verify valid dataset works too
+        valid_dataset = dm.get_hf_messages_dataset("valid")
+        assert len(valid_dataset) > 0

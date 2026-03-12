@@ -17,6 +17,7 @@ import math
 import pathlib
 import typing
 
+import pyine.data.utils.generation_record
 import pyine.data.utils.lmdb_io
 import pyine.evals.code_exec._impl as impl_module
 import pyine.evals.code_exec.evaluator
@@ -32,15 +33,19 @@ import pyine.utils.portability
 
 logger = logging.getLogger(__name__)
 
+_warned_legacy_reconstruction = False
+
 
 def _reconstruct_sample_data(
     record: dict[str, typing.Any],
 ) -> pyine.organisms.datamodules.samples.SampleData:
     """Reconstruct a ``SampleData`` NamedTuple from an LMDB record dict.
 
-    All required fields use direct key access so that a ``KeyError`` is raised immediately if the
-    LMDB record is missing expected data (corrupted or incompatible dataset). Only the
-    ``pregenerated_output*`` fields are genuinely optional (default to empty string on ``SampleData``).
+    Supports two record formats:
+    - **New format** (post-consolidation): uses the nested ``sample_data`` dict via
+      ``restore_sample_data_from_record()``.
+    - **Legacy format** (pre-consolidation): reconstructs field-by-field from top-level keys.
+      This path will be removed once all existing eval exports have been regenerated.
 
     Args:
         record: A single LMDB record as produced by ``DiskEvalLogger``.
@@ -48,6 +53,14 @@ def _reconstruct_sample_data(
     Returns:
         Reconstructed SampleData with all fields mapped from the record.
     """
+    global _warned_legacy_reconstruction
+
+    if "sample_data" in record and record["sample_data"] is not None:
+        return pyine.data.utils.generation_record.restore_sample_data_from_record(record)
+    # legacy path for pre-consolidation LMDB exports; should be cleaned up (removed) later
+    if not _warned_legacy_reconstruction:
+        _warned_legacy_reconstruction = True
+        logger.warning("using legacy field-by-field reconstruction (pre-consolidation LMDB format)")
     tags_list: list[str] = record["tags"] or []
     comma_separated_tags = ",".join(tags_list) if tags_list else ""
     return pyine.organisms.datamodules.samples.SampleData(

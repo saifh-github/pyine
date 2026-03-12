@@ -419,8 +419,8 @@ class TestDiskEvalLogger:
         logger.close()
         reader = pyine.data.utils.lmdb_io.LMDBReader(output_dir)
         record = reader.get("s1/0")
-        assert record["pregenerated_output_lmdb_path"] == "/data/pregen.lmdb"
-        assert record["pregenerated_output_lmdb_key"] == "key_123"
+        assert record["sample_data"]["pregenerated_output_lmdb_path"] == "/data/pregen.lmdb"
+        assert record["sample_data"]["pregenerated_output_lmdb_key"] == "key_123"
         reader.close()
 
     def test_all_shared_fields_present(self, tmp_path: pathlib.Path) -> None:
@@ -456,6 +456,47 @@ class TestDiskEvalLogger:
         assert rec_no_parsed["model_output"] == "direct output"
         assert rec_no_parsed["final_answer"] is None
         assert rec_no_parsed["reasoning"] is None
+        reader.close()
+
+    def test_sample_data_dict_stored(self, tmp_path: pathlib.Path) -> None:
+        output_dir = tmp_path / "lmdb"
+        disk_logger = pyine.evals.logging.DiskEvalLogger(output_path=output_dir)
+        disk_logger.export_results(artifacts=[_make_artifact()], metrics={}, category_to_identifiers={})
+        disk_logger.close()
+        reader = pyine.data.utils.lmdb_io.LMDBReader(output_dir)
+        record = reader.get(0)
+        assert "sample_data" in record
+        sd = record["sample_data"]
+        assert sd["identifier"] == "test_sample"
+        assert sd["code"] == "print(1)"
+        assert sd["description"] == "test description"
+        assert sd["entrypoint"] == "main"
+        assert sd["inputs"] == ""
+        assert sd["expected_output"] == "1"
+        assert sd["predict_type"] == "program_output"
+        assert sd["code_type"] == "original"
+        # verify that consolidated fields are NOT duplicated as top-level keys
+        for removed_key in (
+            "code",
+            "inputs",
+            "description",
+            "entrypoint",
+            "first_line",
+            "last_line",
+            "first_line_hit",
+            "last_line_hit",
+            "first_step_idx",
+            "last_step_idx",
+            "trace_step_count",
+            "complexity_metrics",
+            "code_length",
+            "code_line_count",
+            "inputs_length",
+            "expected_output_length",
+            "pregenerated_output_lmdb_path",
+            "pregenerated_output_lmdb_key",
+        ):
+            assert removed_key not in record, f"removed key {removed_key!r} should not be a top-level record field"
         reader.close()
 
     def test_prompt_capture_validation_at_export(self, tmp_path: pathlib.Path) -> None:

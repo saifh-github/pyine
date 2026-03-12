@@ -5,6 +5,7 @@ import pathlib
 
 import pytest
 
+import pyine.data.utils.generation_record
 import pyine.data.utils.lmdb_io
 import pyine.evals.code_exec.reeval
 import pyine.evals.code_exec.utils
@@ -345,3 +346,72 @@ class TestReconstructFromLmdb:
         _export_artifacts_to_lmdb(lmdb2, [_make_artifact(identifier="s2")], metrics=dict(metrics))
         result = pyine.evals.code_exec.reeval.reconstruct_from_lmdb(lmdb_paths=[lmdb1, lmdb2])
         assert result.num_samples == 2
+
+    def test_reconstruct_sample_data_uses_new_path(self, tmp_path: pathlib.Path) -> None:
+        """Records with sample_data dict use restore_sample_data_from_record."""
+        lmdb_path = tmp_path / "lmdb"
+        _export_artifacts_to_lmdb(lmdb_path, [_make_artifact(identifier="s1")])
+        result = pyine.evals.code_exec.reeval.reconstruct_from_lmdb(lmdb_paths=[lmdb_path])
+        artifact = result.artifacts[0]
+        assert artifact.sample.identifier == "s1"
+        assert artifact.sample.code == "print(1)"
+        assert artifact.sample.predict_type == pyine.organisms.datamodules.samples.SamplePredictType.program_output
+
+    def test_reconstruct_sample_data_legacy_fallback(self, tmp_path: pathlib.Path) -> None:
+        """Records without sample_data dict fall back to field-by-field reconstruction."""
+        lmdb_path = tmp_path / "legacy_lmdb"
+        writer = pyine.data.utils.lmdb_io.LMDBWriter(
+            path=lmdb_path,
+            serialization_config=pyine.data.utils.lmdb_io.SerializationConfig(
+                method=pyine.data.utils.lmdb_io.SerializationMethod.JSON_ZSTD,
+            ),
+        )
+        writer.write_metadata({"record_type": "benchmark", "aggregated_metrics": {"accuracy_hard": 1.0}})
+        record = {
+            "sample_id": "legacy_s1",
+            "model_output": "42",
+            "prompt": "test prompt",
+            "expected_output": "42",
+            "reasoning": None,
+            "final_answer": None,
+            "predict_type": "program_output",
+            "code_type": "original",
+            "has_code_override": False,
+            "pregenerated_output": "",
+            "tags": ["tag1"],
+            "categories": ["cat_a"],
+            "key_prefix": "",
+            "attempt_index": 0,
+            "hard_match": True,
+            "soft_match": True,
+            "soft_match_reason": "",
+            "soft_match_path": "",
+            "grader_score": None,
+            "prompt_messages": None,
+            "token_usage": {
+                "total_tokens": 10,
+                "prompt_tokens": 5,
+                "cached_tokens": 0,
+                "reasoning_tokens": 0,
+                "completion_tokens": 5,
+            },
+            "difficulty_score": None,
+            "parsed_output_fields": None,
+            "code": "print(42)",
+            "inputs": "",
+            "description": "test",
+            "entrypoint": "main",
+            "first_line": 0,
+            "last_line": 1,
+            "trace_step_count": 1,
+            "complexity_metrics": {"loc": 1},
+            "first_line_hit": 0,
+            "last_line_hit": 1,
+            "first_step_idx": 0,
+            "last_step_idx": 1,
+        }
+        writer.put("legacy_s1/0", record)
+        writer.close()
+        result = pyine.evals.code_exec.reeval.reconstruct_from_lmdb(lmdb_paths=[lmdb_path])
+        assert result.num_samples == 1
+        assert result.artifacts[0].sample.code == "print(42)"

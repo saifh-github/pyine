@@ -57,6 +57,7 @@ import wandb
 
 import pyine.data.utils.generation_record
 import pyine.data.utils.lmdb_io
+import pyine.organisms.datamodules.samples.common
 import pyine.organisms.models.rewards.core.configs as reward_configs
 import pyine.organisms.models.rewards.core.types as reward_types
 import pyine.utils.parsing as parsing_utils
@@ -1333,6 +1334,7 @@ class DiskRewardLogger:
         code_type: str | None = None,
         has_code_override: bool | None = None,
         pregenerated_output: str | None = None,
+        sample_data: pyine.organisms.datamodules.samples.common.SampleData | None = None,
         **kwargs: typing.Any,
     ) -> None:
         """Write a per-sample reward record to LMDB.
@@ -1365,6 +1367,7 @@ class DiskRewardLogger:
             code_type: Code augmentation type (e.g. ``"original"``, ``"hinted"``).
             has_code_override: Whether the code was overridden by augmentation.
             pregenerated_output: Pre-generated model output, if any.
+            sample_data: Full SampleData to serialize into the record for downstream re-rendering.
             **kwargs: Additional fields (ignored).
         """
         if not self._key_prefix:
@@ -1385,6 +1388,7 @@ class DiskRewardLogger:
             tags=tags,
             categories=categories,
             key_prefix=self._key_prefix,
+            sample_data=sample_data,
         )
         record: dict[str, typing.Any] = {
             **shared,
