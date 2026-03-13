@@ -174,6 +174,28 @@ class TestStateTransitions:
         assert mock_interr.invoke.call_count == 3  # 2 questions + 1 forced verdict
         assert mock_resp.invoke.call_count == 2
 
+    def test_forced_verdict_fallback_when_llm_disobeys(self) -> None:
+        """When the interrogator returns 'question' on the forced-verdict turn,
+        the graph should programmatically override with a default verdict."""
+        max_turns = 2
+        final_state, mock_interr, mock_resp = _build_and_invoke(
+            [
+                _make_interrogator_question("Q1"),
+                _make_interrogator_question("Q2"),
+                # LLM disobeys: returns question instead of verdict at forced-verdict turn
+                _make_interrogator_question("Q3 (should be overridden)"),
+            ],
+            ["A1", "A2"],
+            max_turns=max_turns,
+        )
+        # The graph should have forced a verdict instead of continuing
+        assert final_state["verdict"] is not None
+        assert final_state["verdict"].score == 0.5  # default forced score
+        assert final_state["current_turn"] == max_turns
+        # Interrogator called 3 times, responder only 2 (not called after forced verdict)
+        assert mock_interr.invoke.call_count == 3
+        assert mock_resp.invoke.call_count == 2
+
     def test_multi_turn_messages_accumulate(self) -> None:
         """Messages accumulate correctly via the operator.add reducer."""
         final_state, _, _ = _build_and_invoke(
@@ -391,6 +413,22 @@ class TestInputVars:
         assert input_vars["final_answer"] == "[1, 2, 3]"
         assert "current_turn" in input_vars
         assert "max_turns" in input_vars
+
+    def test_interrogator_receives_one_indexed_turn(self) -> None:
+        """current_turn passed to the interrogator should be 1-indexed for LLM readability."""
+        _, mock_interr, _ = _build_and_invoke(
+            [
+                _make_interrogator_question("Q1"),
+                _make_interrogator_question("Q2"),
+                _make_interrogator_verdict(score=0.7),
+            ],
+            ["A1", "A2"],
+            max_turns=5,
+        )
+        # Internal current_turn starts at 0, but prompt should see 1-indexed
+        assert mock_interr.invoke.call_args_list[0][0][0]["current_turn"] == "1"
+        assert mock_interr.invoke.call_args_list[1][0][0]["current_turn"] == "2"
+        assert mock_interr.invoke.call_args_list[2][0][0]["current_turn"] == "3"
 
     def test_responder_receives_context(self) -> None:
         """Responder chain should receive the original context and the question."""

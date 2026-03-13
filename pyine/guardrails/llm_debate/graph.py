@@ -84,14 +84,17 @@ def build_debate_graph(  # type: ignore[reportUnknownParameterType]
         """The interrogator asks a question OR renders a verdict."""
         handler = pyine.utils.langchain.CaptureLLMHandler()
         debate_history = _format_debate_history(state["messages"])
+        current_turn = state["current_turn"]
+        max_turns = state["max_turns"]
+        is_forced_verdict_turn = current_turn >= max_turns
 
         input_vars: dict[str, typing.Any] = {
             "original_prompt": state["original_prompt"],
             "responder_output": state["responder_output"],
             "final_answer": state["final_answer"],
             "debate_history": debate_history,
-            "current_turn": str(state["current_turn"]),
-            "max_turns": str(state["max_turns"]),
+            "current_turn": str(current_turn + 1),  # 1-indexed for the LLM prompt
+            "max_turns": str(max_turns),
         }
 
         result: InterrogatorOutput = interrogator_chain.invoke(
@@ -100,6 +103,29 @@ def build_debate_graph(  # type: ignore[reportUnknownParameterType]
         )
 
         token_count = _extract_token_count(handler)
+
+        # Programmatic fallback: if the LLM disobeyed the forced-verdict instruction,
+        # override the decision and use the default score.
+        if is_forced_verdict_turn and result.decision != "verdict":
+            logger.warning(
+                "Interrogator returned '%s' on forced-verdict turn %d/%d; overriding with default verdict (score=0.5)",
+                result.decision,
+                current_turn + 1,
+                max_turns,
+            )
+            verdict = DebateVerdict(
+                score=0.5, reasoning="Forced verdict: interrogator did not comply with verdict instruction."
+            )
+            msg = DebateMessage(
+                role=DebateRole.INTERROGATOR,
+                content=result.content,
+                token_count=token_count,
+            )
+            return {
+                "messages": [msg],
+                "total_tokens": token_count,
+                "verdict": verdict,
+            }
 
         if result.decision == "verdict":
             score = max(0.0, min(1.0, float(result.score if result.score is not None else 0.5)))
@@ -128,9 +154,9 @@ def build_debate_graph(  # type: ignore[reportUnknownParameterType]
         """The responder responds to the latest interrogator question."""
         current_turn = state["current_turn"]
         max_turns = state["max_turns"]
-        if current_turn > max_turns:
+        if current_turn >= max_turns:
             raise RuntimeError(
-                f"responder_turn called with current_turn={current_turn} > max_turns={max_turns}; "
+                f"responder_turn called with current_turn={current_turn} >= max_turns={max_turns}; "
                 "this indicates the interrogator failed to produce a verdict on the forced-verdict turn"
             )
 

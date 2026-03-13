@@ -172,7 +172,7 @@ class DebateGuardrailScorer:
 
             return score, transcript.total_token_count, transcript.model_dump()
 
-        except Exception:
+        except Exception as exc:
             logger.warning(
                 "Debate failed for record %s, using default score",
                 record.sample_id,
@@ -180,7 +180,14 @@ class DebateGuardrailScorer:
             )
             with self._error_lock:
                 self._error_count += 1
-            return self._config.default_score_on_error, 0.0, {}
+            return (
+                self._config.default_score_on_error,
+                0.0,
+                {
+                    "error": str(exc),
+                    "error_type": type(exc).__name__,
+                },
+            )
 
     @staticmethod
     def _format_transcript_for_log(

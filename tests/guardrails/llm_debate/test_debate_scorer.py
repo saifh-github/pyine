@@ -222,6 +222,21 @@ class TestErrorHandling:
         metadata = scorer.get_metadata()
         assert metadata["error_count"] == 3
 
+    def test_error_metadata_contains_error_info(self) -> None:
+        """Error records should return metadata with error details, not empty {}."""
+        scorer, _ = _build_scorer_with_mock_graph(
+            graph_invoke_side_effect=RuntimeError("Graph execution failed"),
+        )
+        records = [make_eval_record()]
+        result = scorer.score_records(records)
+        assert result.attempt_metadata is not None
+        key = next(iter(result.attempt_metadata))
+        metadata = result.attempt_metadata[key]
+        assert "error" in metadata
+        assert "error_type" in metadata
+        assert metadata["error_type"] == "RuntimeError"
+        assert "Graph execution failed" in metadata["error"]
+
     def test_error_count_accumulates_across_calls(self) -> None:
         scorer, _ = _build_scorer_with_mock_graph(
             graph_invoke_side_effect=RuntimeError("Error"),
