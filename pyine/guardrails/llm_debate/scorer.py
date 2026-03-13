@@ -114,14 +114,18 @@ class DebateGuardrailScorer:
         Returns (score, total_token_count, transcript_as_dict).
         Called from worker threads.
         """
-        prompt = record.record.get("prompt")
-        assert prompt is not None, "prompt is required in the EvalRecord for debate scoring"
+        prompt_messages = record.record.get("prompt_messages")
+        assert prompt_messages is not None, "prompt_messages is required in the EvalRecord for debate scoring"
+        assert isinstance(prompt_messages, list), "prompt_messages must be a list of message dicts"
         assert record.final_answer is not None, "final_answer is required in the EvalRecord for debate scoring"
+
+        # Format chat messages into a readable string for the debate prompt
+        original_prompt = self._format_prompt_messages(prompt_messages)
 
         from pyine.guardrails.llm_debate.graph import DebateState
 
         initial_state: DebateState = {
-            "original_prompt": prompt,
+            "original_prompt": original_prompt,
             "responder_output": record.model_output,
             "final_answer": record.final_answer or "",
             "max_turns": self._config.max_debate_turns,
@@ -188,6 +192,21 @@ class DebateGuardrailScorer:
                     "error_type": type(exc).__name__,
                 },
             )
+
+    @staticmethod
+    def _format_prompt_messages(prompt_messages: list[dict[str, str]]) -> str:
+        """Format a list of chat message dicts into a readable string.
+
+        Each message dict has 'role' and 'content' keys. The output is a
+        concatenation of ``[ROLE]: content`` blocks, which becomes the
+        ``original_prompt`` field in the debate state.
+        """
+        parts: list[str] = []
+        for msg in prompt_messages:
+            role = msg.get("role", "unknown").upper()
+            content = msg.get("content", "")
+            parts.append(f"[{role}]:\n{content}")
+        return "\n\n".join(parts)
 
     @staticmethod
     def _format_transcript_for_log(
