@@ -16,7 +16,7 @@ from pyine.guardrails.llm_debate.types import (
     DebateRole,
     DebateTranscript,
 )
-from pyine.prompts.configs.guardrail.debate_interrogator import InterrogatorOutput
+from pyine.prompts.configs.guardrail.debate_interrogator import InterrogatorOutput, VerdictOutput
 
 _EXTRACT_TOKENS_TARGET = (  # noqa: S105
     "pyine.guardrails.llm_debate.graph.pyine.utils.langchain.extract_token_count_from_handler"
@@ -226,3 +226,96 @@ class TestTokenAccumulationIntegration:
         assert final_state["messages"][0].token_count == pytest.approx(100.0)  # interr Q1
         assert final_state["messages"][1].token_count == pytest.approx(200.0)  # resp A1
         assert final_state["messages"][2].token_count == pytest.approx(300.0)  # interr verdict
+
+
+class TestVerdictChainIntegration:
+    """Integration test exercising the verdict chain path in a multi-turn debate."""
+
+    def test_multi_turn_debate_with_verdict_chain(self) -> None:
+        """Run a 3-turn debate where the verdict chain is used on the final turn.
+
+        Verifies the full flow: interrogator asks questions for max_turns rounds,
+        then the verdict chain is called (not the regular interrogator), producing
+        a valid transcript with the verdict chain's score.
+        """
+        max_turns = 3
+        interrogator_responses = [
+            InterrogatorOutput(
+                decision="question",
+                content="How does range(3) work?",
+                score=None,
+                reasoning=None,
+            ),
+            InterrogatorOutput(
+                decision="question",
+                content="What about the newline behavior?",
+                score=None,
+                reasoning=None,
+            ),
+            InterrogatorOutput(
+                decision="question",
+                content="Are you sure about the separator?",
+                score=None,
+                reasoning=None,
+            ),
+        ]
+        responder_responses = [
+            "range(3) generates 0, 1, 2.",
+            "Each print() adds a newline.",
+            "Yes, print uses newline by default.",
+        ]
+
+        verdict_output = VerdictOutput(
+            score=0.88,
+            reasoning="Accurate understanding demonstrated across all turns.",
+            content="The model clearly understands range() and print() behavior.",
+        )
+
+        mock_interr = MagicMock()
+        mock_interr.invoke.side_effect = interrogator_responses
+        mock_resp = MagicMock()
+        mock_resp.invoke.side_effect = responder_responses
+        mock_verdict = MagicMock()
+        mock_verdict.invoke.return_value = verdict_output
+
+        with patch(_EXTRACT_TOKENS_TARGET, return_value=100.0):
+            graph = build_debate_graph(
+                mock_interr,
+                mock_resp,
+                interrogator_verdict_chain=mock_verdict,
+                responder_sees_debate_history=True,
+            )
+            final_state = graph.invoke(_make_initial_state(max_turns=max_turns))
+
+        # Verify final state
+        assert final_state["verdict"] is not None
+        assert final_state["verdict"].score == 0.88
+        assert final_state["verdict"].reasoning == "Accurate understanding demonstrated across all turns."
+        assert final_state["current_turn"] == max_turns
+
+        # Build transcript from final state (same as scorer does)
+        transcript = DebateTranscript(
+            messages=final_state["messages"],
+            verdict=final_state["verdict"],
+            num_turns=final_state["current_turn"],
+            total_token_count=final_state["total_tokens"],
+        )
+
+        # 3 questions + 3 answers + 1 verdict message = 7 messages
+        assert len(transcript.messages) == 7
+        assert transcript.num_turns == 3
+        assert transcript.verdict.score == 0.88
+
+        # Regular interrogator called 3 times (questions only), verdict chain once
+        assert mock_interr.invoke.call_count == 3
+        assert mock_verdict.invoke.call_count == 1
+        assert mock_resp.invoke.call_count == 3
+
+        # Last message should be from the verdict chain (interrogator role)
+        assert transcript.messages[-1].role == DebateRole.INTERROGATOR
+        assert transcript.messages[-1].content == "The model clearly understands range() and print() behavior."
+
+        # Verify the transcript can be serialized
+        data = transcript.model_dump()
+        restored = DebateTranscript.model_validate(data)
+        assert restored.verdict.score == transcript.verdict.score

@@ -36,8 +36,19 @@ class DebateGuardrailConfig(pydantic.BaseModel):
     """Name of the interrogator prompt template (resolved by PromptManager)."""
     responder_prompt_name: str = "guardrail/debate_responder"
     """Name of the responder prompt template (resolved by PromptManager)."""
+    interrogator_verdict_prompt_name: str = "guardrail/debate_interrogator_verdict"
+    """Name of the verdict-only interrogator prompt (used on the final forced-verdict turn)."""
     use_chat_template: bool = True
     """Whether to use a chat prompt template (system + human message)."""
+
+    # --- Retries ---
+    chain_retry_max_attempts: int = pydantic.Field(default=3, ge=0, le=10)
+    """Maximum number of retry attempts for each chain invocation (interrogator,
+    responder, verdict). Retries cover both parse errors (OutputParserException)
+    and provider errors (timeouts, rate limits, 5xx). Set to 0 to disable."""
+
+    chain_retry_wait_exponential_jitter: bool = True
+    """Whether to use exponential backoff with jitter between chain retries."""
 
     # --- Debate ---
     max_debate_turns: int = pydantic.Field(default=3, ge=1, le=10)

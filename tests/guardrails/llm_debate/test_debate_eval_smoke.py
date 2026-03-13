@@ -66,6 +66,8 @@ def _build_mocked_scorer(
     mock_graph = MagicMock()
     mock_graph.invoke.return_value = graph_return_value
 
+    mock_chain = MagicMock()
+
     with (
         patch.object(
             pyine.utils.llm_providers.LLMProviderConfig,
@@ -74,7 +76,7 @@ def _build_mocked_scorer(
         ),
         patch(
             "pyine.prompts.manager.get_prompt_chain",
-            return_value=MagicMock(),
+            return_value=mock_chain,
         ),
         patch(
             "pyine.guardrails.llm_debate.scorer.build_debate_graph",
@@ -177,6 +179,8 @@ class TestEvalPipelineSmokeTest:
         mock_graph = MagicMock()
         mock_graph.invoke.side_effect = mixed_invoke
 
+        mock_chain = MagicMock()
+
         with (
             patch.object(
                 pyine.utils.llm_providers.LLMProviderConfig,
@@ -185,7 +189,7 @@ class TestEvalPipelineSmokeTest:
             ),
             patch(
                 "pyine.prompts.manager.get_prompt_chain",
-                return_value=MagicMock(),
+                return_value=mock_chain,
             ),
             patch(
                 "pyine.guardrails.llm_debate.scorer.build_debate_graph",

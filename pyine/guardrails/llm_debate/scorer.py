@@ -52,10 +52,26 @@ class DebateGuardrailScorer:
             runnable_name="debate_responder",
         )
 
+        # Build verdict chain for forced-verdict turn
+        self._interrogator_verdict_chain = pyine.prompts.manager.get_prompt_chain(
+            model=self._interrogator_llm,
+            prompt_name=config.interrogator_verdict_prompt_name,
+            use_chat_template=config.use_chat_template,
+            runnable_name="debate_interrogator_verdict",
+        )
+
+        # Apply chain-level retries if configured
+        if self._config.chain_retry_max_attempts > 0:
+            retry_kwargs = self._build_chain_retry_kwargs(self._config)
+            self._interrogator_chain = self._interrogator_chain.with_retry(**retry_kwargs)
+            self._responder_chain = self._responder_chain.with_retry(**retry_kwargs)
+            self._interrogator_verdict_chain = self._interrogator_verdict_chain.with_retry(**retry_kwargs)
+
         # Build and compile LangGraph debate graph
         self._graph = build_debate_graph(  # type: ignore[reportUnknownMemberType]
             self._interrogator_chain,
             self._responder_chain,
+            interrogator_verdict_chain=self._interrogator_verdict_chain,
             responder_sees_debate_history=config.responder_sees_debate_history,
         )
 
@@ -120,7 +136,7 @@ class DebateGuardrailScorer:
         assert record.final_answer is not None, "final_answer is required in the EvalRecord for debate scoring"
 
         # Format chat messages into a readable string for the debate prompt
-        original_prompt = self._format_prompt_messages(prompt_messages)
+        original_prompt = self._format_prompt_messages(prompt_messages)  # type: ignore[reportUnknownArgumentType]
 
         from pyine.guardrails.llm_debate.graph import DebateState
 
@@ -240,6 +256,24 @@ class DebateGuardrailScorer:
         lines.append(sep)
         return "\n".join(lines)
 
+    @staticmethod
+    def _build_chain_retry_kwargs(config: DebateGuardrailConfig) -> dict[str, typing.Any]:
+        """Build LangChain with_retry kwargs from config fields."""
+        import langchain_core.exceptions
+        import openai
+
+        return {
+            "retry_if_exception_type": (
+                langchain_core.exceptions.OutputParserException,
+                openai.APITimeoutError,
+                openai.APIConnectionError,
+                openai.RateLimitError,
+                openai.InternalServerError,
+            ),
+            "wait_exponential_jitter": config.chain_retry_wait_exponential_jitter,
+            "stop_after_attempt": config.chain_retry_max_attempts,
+        }
+
     def get_metadata(self) -> dict[str, typing.Any]:
         """Return debate guardrail metadata for reporting."""
         return {
@@ -252,6 +286,9 @@ class DebateGuardrailScorer:
             "responder_sees_debate_history": self._config.responder_sees_debate_history,
             "max_workers": self._config.max_workers,
             "default_score_on_error": self._config.default_score_on_error,
+            "interrogator_verdict_prompt_name": self._config.interrogator_verdict_prompt_name,
+            "chain_retry_max_attempts": self._config.chain_retry_max_attempts,
+            "chain_retry_wait_exponential_jitter": self._config.chain_retry_wait_exponential_jitter,
             "total_scored": self._total_scored,
             "error_count": self._error_count,
         }

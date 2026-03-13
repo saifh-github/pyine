@@ -82,6 +82,8 @@ def _build_scorer_with_mock_graph(
     else:
         mock_graph.invoke.return_value = _make_final_graph_state()
 
+    mock_chain = MagicMock()
+
     with (
         patch.object(
             pyine.utils.llm_providers.LLMProviderConfig,
@@ -90,7 +92,7 @@ def _build_scorer_with_mock_graph(
         ),
         patch(
             "pyine.prompts.manager.get_prompt_chain",
-            return_value=MagicMock(),
+            return_value=mock_chain,
         ),
         patch(
             "pyine.guardrails.llm_debate.scorer.build_debate_graph",
@@ -325,3 +327,97 @@ class TestProtocolConformance:
 
         cost_sig = inspect.signature(scorer.get_verification_cost_unit)
         assert len(cost_sig.parameters) == 0
+
+
+# ---------------------------------------------------------------------------
+# Tests: Retry config
+# ---------------------------------------------------------------------------
+
+
+class TestRetryConfig:
+    def test_retry_wraps_chains_when_enabled(self) -> None:
+        """When chain_retry_max_attempts > 0, with_retry should be called on the chains."""
+        config = make_debate_config(chain_retry_max_attempts=3)
+
+        mock_chain = MagicMock()
+        # with_retry returns a new mock (the wrapped chain)
+        mock_chain.with_retry.return_value = MagicMock()
+
+        with (
+            patch.object(
+                pyine.utils.llm_providers.LLMProviderConfig,
+                "get_model",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "pyine.prompts.manager.get_prompt_chain",
+                return_value=mock_chain,
+            ),
+            patch(
+                "pyine.guardrails.llm_debate.scorer.build_debate_graph",
+                return_value=MagicMock(),
+            ),
+        ):
+            from pyine.guardrails.llm_debate.scorer import DebateGuardrailScorer
+
+            DebateGuardrailScorer(config)
+
+        # with_retry should have been called on the chains
+        assert mock_chain.with_retry.call_count >= 2  # at least interrogator + responder
+
+    def test_no_retry_when_disabled(self) -> None:
+        """When chain_retry_max_attempts == 0, with_retry should not be called."""
+        config = make_debate_config(chain_retry_max_attempts=0)
+
+        mock_chain = MagicMock()
+
+        with (
+            patch.object(
+                pyine.utils.llm_providers.LLMProviderConfig,
+                "get_model",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "pyine.prompts.manager.get_prompt_chain",
+                return_value=mock_chain,
+            ),
+            patch(
+                "pyine.guardrails.llm_debate.scorer.build_debate_graph",
+                return_value=MagicMock(),
+            ),
+        ):
+            from pyine.guardrails.llm_debate.scorer import DebateGuardrailScorer
+
+            DebateGuardrailScorer(config)
+
+        mock_chain.with_retry.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Tests: Verdict prompt name in metadata
+# ---------------------------------------------------------------------------
+
+
+class TestVerdictPromptMetadata:
+    def test_metadata_contains_verdict_prompt_name(self) -> None:
+        """The interrogator_verdict_prompt_name should appear in scorer metadata."""
+        config = make_debate_config(
+            interrogator_verdict_prompt_name="guardrail/debate_interrogator_verdict",
+        )
+        scorer, _ = _build_scorer_with_mock_graph(config=config)
+        metadata = scorer.get_metadata()
+        assert "interrogator_verdict_prompt_name" in metadata
+        assert metadata["interrogator_verdict_prompt_name"] == "guardrail/debate_interrogator_verdict"
+
+    def test_metadata_contains_retry_fields(self) -> None:
+        """Retry config fields should appear in scorer metadata."""
+        config = make_debate_config(
+            chain_retry_max_attempts=5,
+            chain_retry_wait_exponential_jitter=False,
+        )
+        scorer, _ = _build_scorer_with_mock_graph(config=config)
+        metadata = scorer.get_metadata()
+        assert "chain_retry_max_attempts" in metadata
+        assert metadata["chain_retry_max_attempts"] == 5
+        assert "chain_retry_wait_exponential_jitter" in metadata
+        assert metadata["chain_retry_wait_exponential_jitter"] is False

@@ -15,7 +15,7 @@ if typing.TYPE_CHECKING:
     import langchain_core.runnables
     from langgraph.graph.state import CompiledStateGraph
 
-    from pyine.prompts.configs.guardrail.debate_interrogator import InterrogatorOutput
+    from pyine.prompts.configs.guardrail.debate_interrogator import InterrogatorOutput, VerdictOutput
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +61,7 @@ def _extract_token_count(handler: pyine.utils.langchain.CaptureLLMHandler) -> fl
 def build_debate_graph(  # type: ignore[reportUnknownParameterType]
     interrogator_chain: langchain_core.runnables.Runnable[typing.Any, typing.Any],
     responder_chain: langchain_core.runnables.Runnable[typing.Any, typing.Any],
+    interrogator_verdict_chain: langchain_core.runnables.Runnable[typing.Any, typing.Any] | None = None,
     responder_sees_debate_history: bool = True,
 ) -> CompiledStateGraph[typing.Any, typing.Any, typing.Any, typing.Any]:
     """Build and compile the debate state machine.
@@ -68,6 +69,11 @@ def build_debate_graph(  # type: ignore[reportUnknownParameterType]
     Args:
         interrogator_chain: The interrogator's prompt chain (prompt | model | parser).
         responder_chain: The responder's prompt chain (prompt | model | parser).
+        interrogator_verdict_chain: Optional verdict-only chain for the final
+            forced-verdict turn. When provided, the interrogator uses this chain
+            (which has no ``decision`` field) on the last turn instead of the
+            regular interrogator chain. When None, falls back to the programmatic
+            verdict override.
         responder_sees_debate_history: If True, the responder_turn node passes
             the full debate transcript as ``debate_history``. If False, passes
             an empty string so the responder only sees its original output + the
@@ -93,9 +99,31 @@ def build_debate_graph(  # type: ignore[reportUnknownParameterType]
             "responder_output": state["responder_output"],
             "final_answer": state["final_answer"],
             "debate_history": debate_history,
-            "current_turn": str(current_turn + 1),  # 1-indexed for the LLM prompt
-            "max_turns": str(max_turns),
         }
+
+        if is_forced_verdict_turn and interrogator_verdict_chain is not None:
+            # Use verdict-only chain: no decision field, always a verdict
+            verdict_result: VerdictOutput = interrogator_verdict_chain.invoke(
+                input_vars,
+                config={"callbacks": [handler]},
+            )
+            token_count = _extract_token_count(handler)
+            score = max(0.0, min(1.0, float(verdict_result.score)))
+            verdict = DebateVerdict(score=score, reasoning=verdict_result.reasoning)
+            msg = DebateMessage(
+                role=DebateRole.INTERROGATOR,
+                content=verdict_result.content,
+                token_count=token_count,
+            )
+            return {
+                "messages": [msg],
+                "total_tokens": token_count,
+                "verdict": verdict,
+            }
+
+        # Normal turn: use regular interrogator chain (includes question/verdict decision)
+        input_vars["current_turn"] = str(current_turn + 1)  # 1-indexed for the LLM prompt
+        input_vars["max_turns"] = str(max_turns)
 
         result: InterrogatorOutput = interrogator_chain.invoke(
             input_vars,
@@ -104,8 +132,11 @@ def build_debate_graph(  # type: ignore[reportUnknownParameterType]
 
         token_count = _extract_token_count(handler)
 
-        # Programmatic fallback: if the LLM disobeyed the forced-verdict instruction,
-        # override the decision and use the default score.
+        # --- Programmatic fallback (retained for backward compat / safety) ---
+        # If the verdict chain is not provided (interrogator_verdict_chain=None)
+        # and the LLM disobeyed the forced-verdict instruction, fall back to
+        # the default score. This path is also a safety net if a future caller
+        # uses the graph without a verdict chain.
         if is_forced_verdict_turn and result.decision != "verdict":
             logger.warning(
                 "Interrogator returned '%s' on forced-verdict turn %d/%d; overriding with default verdict (score=0.5)",
@@ -114,7 +145,8 @@ def build_debate_graph(  # type: ignore[reportUnknownParameterType]
                 max_turns,
             )
             verdict = DebateVerdict(
-                score=0.5, reasoning="Forced verdict: interrogator did not comply with verdict instruction."
+                score=0.5,
+                reasoning="Forced verdict: interrogator did not comply with verdict instruction.",
             )
             msg = DebateMessage(
                 role=DebateRole.INTERROGATOR,
@@ -140,6 +172,7 @@ def build_debate_graph(  # type: ignore[reportUnknownParameterType]
                 "total_tokens": token_count,
                 "verdict": verdict,
             }
+
         msg = DebateMessage(
             role=DebateRole.INTERROGATOR,
             content=result.content,

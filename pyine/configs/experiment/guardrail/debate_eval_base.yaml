@@ -18,6 +18,10 @@ config:
     max_workers: 5
     default_score_on_error: 0.5
     responder_sees_debate_history: true
+    # --- Verdict & retry config ---
+    interrogator_verdict_prompt_name: guardrail/debate_interrogator_verdict
+    chain_retry_max_attempts: 3
+    chain_retry_wait_exponential_jitter: true
 
   evals_config:
     datamodule_config:

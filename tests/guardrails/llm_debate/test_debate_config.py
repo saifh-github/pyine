@@ -28,6 +28,9 @@ class TestConfigDefaults:
         assert config.max_workers == 5
         assert config.default_score_on_error == 0.5
         assert config.debug_log_transcript_every_n == 0
+        assert config.chain_retry_max_attempts == 3
+        assert config.chain_retry_wait_exponential_jitter is True
+        assert config.interrogator_verdict_prompt_name == "guardrail/debate_interrogator_verdict"
 
     def test_config_accepts_custom_values(self) -> None:
         config = DebateGuardrailConfig(
@@ -101,6 +104,59 @@ class TestConfigValidation:
     def test_debug_log_zero_allowed(self) -> None:
         config = make_debate_config(debug_log_transcript_every_n=0)
         assert config.debug_log_transcript_every_n == 0
+
+    # --- chain_retry_max_attempts ---
+
+    def test_chain_retry_max_attempts_default(self) -> None:
+        config = DebateGuardrailConfig(
+            interrogator_provider=make_llm_provider(),
+            responder_provider=make_llm_provider(),
+        )
+        assert config.chain_retry_max_attempts == 3
+
+    def test_chain_retry_max_attempts_zero_disables(self) -> None:
+        config = make_debate_config(chain_retry_max_attempts=0)
+        assert config.chain_retry_max_attempts == 0
+
+    def test_chain_retry_max_attempts_negative(self) -> None:
+        with pytest.raises(pydantic.ValidationError):
+            make_debate_config(chain_retry_max_attempts=-1)
+
+    def test_chain_retry_max_attempts_above_max(self) -> None:
+        with pytest.raises(pydantic.ValidationError):
+            make_debate_config(chain_retry_max_attempts=11)
+
+    def test_chain_retry_max_attempts_bounds_exact(self) -> None:
+        config_zero = make_debate_config(chain_retry_max_attempts=0)
+        assert config_zero.chain_retry_max_attempts == 0
+        config_ten = make_debate_config(chain_retry_max_attempts=10)
+        assert config_ten.chain_retry_max_attempts == 10
+
+    # --- chain_retry_wait_exponential_jitter ---
+
+    def test_chain_retry_wait_exponential_jitter_default(self) -> None:
+        config = DebateGuardrailConfig(
+            interrogator_provider=make_llm_provider(),
+            responder_provider=make_llm_provider(),
+        )
+        assert config.chain_retry_wait_exponential_jitter is True
+
+    def test_chain_retry_wait_exponential_jitter_can_disable(self) -> None:
+        config = make_debate_config(chain_retry_wait_exponential_jitter=False)
+        assert config.chain_retry_wait_exponential_jitter is False
+
+    # --- interrogator_verdict_prompt_name ---
+
+    def test_interrogator_verdict_prompt_name_default(self) -> None:
+        config = DebateGuardrailConfig(
+            interrogator_provider=make_llm_provider(),
+            responder_provider=make_llm_provider(),
+        )
+        assert config.interrogator_verdict_prompt_name == "guardrail/debate_interrogator_verdict"
+
+    def test_interrogator_verdict_prompt_name_custom(self) -> None:
+        config = make_debate_config(interrogator_verdict_prompt_name="custom/verdict")
+        assert config.interrogator_verdict_prompt_name == "custom/verdict"
 
 
 # ---------------------------------------------------------------------------

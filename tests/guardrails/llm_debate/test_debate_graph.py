@@ -15,7 +15,7 @@ from pyine.guardrails.llm_debate.types import (
     DebateMessage,
     DebateRole,
 )
-from pyine.prompts.configs.guardrail.debate_interrogator import InterrogatorOutput
+from pyine.prompts.configs.guardrail.debate_interrogator import InterrogatorOutput, VerdictOutput
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -78,23 +78,45 @@ def _build_mock_chains(
     return mock_interrogator_chain, mock_responder_chain
 
 
+def _make_verdict_output(
+    score: float = 0.85,
+    reasoning: str = "Good",
+    content: str = "Assessment summary",
+) -> VerdictOutput:
+    """Build a VerdictOutput for the forced-verdict turn."""
+    return VerdictOutput(score=score, reasoning=reasoning, content=content)
+
+
 def _build_and_invoke(
     interrogator_responses: list[InterrogatorOutput],
     responder_responses: list[str],
     max_turns: int = 3,
     responder_sees_debate_history: bool = True,
     token_count_return: float = 50.0,
+    interrogator_verdict_chain: MagicMock | None | typing.Literal["_OMIT"] = "_OMIT",
 ) -> tuple[dict[str, typing.Any], MagicMock, MagicMock]:
-    """Build graph, invoke with mocked chains, return (final_state, mock_interr, mock_resp)."""
+    """Build graph, invoke with mocked chains, return (final_state, mock_interr, mock_resp).
+
+    Args:
+        interrogator_verdict_chain: Mock for the verdict chain. Pass None to explicitly
+            test the no-verdict-chain fallback. Pass "_OMIT" (default) to omit the
+            parameter entirely (backward compatibility with existing tests).
+    """
     from pyine.guardrails.llm_debate.graph import build_debate_graph
 
     mock_interr, mock_resp = _build_mock_chains(interrogator_responses, responder_responses)
+
+    build_kwargs: dict[str, typing.Any] = {
+        "responder_sees_debate_history": responder_sees_debate_history,
+    }
+    if interrogator_verdict_chain != "_OMIT":
+        build_kwargs["interrogator_verdict_chain"] = interrogator_verdict_chain
 
     with patch(_EXTRACT_TOKENS_TARGET, return_value=token_count_return):
         graph = build_debate_graph(
             mock_interr,
             mock_resp,
-            responder_sees_debate_history=responder_sees_debate_history,
+            **build_kwargs,
         )
         initial_state = _make_initial_state(max_turns=max_turns)
         final_state = graph.invoke(initial_state)
@@ -174,9 +196,40 @@ class TestStateTransitions:
         assert mock_interr.invoke.call_count == 3  # 2 questions + 1 forced verdict
         assert mock_resp.invoke.call_count == 2
 
-    def test_forced_verdict_fallback_when_llm_disobeys(self) -> None:
-        """When the interrogator returns 'question' on the forced-verdict turn,
-        the graph should programmatically override with a default verdict."""
+    def test_forced_verdict_uses_verdict_chain(self) -> None:
+        """When a verdict chain is provided, the graph uses it on the forced-verdict turn
+        instead of the regular interrogator chain."""
+        max_turns = 2
+        mock_verdict_chain = MagicMock()
+        mock_verdict_chain.invoke.return_value = _make_verdict_output(
+            score=0.72,
+            reasoning="Verdict chain reasoning",
+            content="Verdict chain content",
+        )
+
+        final_state, mock_interr, mock_resp = _build_and_invoke(
+            [
+                _make_interrogator_question("Q1"),
+                _make_interrogator_question("Q2"),
+            ],
+            ["A1", "A2"],
+            max_turns=max_turns,
+            interrogator_verdict_chain=mock_verdict_chain,
+        )
+        # Verdict should come from the verdict chain output (not hardcoded 0.5)
+        assert final_state["verdict"] is not None
+        assert final_state["verdict"].score == 0.72
+        assert final_state["verdict"].reasoning == "Verdict chain reasoning"
+        assert final_state["current_turn"] == max_turns
+        # Regular interrogator called only for the question turns (not for forced verdict)
+        assert mock_interr.invoke.call_count == 2
+        # Verdict chain called once on the forced-verdict turn
+        assert mock_verdict_chain.invoke.call_count == 1
+        assert mock_resp.invoke.call_count == 2
+
+    def test_forced_verdict_fallback_when_no_verdict_chain(self) -> None:
+        """When no verdict chain is provided (None), the old programmatic fallback
+        behavior is retained: score=0.5 when the LLM disobeys."""
         max_turns = 2
         final_state, mock_interr, mock_resp = _build_and_invoke(
             [
@@ -187,6 +240,7 @@ class TestStateTransitions:
             ],
             ["A1", "A2"],
             max_turns=max_turns,
+            interrogator_verdict_chain=None,
         )
         # The graph should have forced a verdict instead of continuing
         assert final_state["verdict"] is not None
@@ -195,6 +249,32 @@ class TestStateTransitions:
         # Interrogator called 3 times, responder only 2 (not called after forced verdict)
         assert mock_interr.invoke.call_count == 3
         assert mock_resp.invoke.call_count == 2
+
+    def test_verdict_chain_input_vars(self) -> None:
+        """The verdict chain should receive the correct input variables:
+        original_prompt, responder_output, final_answer, debate_history,
+        but NOT current_turn or max_turns."""
+        max_turns = 1
+        mock_verdict_chain = MagicMock()
+        mock_verdict_chain.invoke.return_value = _make_verdict_output(score=0.6)
+
+        _build_and_invoke(
+            [_make_interrogator_question("Q1")],
+            ["A1"],
+            max_turns=max_turns,
+            interrogator_verdict_chain=mock_verdict_chain,
+        )
+
+        assert mock_verdict_chain.invoke.call_count == 1
+        verdict_input = mock_verdict_chain.invoke.call_args[0][0]
+        # Should have context fields
+        assert "original_prompt" in verdict_input
+        assert "responder_output" in verdict_input
+        assert "final_answer" in verdict_input
+        assert "debate_history" in verdict_input
+        # Should NOT have turn fields (verdict prompt doesn't use them)
+        assert "current_turn" not in verdict_input
+        assert "max_turns" not in verdict_input
 
     def test_multi_turn_messages_accumulate(self) -> None:
         """Messages accumulate correctly via the operator.add reducer."""

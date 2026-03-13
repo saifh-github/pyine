@@ -38,6 +38,7 @@ def make_debate_config(**overrides: typing.Any) -> DebateGuardrailConfig:
         "responder_provider": make_llm_provider(),
         "max_workers": 2,
         "max_debate_turns": 2,
+        "chain_retry_max_attempts": 0,  # disable retries in tests by default
     }
     defaults.update(overrides)
     return DebateGuardrailConfig(**defaults)
@@ -62,7 +63,12 @@ def make_eval_record(
         label=label,
         code_type="original",
         tags=[],
-        record={"prompt": prompt},
+        record={
+            "prompt": prompt,
+            "prompt_messages": [
+                {"role": "user", "content": prompt},
+            ],
+        },
         difficulty_score=None,
     )
 

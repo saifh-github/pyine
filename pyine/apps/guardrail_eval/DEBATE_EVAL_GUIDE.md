@@ -20,10 +20,12 @@ Key characteristics:
   and response turns, with configurable turn limits and early termination
 - **Structured interrogator output** — the interrogator returns either a probing question or a verdict
   with confidence score, parsed via Pydantic output parser
+- **Structured output decoding** -- the interrogator and verdict chains use `with_structured_output(method="json_schema")`
+  for decode-time JSON schema enforcement, with chain-level retries for residual parse failures
 - **Token cost tracking** — records per-node token usage via `CaptureLLMHandler`, accumulated
   across all debate turns
 - **Concurrent** — uses `ThreadPoolExecutor` (not asyncio) for safe concurrent debates
-- **Multi-provider** — supports OpenAI, DeepSeek, and local vLLM servers via `LLMProviderConfig`
+- **Multi-provider** — supports OpenAI and local vLLM servers via `LLMProviderConfig`
 - **Configurable debate history visibility** — the responder can optionally be denied access to
   prior debate turns, forcing fresh reasoning each round
 
@@ -42,7 +44,8 @@ The debate system is composed of four layers:
 debate_eval.py (Hydra entrypoint)
     └── DebateGuardrailScorer (scorer.py)
             └── LangGraph compiled graph (graph.py)
-                    ├── interrogator_turn node  →  interrogator chain (prompt | llm | parser)
+                    ├── interrogator_turn node  →  interrogator chain (prompt | structured_llm)
+                    │                           →  verdict chain (prompt | structured_llm)  [final turn only]
                     └── responder_turn node     →  responder chain (prompt | llm | parser)
 ```
 
@@ -61,7 +64,9 @@ Each record goes through a multi-turn debate:
 
 4. **Routing** — After each interrogator turn, if a verdict was rendered, the debate ends.
    Otherwise, after the responder replies, the flow loops back to the interrogator. When the
-   turn limit is reached, the interrogator is prompted to render a forced verdict.
+   turn limit is reached, the graph switches to a dedicated **verdict-only chain** (separate
+   prompt template and Pydantic model with no `decision` field) that forces the interrogator
+   to render a verdict. A programmatic fallback (score=0.5) is retained as a safety net.
 
 5. **Result** — The verdict score (0–1) becomes the guardrail score. The full debate transcript
    is stored in `attempt_metadata` for later analysis.
@@ -102,12 +107,14 @@ pyine/guardrails/llm_debate/
 └── types.py             # Data types (DebateMessage, DebateTranscript, DebateVerdict)
 
 pyine/prompts/templates/guardrail/
-├── debate_interrogator.yaml   # Interrogator: system + interrogation prompt
-└── debate_responder.yaml      # Responder: system + respond-to-interrogation prompt
+├── debate_interrogator.yaml           # Interrogator: system + interrogation prompt
+├── debate_interrogator_verdict.yaml   # Verdict-only interrogator prompt (final turn)
+└── debate_responder.yaml              # Responder: system + respond-to-interrogation prompt
 
 pyine/prompts/configs/guardrail/
-├── debate_interrogator.py     # InterrogatorOutput parser + template factory
-└── debate_responder.py        # StrOutputParser + template factory
+├── debate_interrogator.py             # InterrogatorOutput parser + template factory
+├── debate_interrogator_verdict.py     # VerdictOutput parser + verdict chain factory
+└── debate_responder.py                # StrOutputParser + template factory
 
 pyine/apps/guardrail_eval/
 ├── debate_eval.py             # Hydra entrypoint
@@ -121,13 +128,14 @@ pyine/configs/experiment/guardrail/
 
 ### Data Types
 
-| Type                 | Description                                                      |
-| -------------------- | ---------------------------------------------------------------- |
-| `DebateRole`         | Enum: `INTERROGATOR` or `RESPONDER`                              |
-| `DebateMessage`      | Single message: role, content, token_count                       |
-| `DebateVerdict`      | The interrogator's judgement: score (0–1) and optional reasoning |
-| `DebateTranscript`   | Full transcript: messages, verdict, num_turns, total_token_count |
-| `InterrogatorOutput` | Structured output: decision (question/verdict), content, score   |
+| Type                 | Description                                                                             |
+| -------------------- | --------------------------------------------------------------------------------------- |
+| `DebateRole`         | Enum: `INTERROGATOR` or `RESPONDER`                                                     |
+| `DebateMessage`      | Single message: role, content, token_count                                              |
+| `DebateVerdict`      | The interrogator's judgement: score (0–1) and optional reasoning                        |
+| `DebateTranscript`   | Full transcript: messages, verdict, num_turns, total_token_count                        |
+| `InterrogatorOutput` | Structured output: decision (question/verdict), content, score                          |
+| `VerdictOutput`      | Forced-verdict structured output: score (0-1), reasoning, content (no `decision` field) |
 
 ______________________________________________________________________
 
@@ -146,7 +154,6 @@ Required packages (should already be installed in the project environment):
 | Provider | Environment Variable | Notes                                                                                                                 |
 | -------- | -------------------- | --------------------------------------------------------------------------------------------------------------------- |
 | OpenAI   | `OPENAI_API_KEY`     | Required. Optionally set `OPENAI_BASE_URL` for custom endpoints.                                                      |
-| DeepSeek | `DEEPSEEK_API_KEY`   | Required. Optionally set `DEEPSEEK_API_BASE_URL` (defaults to `https://api.deepseek.com/v1`).                         |
 | vLLM     | (none)               | No API key needed. Set `VLLM_BASE_URL` or pass `base_url` in `model_kwargs` (defaults to `http://localhost:8000/v1`). |
 
 ### Local vLLM Server (optional)
@@ -222,18 +229,21 @@ ______________________________________________________________________
 
 ### Base Config Defaults (`debate_eval_base.yaml`)
 
-| Field                           | Default                         |
-| ------------------------------- | ------------------------------- |
-| `runtime.seed`                  | `42`                            |
-| `interrogator_prompt_name`      | `guardrail/debate_interrogator` |
-| `responder_prompt_name`         | `guardrail/debate_responder`    |
-| `max_debate_turns`              | `3`                             |
-| `max_workers`                   | `5`                             |
-| `default_score_on_error`        | `0.5`                           |
-| `responder_sees_debate_history` | `true`                          |
-| `split_source`                  | `TACO`                          |
-| `target_fpr_values`             | `[0.001, 0.01, 0.05]`           |
-| `use_wandb_logging`             | `false`                         |
+| Field                                 | Default                                 |
+| ------------------------------------- | --------------------------------------- |
+| `runtime.seed`                        | `42`                                    |
+| `interrogator_prompt_name`            | `guardrail/debate_interrogator`         |
+| `responder_prompt_name`               | `guardrail/debate_responder`            |
+| `max_debate_turns`                    | `3`                                     |
+| `max_workers`                         | `5`                                     |
+| `default_score_on_error`              | `0.5`                                   |
+| `responder_sees_debate_history`       | `true`                                  |
+| `interrogator_verdict_prompt_name`    | `guardrail/debate_interrogator_verdict` |
+| `chain_retry_max_attempts`            | `3`                                     |
+| `chain_retry_wait_exponential_jitter` | `true`                                  |
+| `split_source`                        | `TACO`                                  |
+| `target_fpr_values`                   | `[0.001, 0.01, 0.05]`                   |
+| `use_wandb_logging`                   | `false`                                 |
 
 ### App Config (`DebateEvalAppConfig`)
 
@@ -250,27 +260,30 @@ Defined in `pyine/apps/guardrail_eval/debate_eval_configs.py`:
 
 Defined in `pyine/guardrails/llm_debate/configs.py`:
 
-| Field                           | Type                | Default                           | Description                                                                         |
-| ------------------------------- | ------------------- | --------------------------------- | ----------------------------------------------------------------------------------- |
-| `interrogator_provider`         | `LLMProviderConfig` | (required)                        | Interrogator/judge LLM provider                                                     |
-| `responder_provider`            | `LLMProviderConfig` | (required)                        | Responder LLM provider (typically vLLM)                                             |
-| `interrogator_prompt_name`      | `str`               | `"guardrail/debate_interrogator"` | Interrogator prompt template name                                                   |
-| `responder_prompt_name`         | `str`               | `"guardrail/debate_responder"`    | Responder prompt template name                                                      |
-| `use_chat_template`             | `bool`              | `True`                            | Whether to use chat prompt template                                                 |
-| `max_debate_turns`              | `int`               | `3` (range 1–10)                  | Maximum interrogation rounds (B asks + A responds = 1 turn)                         |
-| `responder_sees_debate_history` | `bool`              | `True`                            | Whether the responder sees full debate history (see below)                          |
-| `max_workers`                   | `int`               | `5`                               | Max concurrent debates (lower than prompted_llm due to multi-turn cost)             |
-| `default_score_on_error`        | `float`             | `0.5`                             | Score assigned when the debate fails                                                |
-| `debug_log_transcript_every_n`  | `int`               | `0` (disabled)                    | Log a formatted transcript every N records (for visual inspection during long runs) |
+| Field                                 | Type                | Default                                   | Description                                                                                  |
+| ------------------------------------- | ------------------- | ----------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `interrogator_provider`               | `LLMProviderConfig` | (required)                                | Interrogator/judge LLM provider                                                              |
+| `responder_provider`                  | `LLMProviderConfig` | (required)                                | Responder LLM provider (typically vLLM)                                                      |
+| `interrogator_prompt_name`            | `str`               | `"guardrail/debate_interrogator"`         | Interrogator prompt template name                                                            |
+| `responder_prompt_name`               | `str`               | `"guardrail/debate_responder"`            | Responder prompt template name                                                               |
+| `use_chat_template`                   | `bool`              | `True`                                    | Whether to use chat prompt template                                                          |
+| `max_debate_turns`                    | `int`               | `3` (range 1–10)                          | Maximum interrogation rounds (B asks + A responds = 1 turn)                                  |
+| `responder_sees_debate_history`       | `bool`              | `True`                                    | Whether the responder sees full debate history (see below)                                   |
+| `max_workers`                         | `int`               | `5`                                       | Max concurrent debates (lower than prompted_llm due to multi-turn cost)                      |
+| `default_score_on_error`              | `float`             | `0.5`                                     | Score assigned when the debate fails                                                         |
+| `interrogator_verdict_prompt_name`    | `str`               | `"guardrail/debate_interrogator_verdict"` | Verdict-only prompt template name (used on final forced-verdict turn)                        |
+| `chain_retry_max_attempts`            | `int`               | `3` (range 0-10)                          | Max retry attempts per chain invocation; covers parse errors and provider errors; 0 disables |
+| `chain_retry_wait_exponential_jitter` | `bool`              | `True`                                    | Whether to use exponential backoff with jitter between chain retries                         |
+| `debug_log_transcript_every_n`        | `int`               | `0` (disabled)                            | Log a formatted transcript every N records (for visual inspection during long runs)          |
 
 ### LLM Provider Config (`LLMProviderConfig`)
 
-| Field                 | Type       | Default    | Description                                                                              |
-| --------------------- | ---------- | ---------- | ---------------------------------------------------------------------------------------- |
-| `provider`            | \`"openai" | "deepseek" | "vllm"\`                                                                                 |
-| `model_kwargs`        | `dict`     | `{}`       | Kwargs passed to the LangChain LLM constructor (e.g. `model`, `temperature`, `base_url`) |
-| `rate_limiter_config` | \`dict     | None\`     | `None`                                                                                   |
-| `with_retry_config`   | \`dict     | None\`     | `None`                                                                                   |
+| Field                 | Type       | Default  | Description                                                                              |
+| --------------------- | ---------- | -------- | ---------------------------------------------------------------------------------------- |
+| `provider`            | \`"openai" | "vllm"\` | (required)                                                                               |
+| `model_kwargs`        | `dict`     | `{}`     | Kwargs passed to the LangChain LLM constructor (e.g. `model`, `temperature`, `base_url`) |
+| `rate_limiter_config` | \`dict     | None\`   | `None`                                                                                   |
+| `with_retry_config`   | \`dict     | None\`   | `None`                                                                                   |
 
 ### Debate History Visibility
 
@@ -307,6 +320,12 @@ config.guardrail_config.responder_sees_debate_history=false
 
 # Enable debug transcript logging (every 50 records)
 config.guardrail_config.debug_log_transcript_every_n=50
+
+# Change retry attempts (0 to disable)
+config.guardrail_config.chain_retry_max_attempts=5
+
+# Disable retry jitter
+config.guardrail_config.chain_retry_wait_exponential_jitter=false
 
 # Set target FPR values
 config.evals_config.target_fpr_values='[0.01,0.05]'
@@ -396,6 +415,7 @@ config = DebateGuardrailConfig(
     ),
     max_debate_turns=3,
     responder_sees_debate_history=True,
+    chain_retry_max_attempts=3,  # NEW
 )
 scorer = DebateGuardrailScorer(config)
 ```
@@ -454,6 +474,9 @@ scorer.get_metadata()
 #     "responder_sees_debate_history": True,
 #     "max_workers": 5,
 #     "default_score_on_error": 0.5,
+#     "interrogator_verdict_prompt_name": "guardrail/debate_interrogator_verdict",
+#     "chain_retry_max_attempts": 3,
+#     "chain_retry_wait_exponential_jitter": True,
 #     "total_scored": <int>,
 #     "error_count": <int>,
 # }
@@ -465,17 +488,17 @@ ______________________________________________________________________
 
 ## Comparison with Prompted LLM Guardrail
 
-| Aspect               | Prompted LLM                   | LLM Debate                                                       |
-| -------------------- | ------------------------------ | ---------------------------------------------------------------- |
-| LLM calls per record | 1                              | 2 * N turns (interrogator + responder per turn)                  |
-| LLM providers        | 1 (`llm_provider`)             | 2 (`interrogator_provider` + `responder_provider`)               |
-| Output format        | `CorrectnessJudgement` (score) | `InterrogatorOutput` (question or verdict)                       |
-| State machine        | None (single chain invocation) | LangGraph (`DebateState` with conditional edges)                 |
-| Token cost           | Single chain tokens            | Accumulated across all debate turns                              |
-| attempt_metadata     | `{"reasoning": ...}`           | Full `DebateTranscript` (messages, verdict, turns, token counts) |
-| Default max_workers  | 10                             | 5 (lower due to multi-turn cost)                                 |
-| Concurrency          | `ThreadPoolExecutor`           | Same                                                             |
-| Error handling       | `_error_count` + `_error_lock` | Same                                                             |
+| Aspect               | Prompted LLM                   | LLM Debate                                                                |
+| -------------------- | ------------------------------ | ------------------------------------------------------------------------- |
+| LLM calls per record | 1                              | 2 * N turns (interrogator + responder per turn)                           |
+| LLM providers        | 1 (`llm_provider`)             | 2 (`interrogator_provider` + `responder_provider`)                        |
+| Output format        | `CorrectnessJudgement` (score) | `InterrogatorOutput` (question or verdict) / `VerdictOutput` (final turn) |
+| State machine        | None (single chain invocation) | LangGraph (`DebateState` with conditional edges)                          |
+| Token cost           | Single chain tokens            | Accumulated across all debate turns                                       |
+| attempt_metadata     | `{"reasoning": ...}`           | Full `DebateTranscript` (messages, verdict, turns, token counts)          |
+| Default max_workers  | 10                             | 5 (lower due to multi-turn cost)                                          |
+| Concurrency          | `ThreadPoolExecutor`           | Same                                                                      |
+| Error handling       | `_error_count` + `_error_lock` | Same                                                                      |
 
 ______________________________________________________________________
 
@@ -483,15 +506,16 @@ ______________________________________________________________________
 
 The debate guardrail has a comprehensive test suite in `tests/guardrails/llm_debate/`:
 
-| Test file                          | What it covers                                                |
-| ---------------------------------- | ------------------------------------------------------------- |
-| `test_debate_types.py`             | Data type serialization/validation                            |
-| `test_debate_config.py`            | Config validation, defaults, frozen behavior                  |
-| `test_debate_graph.py`             | Graph construction, state transitions with mocked chains      |
-| `test_debate_graph_integration.py` | Full graph execution with mocked LLM chains                   |
-| `test_debate_scorer.py`            | `score_records()` with mocked graph, error handling, metadata |
-| `test_debate_eval_smoke.py`        | End-to-end eval pipeline with mocked LLMs                     |
-| `test_debug_transcript_logging.py` | Debug logging: frequency gating, thread-safety, formatting    |
+| Test file                          | What it covers                                                                           |
+| ---------------------------------- | ---------------------------------------------------------------------------------------- |
+| `test_debate_types.py`             | Data type serialization/validation                                                       |
+| `test_debate_config.py`            | Config validation, defaults, frozen behavior                                             |
+| `test_debate_graph.py`             | Graph construction, state transitions with mocked chains                                 |
+| `test_debate_graph_integration.py` | Full graph execution with mocked LLM chains                                              |
+| `test_debate_scorer.py`            | `score_records()` with mocked graph, error handling, metadata                            |
+| `test_debate_eval_smoke.py`        | End-to-end eval pipeline with mocked LLMs                                                |
+| `test_debug_transcript_logging.py` | Debug logging: frequency gating, thread-safety, formatting                               |
+| `test_structured_output.py`        | Structured output chain construction, `_unwrap_retry`, `VerdictOutput` schema validation |
 
 Run the full debate test suite:
 
