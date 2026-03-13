@@ -206,6 +206,33 @@ class TestFormatOutput:
         # Should contain reasoning
         assert "REASONING:" in formatted
 
+    def test_format_transcript_with_record_info(self) -> None:
+        """Verify soft_match, expected_output, and final_answer appear in output."""
+        from pyine.guardrails.llm_debate.scorer import DebateGuardrailScorer
+
+        transcript = make_debate_transcript(num_turns=1, score=0.9)
+        formatted = DebateGuardrailScorer._format_transcript_for_log(
+            transcript,
+            "sample_info",
+            True,
+            soft_match_label=True,
+            expected_output="[1, 2, 3]",
+            final_answer="[1, 2, 3]",
+        )
+        assert "soft_match=True" in formatted
+        assert "expected_output=[1, 2, 3]" in formatted
+        assert "final_answer=[1, 2, 3]" in formatted
+
+    def test_format_transcript_without_record_info(self) -> None:
+        """Verify omitted record info fields don't appear (backward compat)."""
+        from pyine.guardrails.llm_debate.scorer import DebateGuardrailScorer
+
+        transcript = make_debate_transcript(num_turns=1)
+        formatted = DebateGuardrailScorer._format_transcript_for_log(transcript, "sample_x", True)
+        assert "soft_match=" not in formatted
+        assert "expected_output=" not in formatted
+        assert "final_answer=" not in formatted
+
     def test_format_transcript_history_visible_false(self) -> None:
         """Verify history_visible=False is reflected in the formatted output."""
         from pyine.guardrails.llm_debate.scorer import DebateGuardrailScorer
