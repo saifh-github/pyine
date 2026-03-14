@@ -378,11 +378,6 @@ class TestResamplingPresets:
     """Tests for RecordResamplingConfig factory classmethod presets."""
 
     _PRESET_FACTORIES: typing.ClassVar[list[tuple[str, dict[str, object]]]] = [
-        ("for_skewed_positive", {"target_positive_ratio": 0.8}),
-        (
-            "for_weak_bias",
-            {"code_type_proportions": {"original": 0.9, "hinted": 0.09, "misleading": 0.01}},
-        ),
         (
             "for_skewed_weak_bias",
             {
@@ -391,8 +386,11 @@ class TestResamplingPresets:
             },
         ),
         (
-            "for_moderate_bias",
-            {"code_type_proportions": {"original": 0.8, "hinted": 0.18, "misleading": 0.02}},
+            "for_balanced_weak_bias",
+            {
+                "target_positive_ratio": 0.8,
+                "code_type_proportions": {"original": 0.9, "hinted": 0.05, "misleading": 0.05},
+            },
         ),
         (
             "for_skewed_moderate_bias",
@@ -402,14 +400,24 @@ class TestResamplingPresets:
             },
         ),
         (
-            "for_strong_bias",
-            {"code_type_proportions": {"original": 0.5, "hinted": 0.45, "misleading": 0.05}},
+            "for_balanced_moderate_bias",
+            {
+                "target_positive_ratio": 0.8,
+                "code_type_proportions": {"original": 0.8, "hinted": 0.10, "misleading": 0.10},
+            },
         ),
         (
             "for_skewed_strong_bias",
             {
                 "target_positive_ratio": 0.8,
                 "code_type_proportions": {"original": 0.5, "hinted": 0.45, "misleading": 0.05},
+            },
+        ),
+        (
+            "for_balanced_strong_bias",
+            {
+                "target_positive_ratio": 0.8,
+                "code_type_proportions": {"original": 0.5, "hinted": 0.25, "misleading": 0.25},
             },
         ),
     ]

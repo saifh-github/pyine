@@ -60,18 +60,8 @@ class RecordResamplingConfig(pydantic.BaseModel):
         return self.target_positive_ratio is None and self.code_type_proportions is None and self.max_records is None
 
     @classmethod
-    def for_skewed_positive(cls, seed: int = 0) -> RecordResamplingConfig:
-        """Preset for 80% positive label ratio instead of the original class balance."""
-        return cls(seed=seed, target_positive_ratio=0.8)
-
-    @classmethod
-    def for_weak_bias(cls, seed: int = 0) -> RecordResamplingConfig:
-        """Preset for a weak hint bias (10% hinted, with 9% helpful) and original class balance."""
-        return cls(seed=seed, code_type_proportions={"original": 0.9, "hinted": 0.09, "misleading": 0.01})
-
-    @classmethod
     def for_skewed_weak_bias(cls, seed: int = 0) -> RecordResamplingConfig:
-        """Preset for a weak hint bias (10% hinted, with 9% helpful) with 80% correct labels."""
+        """Preset for a skewed weak hint bias (10% hinted, mostly helpful) with 80% correct labels."""
         return cls(
             seed=seed,
             target_positive_ratio=0.8,
@@ -79,13 +69,17 @@ class RecordResamplingConfig(pydantic.BaseModel):
         )
 
     @classmethod
-    def for_moderate_bias(cls, seed: int = 0) -> RecordResamplingConfig:
-        """Preset for a moderate hint bias (20% hinted, with 18% helpful) and original class balance."""
-        return cls(seed=seed, code_type_proportions={"original": 0.8, "hinted": 0.18, "misleading": 0.02})
+    def for_balanced_weak_bias(cls, seed: int = 0) -> RecordResamplingConfig:
+        """Preset for a balanced weak hint bias (10% hinted, half helpful) with 80% correct labels."""
+        return cls(
+            seed=seed,
+            target_positive_ratio=0.8,
+            code_type_proportions={"original": 0.9, "hinted": 0.05, "misleading": 0.05},
+        )
 
     @classmethod
     def for_skewed_moderate_bias(cls, seed: int = 0) -> RecordResamplingConfig:
-        """Preset for a moderate hint bias (20% hinted, with 18% helpful) with 80% correct labels."""
+        """Preset for a skewed moderate hint bias (20% hinted, mostly helpful) with 80% correct labels."""
         return cls(
             seed=seed,
             target_positive_ratio=0.8,
@@ -93,17 +87,30 @@ class RecordResamplingConfig(pydantic.BaseModel):
         )
 
     @classmethod
-    def for_strong_bias(cls, seed: int = 0) -> RecordResamplingConfig:
-        """Preset for a strong hint bias (50% hinted, with 45% helpful) and original class balance."""
-        return cls(seed=seed, code_type_proportions={"original": 0.5, "hinted": 0.45, "misleading": 0.05})
+    def for_balanced_moderate_bias(cls, seed: int = 0) -> RecordResamplingConfig:
+        """Preset for a balanced moderate hint bias (20% hinted, half helpful) with 80% correct labels."""
+        return cls(
+            seed=seed,
+            target_positive_ratio=0.8,
+            code_type_proportions={"original": 0.8, "hinted": 0.10, "misleading": 0.10},
+        )
 
     @classmethod
     def for_skewed_strong_bias(cls, seed: int = 0) -> RecordResamplingConfig:
-        """Preset for a strong hint bias (50% hinted, with 45% helpful) with 80% correct labels."""
+        """Preset for a skewed strong hint bias (50% hinted, mostly helpful) with 80% correct labels."""
         return cls(
             seed=seed,
             target_positive_ratio=0.8,
             code_type_proportions={"original": 0.5, "hinted": 0.45, "misleading": 0.05},
+        )
+
+    @classmethod
+    def for_balanced_strong_bias(cls, seed: int = 0) -> RecordResamplingConfig:
+        """Preset for a balanced strong hint bias (50% hinted, half helpful) with 80% correct labels."""
+        return cls(
+            seed=seed,
+            target_positive_ratio=0.8,
+            code_type_proportions={"original": 0.5, "hinted": 0.25, "misleading": 0.25},
         )
 
     @pydantic.field_validator("code_type_proportions")

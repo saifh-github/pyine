@@ -65,8 +65,8 @@ class TestRecordCategoryConfig:
 class TestGetEvalsConfigs:
     def test_total_config_count(self) -> None:
         configs = correctness_configs.get_evals_configs("test_group")
-        # 4 base configs + 7 presets * 2 groups = 18 total
-        assert len(configs) == 18
+        # 4 base configs + 6 presets * 2 groups = 16 total
+        assert len(configs) == 16
 
     def test_split_source_prefills_nested_datamodule_config(self) -> None:
         configs = correctness_configs.get_evals_configs("test_group", split_source="TACO")
@@ -89,13 +89,12 @@ class TestGetEvalsConfigs:
     def test_preset_names_registered_in_both_groups(self) -> None:
         configs = correctness_configs.get_evals_configs("test_group")
         preset_names = {
-            "skewed_pos",
-            "weak_bias",
             "skewed_weak_bias",
-            "moderate_bias",
+            "balanced_weak_bias",
             "skewed_moderate_bias",
-            "strong_bias",
+            "balanced_moderate_bias",
             "skewed_strong_bias",
+            "balanced_strong_bias",
         }
         cal_names = {cfg.name for cfg in configs if cfg.group == "test_group/calibration_resampling"}
         train_names = {cfg.name for cfg in configs if cfg.group == "test_group/datamodule_config/resampling"}
@@ -188,8 +187,8 @@ class TestCorrectnessEvalsConfig:
 class TestGetDatamoduleConfigs:
     def test_total_config_count(self) -> None:
         configs = correctness_configs.get_datamodule_configs("test_group")
-        # 1 base config + 1 base resampling config + 7 presets = 9 total
-        assert len(configs) == 9
+        # 1 base config + 1 base resampling config + 6 presets = 8 total
+        assert len(configs) == 8
 
     def test_split_source_prefills_base_datamodule_config(self) -> None:
         configs = correctness_configs.get_datamodule_configs("test_group", split_source="TACO")
