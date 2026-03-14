@@ -103,6 +103,13 @@ class CorrectnessEvalsConfig(pyine.evals.common.BaseEvalsConfig):
     """Random seed for bootstrap resampling."""
     confidence_level: float = pydantic.Field(default=0.95, gt=0.0, lt=1.0)
     """Confidence level for bootstrap CIs. Must be in (0, 1)."""
+    bootstrap_num_workers: int = pydantic.Field(default=0, ge=0)
+    """Number of workers for bootstrap CI computation.
+
+    0 = auto (use up to 8 CPU cores), 1 = sequential, >1 = use that many workers. Results are
+    deterministic for a given (seed, effective num_workers) pair but differ between sequential and
+    parallel modes due to independent RNG streams.
+    """
     roc_fpr_grid_size: int = pydantic.Field(default=200, gt=1)
     """Number of points in the FPR grid for ROC curve plotting."""
 

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import collections
+import functools
 import logging
+import os
 import typing
 
 import numpy as np
@@ -14,6 +16,7 @@ import sklearn.metrics
 import pyine.evals.correctness.types as correctness_types
 import pyine.evals.utils
 import pyine.organisms.datamodules.samples.common as samples_common
+import pyine.utils.concurrency
 import pyine.utils.metrics.confidence
 
 if typing.TYPE_CHECKING:
@@ -759,6 +762,228 @@ def _build_bootstrap_sample_keys(
     return resampled_record_indices, sample_keys
 
 
+_MAX_AUTO_WORKERS = 8  # cap for auto-resolved worker count to limit memory overhead from pickling
+
+
+def _resolve_num_workers(
+    num_workers: int,
+    num_replicates: int,
+) -> int:
+    """Resolve effective worker count from the user-specified value.
+
+    Args:
+        num_workers: 0 = auto (up to ``_MAX_AUTO_WORKERS`` CPUs), 1 = sequential, >1 = that many.
+        num_replicates: Total bootstrap replicates (workers clamped so none gets zero work).
+
+    Returns:
+        Effective worker count (>= 1).
+    """
+    if num_workers < 0:
+        raise ValueError(f"num_workers must be non-negative, got {num_workers}")
+    if num_workers == 0:
+        resolved = min(os.cpu_count() or 1, _MAX_AUTO_WORKERS)
+    else:
+        resolved = num_workers
+    return max(1, min(resolved, num_replicates))
+
+
+def _compute_chunk_sizes(
+    num_replicates: int,
+    num_workers: int,
+) -> list[int]:
+    """Split replicates into balanced chunks across workers.
+
+    Args:
+        num_replicates: Total number of bootstrap replicates.
+        num_workers: Number of worker processes.
+
+    Returns:
+        List of chunk sizes (one per worker), summing to ``num_replicates``.
+    """
+    base, remainder = divmod(num_replicates, num_workers)
+    return [base + (1 if worker_idx < remainder else 0) for worker_idx in range(num_workers)]
+
+
+def _merge_metric_samples(
+    chunk_results: list[dict[str, list[float]]],
+) -> dict[str, list[float]]:
+    """Concatenate metric sample lists across worker chunks.
+
+    Args:
+        chunk_results: Per-worker metric sample dicts.
+
+    Returns:
+        Merged dict with concatenated sample lists.
+    """
+    merged: dict[str, list[float]] = collections.defaultdict(list)
+    for chunk in chunk_results:
+        for metric_name, values in chunk.items():
+            merged[metric_name].extend(values)
+    return merged
+
+
+@typing.no_type_check
+def _resample_and_compute_metrics(
+    *,
+    records: list[correctness_types.EvalRecord],
+    scores: npt.NDArray[np.floating[typing.Any]],
+    problem_ids: list[str],
+    problem_to_indices: dict[str, list[int]],
+    thresholds: dict[float, float],
+    target_fpr_values: list[float],
+    rng: np.random.Generator,
+    metric_samples: dict[str, list[float]],
+) -> None:
+    """Perform one bootstrap replicate: resample problems, compute all metrics.
+
+    Shared inner helper used by both clustered and hierarchical bootstrap chunk functions to
+    deduplicate the sklearn AUROC/AP + resampling logic.
+
+    Replicates where ``problem_ids`` is empty or resampling yields no record indices are silently
+    skipped (nothing is appended to ``metric_samples``). Callers should account for the possibility
+    that fewer samples than ``num_replicates`` may be collected.
+
+    Args:
+        records: Original EvalRecords for this run/dataset.
+        scores: Score array aligned with ``records``.
+        problem_ids: Sorted unique problem IDs.
+        problem_to_indices: Mapping from problem_id to record indices.
+        thresholds: Calibrated thresholds keyed by target_fpr.
+        target_fpr_values: FPR constraint values.
+        rng: NumPy random generator (caller-owned, mutated in place).
+        metric_samples: Accumulator dict to append replicate values into.
+    """
+    num_problems = len(problem_ids)
+    if num_problems == 0:
+        return
+    resampled_problem_indices = rng.integers(0, num_problems, size=num_problems)
+    resampled_record_indices, sample_keys = _build_bootstrap_sample_keys(
+        records=records,
+        resampled_problem_indices=resampled_problem_indices,
+        problem_ids=problem_ids,
+        problem_to_indices=problem_to_indices,
+    )
+    if not resampled_record_indices:
+        return
+    idx_array = np.array(resampled_record_indices)
+    boot_scores = scores[idx_array]
+    boot_records = [records[idx] for idx in resampled_record_indices]
+    boot_labels = np.array([rec.label for rec in boot_records])
+    unique_labels = np.unique(boot_labels)
+    if len(unique_labels) >= 2:
+        boot_auroc = float(sklearn.metrics.roc_auc_score(boot_labels, boot_scores))
+        boot_ap = float(sklearn.metrics.average_precision_score(boot_labels, boot_scores))
+        metric_samples["auroc"].append(boot_auroc)
+        metric_samples["average_precision"].append(boot_ap)
+    _collect_bootstrap_metrics(
+        boot_records=boot_records,
+        boot_scores=boot_scores,
+        boot_labels=boot_labels,
+        thresholds=thresholds,
+        target_fpr_values=target_fpr_values,
+        metric_samples=metric_samples,
+        sample_keys=sample_keys,
+    )
+
+
+@typing.no_type_check
+def _clustered_bootstrap_chunk(
+    *,
+    records: list[correctness_types.EvalRecord],
+    scores: npt.NDArray[np.floating[typing.Any]],
+    thresholds: dict[float, float],
+    target_fpr_values: list[float],
+    num_chunk_replicates: int,
+    seed_sequence: np.random.SeedSequence,
+    problem_ids: list[str],
+    problem_to_indices: dict[str, list[int]],
+) -> dict[str, list[float]]:
+    """Run a chunk of clustered bootstrap replicates in a worker process.
+
+    Must be module-level (not a closure) for pickling compatibility with process pools.
+
+    Args:
+        records: EvalRecords.
+        scores: Score array.
+        thresholds: Calibrated thresholds.
+        target_fpr_values: FPR constraint values.
+        num_chunk_replicates: Number of replicates for this chunk.
+        seed_sequence: SeedSequence for independent RNG in this worker.
+        problem_ids: Sorted unique problem IDs.
+        problem_to_indices: Mapping from problem_id to record indices.
+
+    Returns:
+        Metric samples dict for this chunk.
+    """
+    rng = np.random.default_rng(seed_sequence)
+    metric_samples: dict[str, list[float]] = collections.defaultdict(list)
+    for _ in range(num_chunk_replicates):
+        _resample_and_compute_metrics(
+            records=records,
+            scores=scores,
+            problem_ids=problem_ids,
+            problem_to_indices=problem_to_indices,
+            thresholds=thresholds,
+            target_fpr_values=target_fpr_values,
+            rng=rng,
+            metric_samples=metric_samples,
+        )
+    return dict(metric_samples)
+
+
+@typing.no_type_check
+def _hierarchical_bootstrap_chunk(
+    *,
+    per_run_records: list[list[correctness_types.EvalRecord]],
+    per_run_scores: list[npt.NDArray[np.floating[typing.Any]]],
+    per_run_thresholds: dict[float, list[float]],
+    target_fpr_values: list[float],
+    num_chunk_replicates: int,
+    seed_sequence: np.random.SeedSequence,
+    run_problem_maps: list[dict[str, list[int]]],
+    run_problem_id_lists: list[list[str]],
+) -> dict[str, list[float]]:
+    """Run a chunk of hierarchical bootstrap replicates in a worker process.
+
+    Must be module-level (not a closure) for pickling compatibility with process pools.
+
+    Args:
+        per_run_records: List of record lists, one per run.
+        per_run_scores: List of score arrays, one per run.
+        per_run_thresholds: Thresholds per target_fpr per run.
+        target_fpr_values: FPR constraint values.
+        num_chunk_replicates: Number of replicates for this chunk.
+        seed_sequence: SeedSequence for independent RNG in this worker.
+        run_problem_maps: Pre-computed problem-to-indices maps per run.
+        run_problem_id_lists: Pre-computed sorted problem ID lists per run.
+
+    Returns:
+        Metric samples dict for this chunk.
+    """
+    rng = np.random.default_rng(seed_sequence)
+    num_runs = len(per_run_records)
+    metric_samples: dict[str, list[float]] = collections.defaultdict(list)
+    for _ in range(num_chunk_replicates):
+        run_indices = rng.integers(0, num_runs, size=num_runs)
+        per_run_metrics: dict[str, list[float]] = collections.defaultdict(list)
+        for run_idx in run_indices:
+            run_thresholds = {fpr: per_run_thresholds[fpr][run_idx] for fpr in target_fpr_values}
+            _resample_and_compute_metrics(
+                records=per_run_records[run_idx],
+                scores=per_run_scores[run_idx],
+                problem_ids=run_problem_id_lists[run_idx],
+                problem_to_indices=run_problem_maps[run_idx],
+                thresholds=run_thresholds,
+                target_fpr_values=target_fpr_values,
+                rng=rng,
+                metric_samples=per_run_metrics,
+            )
+        for metric_name, values in per_run_metrics.items():
+            if values:
+                metric_samples[metric_name].append(float(np.mean(values)))
+    return dict(metric_samples)
+
+
 @typing.no_type_check  # sklearn type stubs are partially unknown
 def compute_clustered_bootstrap_cis(
     records: list[correctness_types.EvalRecord],
@@ -768,6 +993,7 @@ def compute_clustered_bootstrap_cis(
     num_replicates: int,
     seed: int,
     confidence_level: float,
+    num_workers: int = 0,
 ) -> dict[str, pyine.utils.metrics.confidence.ConfidenceInterval]:
     """Compute problem-clustered bootstrap CIs for all metrics.
 
@@ -792,6 +1018,10 @@ def compute_clustered_bootstrap_cis(
         num_replicates: Number of bootstrap replicates.
         seed: Random seed for reproducibility.
         confidence_level: Confidence level for CIs (e.g. 0.95 for 95% CIs).
+        num_workers: Worker count for parallel execution. 0 = auto (up to 8 CPUs),
+            1 = sequential (bit-exact with pre-parallelization behavior), >1 = that many workers.
+            Results are deterministic for a fixed (seed, effective num_workers) pair but differ
+            across different effective worker counts due to independent RNG streams.
 
     Returns:
         Mapping from metric name to ConfidenceInterval. Keys follow the naming scheme
@@ -812,52 +1042,66 @@ def compute_clustered_bootstrap_cis(
         raise ValueError(f"num_replicates must be positive, got {num_replicates}")
     if not (0.0 < confidence_level < 1.0):
         raise ValueError(f"confidence_level must be in (0, 1), got {confidence_level}")
-    rng = np.random.default_rng(seed)
     # group records by problem_id
     problem_to_indices: dict[str, list[int]] = collections.defaultdict(list)
     for idx, rec in enumerate(records):
         problem_to_indices[rec.problem_id].append(idx)
     problem_ids = sorted(problem_to_indices.keys())
-    num_problems = len(problem_ids)
-    if num_problems == 0:
+    if len(problem_ids) == 0:
         return {}
-    # collect bootstrap samples and compute metrics for each replicate
-    metric_samples: dict[str, list[float]] = collections.defaultdict(list)
-    logger.info(f"running clustered bootstrap CI computation ({num_replicates} replicates)")
-    for replicate_idx in range(num_replicates):
-        resampled_problem_indices = rng.integers(0, num_problems, size=num_problems)
-        resampled_record_indices, sample_keys = _build_bootstrap_sample_keys(
-            records,
-            resampled_problem_indices,
-            problem_ids,
-            problem_to_indices,
+    effective = _resolve_num_workers(num_workers, num_replicates)
+    if effective == 1:
+        # sequential path: bit-exact with pre-parallelization behavior
+        rng = np.random.default_rng(seed)
+        metric_samples: dict[str, list[float]] = collections.defaultdict(list)
+        logger.info(f"running clustered bootstrap CI computation ({num_replicates} replicates)")
+        for num_done in range(1, num_replicates + 1):
+            _resample_and_compute_metrics(
+                records=records,
+                scores=scores,
+                problem_ids=problem_ids,
+                problem_to_indices=problem_to_indices,
+                thresholds=thresholds,
+                target_fpr_values=target_fpr_values,
+                rng=rng,
+                metric_samples=metric_samples,
+            )
+            if pyine.evals.utils.should_log_percent_progress(num_done, num_replicates):
+                progress_percent = (100.0 * num_done) / num_replicates
+                logger.info(f"clustered bootstrap progress: {num_done}/{num_replicates} ({progress_percent:.1f}%)")
+        return _build_cis_from_samples(metric_samples, confidence_level)
+    # parallel path
+    logger.info(f"running clustered bootstrap CI computation ({num_replicates} replicates across {effective} workers)")
+    child_seeds = np.random.SeedSequence(seed).spawn(effective)
+    chunk_sizes = _compute_chunk_sizes(num_replicates, effective)
+    # convert defaultdict to regular dict for pickling robustness
+    problem_to_indices_dict = dict(problem_to_indices)
+    callables = [
+        functools.partial(
+            _clustered_bootstrap_chunk,
+            records=records,
+            scores=scores,
+            thresholds=thresholds,
+            target_fpr_values=target_fpr_values,
+            num_chunk_replicates=chunk_size,
+            seed_sequence=child_seed,
+            problem_ids=problem_ids,
+            problem_to_indices=problem_to_indices_dict,
         )
-        if not resampled_record_indices:
-            continue
-        idx_array = np.array(resampled_record_indices)
-        boot_scores = scores[idx_array]
-        boot_records = [records[idx] for idx in resampled_record_indices]
-        boot_labels = np.array([rec.label for rec in boot_records])
-        unique_labels = np.unique(boot_labels)
-        if len(unique_labels) >= 2:
-            boot_auroc = float(sklearn.metrics.roc_auc_score(boot_labels, boot_scores))
-            boot_ap = float(sklearn.metrics.average_precision_score(boot_labels, boot_scores))
-            metric_samples["auroc"].append(boot_auroc)
-            metric_samples["average_precision"].append(boot_ap)
-        _collect_bootstrap_metrics(
-            boot_records,
-            boot_scores,
-            boot_labels,
-            thresholds,
-            target_fpr_values,
-            metric_samples,
-            sample_keys=sample_keys,
-        )
-        num_done = replicate_idx + 1
-        if pyine.evals.utils.should_log_percent_progress(num_done, num_replicates):
-            progress_percent = (100.0 * num_done) / num_replicates
-            logger.info(f"clustered bootstrap progress: {num_done}/{num_replicates} ({progress_percent:.1f}%)")
-    return _build_cis_from_samples(metric_samples, confidence_level)
+        for chunk_size, child_seed in zip(chunk_sizes, child_seeds, strict=True)
+    ]
+    results, errors = pyine.utils.concurrency.run_in_parallel(
+        callables,
+        use_processes=True,
+        max_workers=effective,
+    )
+    for error in errors:
+        if error is not None:
+            raise error
+    chunk_results = typing.cast("list[dict[str, list[float]]]", results)
+    merged = _merge_metric_samples(chunk_results)
+    logger.info("clustered bootstrap CI computation complete")
+    return _build_cis_from_samples(merged, confidence_level)
 
 
 def _build_cis_from_samples(
@@ -906,6 +1150,7 @@ def compute_hierarchical_bootstrap_cis(
     num_replicates: int,
     seed: int,
     confidence_level: float,
+    num_workers: int = 0,
 ) -> dict[str, pyine.utils.metrics.confidence.ConfidenceInterval]:
     """Compute hierarchical bootstrap CIs across R independent guardrail runs.
 
@@ -928,6 +1173,10 @@ def compute_hierarchical_bootstrap_cis(
         num_replicates: Number of bootstrap replicates.
         seed: Random seed for reproducibility.
         confidence_level: Confidence level for CIs (e.g. 0.95 for 95% CIs).
+        num_workers: Worker count for parallel execution. 0 = auto (up to 8 CPUs),
+            1 = sequential (bit-exact with pre-parallelization behavior), >1 = that many workers.
+            Results are deterministic for a fixed (seed, effective num_workers) pair but differ
+            across different effective worker counts due to independent RNG streams.
 
     Returns:
         Mapping from metric name to ConfidenceInterval.
@@ -956,7 +1205,6 @@ def compute_hierarchical_bootstrap_cis(
         raise ValueError(f"num_replicates must be positive, got {num_replicates}")
     if not (0.0 < confidence_level < 1.0):
         raise ValueError(f"confidence_level must be in (0, 1), got {confidence_level}")
-    rng = np.random.default_rng(seed)
     num_runs = len(per_run_records)
     if num_runs == 0:
         return {}
@@ -967,61 +1215,67 @@ def compute_hierarchical_bootstrap_cis(
         prob_to_idx: dict[str, list[int]] = collections.defaultdict(list)
         for idx, rec in enumerate(run_records):
             prob_to_idx[rec.problem_id].append(idx)
-        run_problem_maps.append(prob_to_idx)
+        run_problem_maps.append(dict(prob_to_idx))
         run_problem_id_lists.append(sorted(prob_to_idx.keys()))
-    metric_samples: dict[str, list[float]] = collections.defaultdict(list)
-    logger.info(f"running hierarchical bootstrap CI computation ({num_replicates} replicates)")
-    for replicate_idx in range(num_replicates):
-        # resample run indices
-        run_indices = rng.integers(0, num_runs, size=num_runs)
-        per_run_metrics: dict[str, list[float]] = collections.defaultdict(list)
-        for run_idx in run_indices:
-            records = per_run_records[run_idx]
-            scores = per_run_scores[run_idx]
-            problem_ids = run_problem_id_lists[run_idx]
-            prob_to_idx = run_problem_maps[run_idx]
-            num_problems = len(problem_ids)
-            if num_problems == 0:
-                continue
-            # resample problems within this run (with unique sample keys)
-            resampled_prob_indices = rng.integers(0, num_problems, size=num_problems)
-            resampled_record_indices, sample_keys = _build_bootstrap_sample_keys(
-                records,
-                resampled_prob_indices,
-                problem_ids,
-                prob_to_idx,
-            )
-            if not resampled_record_indices:
-                continue
-            idx_array = np.array(resampled_record_indices)
-            boot_scores = scores[idx_array]
-            boot_labels = np.array([records[idx].label for idx in resampled_record_indices])
-            unique_labels = np.unique(boot_labels)
-            if len(unique_labels) >= 2:
-                per_run_metrics["auroc"].append(float(sklearn.metrics.roc_auc_score(boot_labels, boot_scores)))
-                ap_val = float(sklearn.metrics.average_precision_score(boot_labels, boot_scores))
-                per_run_metrics["average_precision"].append(ap_val)
-            boot_records = [records[idx] for idx in resampled_record_indices]
-            # build per-run thresholds dict for this run
-            run_thresholds = {fpr: per_run_thresholds[fpr][run_idx] for fpr in target_fpr_values}
-            _collect_bootstrap_metrics(
-                boot_records,
-                boot_scores,
-                boot_labels,
-                run_thresholds,
-                target_fpr_values,
-                per_run_metrics,
-                sample_keys=sample_keys,
-            )
-        # average across resampled runs
-        for metric_name, values in per_run_metrics.items():
-            if values:
-                metric_samples[metric_name].append(float(np.mean(values)))
-        num_done = replicate_idx + 1
-        if pyine.evals.utils.should_log_percent_progress(num_done, num_replicates):
-            progress_percent = (100.0 * num_done) / num_replicates
-            logger.info(f"hierarchical bootstrap progress: {num_done}/{num_replicates} ({progress_percent:.1f}%)")
-    return _build_cis_from_samples(metric_samples, confidence_level)
+    effective = _resolve_num_workers(num_workers, num_replicates)
+    if effective == 1:
+        # sequential path: bit-exact with pre-parallelization behavior
+        rng = np.random.default_rng(seed)
+        metric_samples: dict[str, list[float]] = collections.defaultdict(list)
+        logger.info(f"running hierarchical bootstrap CI computation ({num_replicates} replicates)")
+        for num_done in range(1, num_replicates + 1):
+            run_indices = rng.integers(0, num_runs, size=num_runs)
+            per_run_metrics: dict[str, list[float]] = collections.defaultdict(list)
+            for run_idx in run_indices:
+                _resample_and_compute_metrics(
+                    records=per_run_records[run_idx],
+                    scores=per_run_scores[run_idx],
+                    problem_ids=run_problem_id_lists[run_idx],
+                    problem_to_indices=run_problem_maps[run_idx],
+                    thresholds={fpr: per_run_thresholds[fpr][run_idx] for fpr in target_fpr_values},
+                    target_fpr_values=target_fpr_values,
+                    rng=rng,
+                    metric_samples=per_run_metrics,
+                )
+            for metric_name, values in per_run_metrics.items():
+                if values:
+                    metric_samples[metric_name].append(float(np.mean(values)))
+            if pyine.evals.utils.should_log_percent_progress(num_done, num_replicates):
+                progress_percent = (100.0 * num_done) / num_replicates
+                logger.info(f"hierarchical bootstrap progress: {num_done}/{num_replicates} ({progress_percent:.1f}%)")
+        return _build_cis_from_samples(metric_samples, confidence_level)
+    # parallel path
+    logger.info(
+        f"running hierarchical bootstrap CI computation ({num_replicates} replicates across {effective} workers)"
+    )
+    child_seeds = np.random.SeedSequence(seed).spawn(effective)
+    chunk_sizes = _compute_chunk_sizes(num_replicates, effective)
+    callables = [
+        functools.partial(
+            _hierarchical_bootstrap_chunk,
+            per_run_records=per_run_records,
+            per_run_scores=per_run_scores,
+            per_run_thresholds=per_run_thresholds,
+            target_fpr_values=target_fpr_values,
+            num_chunk_replicates=chunk_size,
+            seed_sequence=child_seed,
+            run_problem_maps=run_problem_maps,
+            run_problem_id_lists=run_problem_id_lists,
+        )
+        for chunk_size, child_seed in zip(chunk_sizes, child_seeds, strict=True)
+    ]
+    results, errors = pyine.utils.concurrency.run_in_parallel(
+        callables,
+        use_processes=True,
+        max_workers=effective,
+    )
+    for error in errors:
+        if error is not None:
+            raise error
+    chunk_results = typing.cast("list[dict[str, list[float]]]", results)
+    merged = _merge_metric_samples(chunk_results)
+    logger.info("hierarchical bootstrap CI computation complete")
+    return _build_cis_from_samples(merged, confidence_level)
 
 
 @typing.no_type_check  # sklearn/scipy type stubs are partially unknown

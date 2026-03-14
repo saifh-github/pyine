@@ -258,24 +258,24 @@ def _evaluate_single_run(
         threshold = correctness_calibration.calibrate_threshold(calibration_scores, calibration_labels, target_fpr)
         thresholds[target_fpr] = threshold
         attempt_metrics[target_fpr] = correctness_metrics.compute_thresholded_metrics(
-            eval_scores,
-            eval_labels,
-            threshold,
-            target_fpr,
+            scores=eval_scores,
+            labels=eval_labels,
+            threshold=threshold,
+            target_fpr=target_fpr,
         )
         sample_metrics[target_fpr] = correctness_metrics.compute_sample_level_metrics(
-            eval_records,
-            eval_scores,
-            threshold,
-            target_fpr,
+            records=eval_records,
+            scores=eval_scores,
+            threshold=threshold,
+            target_fpr=target_fpr,
         )
         # verification cost stats
         accepted = eval_scores >= threshold
         cost_stats = correctness_metrics.compute_verification_cost_stats(  # type: ignore[reportUnknownMemberType]
-            eval_result.verification_costs,
-            eval_labels,
-            accepted,
-            target_fpr,
+            verification_costs=eval_result.verification_costs,
+            labels=eval_labels,
+            accepted=accepted,
+            target_fpr=target_fpr,
             cost_unit=cost_unit,
             records=eval_records,
         )
@@ -283,38 +283,39 @@ def _evaluate_single_run(
             verification_cost_stats[target_fpr] = cost_stats
     # threshold-free metrics
     threshold_free = correctness_metrics.compute_threshold_free_metrics(  # type: ignore[reportUnknownMemberType]
-        eval_scores,
-        eval_labels,
-        config.target_fpr_values,
-        config.roc_fpr_grid_size,
+        scores=eval_scores,
+        labels=eval_labels,
+        target_fprs=config.target_fpr_values,
+        fpr_grid_size=config.roc_fpr_grid_size,
     )
     # category-wise metrics
     category_results = correctness_metrics.compute_category_results(
-        eval_records,
-        eval_scores,
-        thresholds,
-        config.target_fpr_values,
-        config.category_config,
-        config.roc_fpr_grid_size,
+        records=eval_records,
+        scores=eval_scores,
+        thresholds=thresholds,
+        target_fpr_values=config.target_fpr_values,
+        category_config=config.category_config,
+        fpr_grid_size=config.roc_fpr_grid_size,
         base_extraction_config=config.category_extraction_config,
     )
     # difficulty stats
     difficulty_stats = correctness_metrics.compute_difficulty_stats(  # type: ignore[reportUnknownMemberType]
-        eval_records,
-        eval_scores,
-        eval_labels,
-        thresholds,
-        config.target_fpr_values,
+        records=eval_records,
+        scores=eval_scores,
+        labels=eval_labels,
+        thresholds=thresholds,
+        target_fpr_values=config.target_fpr_values,
     )
     # bootstrap CIs
     bootstrap_cis = correctness_metrics.compute_clustered_bootstrap_cis(  # type: ignore[reportUnknownMemberType]
-        eval_records,
-        eval_scores,
-        thresholds,
-        config.target_fpr_values,
-        config.num_bootstrap_replicates,
-        config.bootstrap_seed,
-        config.confidence_level,
+        records=eval_records,
+        scores=eval_scores,
+        thresholds=thresholds,
+        target_fpr_values=config.target_fpr_values,
+        num_replicates=config.num_bootstrap_replicates,
+        seed=config.bootstrap_seed,
+        confidence_level=config.confidence_level,
+        num_workers=config.bootstrap_num_workers,
     )
     run_result = correctness_types.SingleRunResult(
         guardrail_metadata=metadata,
@@ -438,6 +439,7 @@ def _aggregate_runs(
         num_replicates=config.num_bootstrap_replicates,
         seed=config.bootstrap_seed + 1,  # different seed from per-run bootstrap
         confidence_level=config.confidence_level,
+        num_workers=config.bootstrap_num_workers,
     )
     # difficulty stats: aggregate scalar fields across runs
     difficulty_stats = _aggregate_difficulty_stats(per_run_results)

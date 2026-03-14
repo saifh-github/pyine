@@ -994,3 +994,246 @@ class TestCategorizeRecordsWithBaseExtraction:
         result = correctness_metrics.categorize_records(records, config, base_extraction_config=None)
         assert 0 in result["regular"]
         assert "code_type/original" in result
+
+
+class TestParallelBootstrap:
+    """Tests for the parallel (multi-worker) bootstrap CI paths."""
+
+    # sequential vs parallel use independent RNG streams, so point estimates will differ;
+    # with only 100 replicates on ~40 records, bootstrap variability is high; with production
+    # scale data (10K+ records, 5K+ replicates) this gap shrinks to ~0.01
+    _SEQ_PAR_OVERLAP_TOLERANCE = 0.15
+
+    @pytest.fixture()
+    def clustered_data(
+        self,
+    ) -> tuple[
+        list[correctness_types.EvalRecord],
+        np.ndarray[typing.Any, np.dtype[np.floating[typing.Any]]],
+        dict[float, float],
+        list[float],
+    ]:
+        rng = np.random.default_rng(99)
+        records = [_make_record(f"s{idx}", f"p{idx % 10}", label=bool(rng.random() > 0.4)) for idx in range(40)]
+        scores = rng.random(40).astype(np.float64)
+        thresholds = {0.05: 0.5}
+        target_fprs = [0.05]
+        return records, scores, thresholds, target_fprs
+
+    @pytest.fixture()
+    def hierarchical_data(
+        self,
+    ) -> tuple[
+        list[list[correctness_types.EvalRecord]],
+        list[np.ndarray[typing.Any, np.dtype[np.floating[typing.Any]]]],
+        dict[float, list[float]],
+        list[float],
+    ]:
+        rng = np.random.default_rng(99)
+        records = [_make_record(f"s{idx}", f"p{idx % 8}", label=bool(rng.random() > 0.4)) for idx in range(30)]
+        scores1 = rng.random(30).astype(np.float64)
+        scores2 = rng.random(30).astype(np.float64)
+        per_run_records = [records, records]
+        per_run_scores = [scores1, scores2]
+        per_run_thresholds = {0.05: [0.5, 0.5]}
+        target_fprs = [0.05]
+        return per_run_records, per_run_scores, per_run_thresholds, target_fprs
+
+    def test_parallel_determinism_clustered(
+        self,
+        clustered_data: tuple[
+            list[correctness_types.EvalRecord],
+            np.ndarray[typing.Any, np.dtype[np.floating[typing.Any]]],
+            dict[float, float],
+            list[float],
+        ],
+    ) -> None:
+        records, scores, thresholds, target_fprs = clustered_data
+        kwargs: dict[str, typing.Any] = {
+            "records": records,
+            "scores": scores,
+            "thresholds": thresholds,
+            "target_fpr_values": target_fprs,
+            "num_replicates": 50,
+            "seed": 42,
+            "confidence_level": 0.95,
+            "num_workers": 2,
+        }
+        ci1 = correctness_metrics.compute_clustered_bootstrap_cis(**kwargs)
+        ci2 = correctness_metrics.compute_clustered_bootstrap_cis(**kwargs)
+        for key in ci1:
+            assert key in ci2
+            assert ci1[key].point_estimate == ci2[key].point_estimate
+            assert ci1[key].lower_bound == ci2[key].lower_bound
+            assert ci1[key].upper_bound == ci2[key].upper_bound
+
+    def test_parallel_determinism_hierarchical(
+        self,
+        hierarchical_data: tuple[
+            list[list[correctness_types.EvalRecord]],
+            list[np.ndarray[typing.Any, np.dtype[np.floating[typing.Any]]]],
+            dict[float, list[float]],
+            list[float],
+        ],
+    ) -> None:
+        per_run_records, per_run_scores, per_run_thresholds, target_fprs = hierarchical_data
+        kwargs: dict[str, typing.Any] = {
+            "per_run_records": per_run_records,
+            "per_run_scores": per_run_scores,
+            "per_run_thresholds": per_run_thresholds,
+            "target_fpr_values": target_fprs,
+            "num_replicates": 50,
+            "seed": 42,
+            "confidence_level": 0.95,
+            "num_workers": 2,
+        }
+        ci1 = correctness_metrics.compute_hierarchical_bootstrap_cis(**kwargs)
+        ci2 = correctness_metrics.compute_hierarchical_bootstrap_cis(**kwargs)
+        for key in ci1:
+            assert key in ci2
+            assert ci1[key].point_estimate == ci2[key].point_estimate
+            assert ci1[key].lower_bound == ci2[key].lower_bound
+            assert ci1[key].upper_bound == ci2[key].upper_bound
+
+    def test_parallel_ci_overlap_clustered(
+        self,
+        clustered_data: tuple[
+            list[correctness_types.EvalRecord],
+            np.ndarray[typing.Any, np.dtype[np.floating[typing.Any]]],
+            dict[float, float],
+            list[float],
+        ],
+    ) -> None:
+        records, scores, thresholds, target_fprs = clustered_data
+        common_kwargs: dict[str, typing.Any] = {
+            "records": records,
+            "scores": scores,
+            "thresholds": thresholds,
+            "target_fpr_values": target_fprs,
+            "num_replicates": 100,
+            "seed": 42,
+            "confidence_level": 0.95,
+        }
+        ci_seq = correctness_metrics.compute_clustered_bootstrap_cis(**common_kwargs, num_workers=1)
+        ci_par = correctness_metrics.compute_clustered_bootstrap_cis(**common_kwargs, num_workers=2)
+        common_keys = set(ci_seq.keys()) & set(ci_par.keys())
+        assert len(common_keys) > 0
+        tol = self._SEQ_PAR_OVERLAP_TOLERANCE
+        for key in common_keys:
+            assert ci_seq[key].point_estimate <= ci_par[key].upper_bound + tol
+            assert ci_seq[key].point_estimate >= ci_par[key].lower_bound - tol
+            assert ci_par[key].point_estimate <= ci_seq[key].upper_bound + tol
+            assert ci_par[key].point_estimate >= ci_seq[key].lower_bound - tol
+
+    def test_parallel_ci_overlap_hierarchical(
+        self,
+        hierarchical_data: tuple[
+            list[list[correctness_types.EvalRecord]],
+            list[np.ndarray[typing.Any, np.dtype[np.floating[typing.Any]]]],
+            dict[float, list[float]],
+            list[float],
+        ],
+    ) -> None:
+        per_run_records, per_run_scores, per_run_thresholds, target_fprs = hierarchical_data
+        common_kwargs: dict[str, typing.Any] = {
+            "per_run_records": per_run_records,
+            "per_run_scores": per_run_scores,
+            "per_run_thresholds": per_run_thresholds,
+            "target_fpr_values": target_fprs,
+            "num_replicates": 100,
+            "seed": 42,
+            "confidence_level": 0.95,
+        }
+        ci_seq = correctness_metrics.compute_hierarchical_bootstrap_cis(**common_kwargs, num_workers=1)
+        ci_par = correctness_metrics.compute_hierarchical_bootstrap_cis(**common_kwargs, num_workers=2)
+        common_keys = set(ci_seq.keys()) & set(ci_par.keys())
+        assert len(common_keys) > 0
+        tol = self._SEQ_PAR_OVERLAP_TOLERANCE
+        for key in common_keys:
+            assert ci_seq[key].point_estimate <= ci_par[key].upper_bound + tol
+            assert ci_seq[key].point_estimate >= ci_par[key].lower_bound - tol
+            assert ci_par[key].point_estimate <= ci_seq[key].upper_bound + tol
+            assert ci_par[key].point_estimate >= ci_seq[key].lower_bound - tol
+
+    def test_parallel_num_workers_exceeds_replicates(
+        self,
+        clustered_data: tuple[
+            list[correctness_types.EvalRecord],
+            np.ndarray[typing.Any, np.dtype[np.floating[typing.Any]]],
+            dict[float, float],
+            list[float],
+        ],
+    ) -> None:
+        records, scores, thresholds, target_fprs = clustered_data
+        cis = correctness_metrics.compute_clustered_bootstrap_cis(
+            records=records,
+            scores=scores,
+            thresholds=thresholds,
+            target_fpr_values=target_fprs,
+            num_replicates=15,
+            seed=42,
+            confidence_level=0.95,
+            num_workers=50,
+        )
+        assert len(cis) > 0
+        for ci in cis.values():
+            assert ci.lower_bound <= ci.point_estimate <= ci.upper_bound
+
+    def test_parallel_error_propagation(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        clustered_data: tuple[
+            list[correctness_types.EvalRecord],
+            np.ndarray[typing.Any, np.dtype[np.floating[typing.Any]]],
+            dict[float, float],
+            list[float],
+        ],
+    ) -> None:
+        import pyine.utils.concurrency
+
+        original_run_in_parallel = pyine.utils.concurrency.run_in_parallel
+
+        def _failing_run_in_parallel(
+            callables: list[typing.Any],
+            **kwargs: typing.Any,
+        ) -> tuple[list[typing.Any], list[BaseException | None]]:
+            results, errors = original_run_in_parallel(callables, **kwargs)
+            errors[0] = RuntimeError("simulated worker failure")
+            results[0] = None
+            return results, errors
+
+        monkeypatch.setattr(pyine.utils.concurrency, "run_in_parallel", _failing_run_in_parallel)
+        records, scores, thresholds, target_fprs = clustered_data
+        with pytest.raises(RuntimeError, match="simulated worker failure"):
+            correctness_metrics.compute_clustered_bootstrap_cis(
+                records=records,
+                scores=scores,
+                thresholds=thresholds,
+                target_fpr_values=target_fprs,
+                num_replicates=50,
+                seed=42,
+                confidence_level=0.95,
+                num_workers=2,
+            )
+
+    def test_negative_num_workers_raises(
+        self,
+        clustered_data: tuple[
+            list[correctness_types.EvalRecord],
+            np.ndarray[typing.Any, np.dtype[np.floating[typing.Any]]],
+            dict[float, float],
+            list[float],
+        ],
+    ) -> None:
+        records, scores, thresholds, target_fprs = clustered_data
+        with pytest.raises(ValueError, match="num_workers must be non-negative"):
+            correctness_metrics.compute_clustered_bootstrap_cis(
+                records=records,
+                scores=scores,
+                thresholds=thresholds,
+                target_fpr_values=target_fprs,
+                num_replicates=50,
+                seed=42,
+                confidence_level=0.95,
+                num_workers=-1,
+            )
