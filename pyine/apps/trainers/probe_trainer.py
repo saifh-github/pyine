@@ -380,6 +380,7 @@ def validate_probes(
     also computes per-code-type loss and AUROC breakdowns.
     """
     probe_collection.eval()
+    model_device = next(model.parameters()).device
 
     # Handle both DDP-wrapped and raw pyine.guardrails.probes.collection.ProbeCollection
     raw = typing.cast(
@@ -397,9 +398,9 @@ def validate_probes(
     with torch.no_grad():
         for batch in valid_loader:
             # explicit device placement (see training loop comment for rationale)
-            input_ids = batch["input_ids"].to(accelerator.device)
-            attention_mask = batch["attention_mask"].to(accelerator.device)
-            labels = batch["labels"].to(accelerator.device)
+            input_ids = batch["input_ids"].to(model_device)
+            attention_mask = batch["attention_mask"].to(model_device)
+            labels = batch["labels"].to(model_device)
 
             model(input_ids=input_ids, attention_mask=attention_mask, use_cache=False)
             activations = extractor.get_activations()
@@ -410,7 +411,7 @@ def validate_probes(
             all_labels.append(labels)
 
             if log_per_code_type_metrics and "code_type_id" in batch:
-                all_code_type_ids.append(batch["code_type_id"].to(accelerator.device))
+                all_code_type_ids.append(batch["code_type_id"].to(model_device))
 
     # Barrier: ensure all ranks have finished iterating before gathering, since ranks may have
     # processed a different number of batches (uneven DistributedSampler padding).
@@ -794,6 +795,9 @@ def probe_train(
     )
     model.eval()
     model.requires_grad_(False)
+    # resolve the actual device the model landed on (may differ from accelerator.device when
+    # device_map="auto" is used, e.g. on multi-GPU nodes without a distributed launcher)
+    model_device = next(model.parameters()).device
     tokenizer = config.get_tokenizer(
         checkpoint_path=pathlib.Path(checkpoint_path) if checkpoint_path else None,
     )
@@ -898,6 +902,13 @@ def probe_train(
         ),
     )
 
+    # ensure probes live on the same device as the frozen model; accelerator.device may be CPU
+    # when running on a multi-GPU node without a distributed launcher (e.g. pytest), while the
+    # model is placed on GPU via device_map="auto"
+    if model_device != accelerator.device:
+        logger.info(f"moving probe collection from {accelerator.device} to {model_device} (model device)")
+        probe_collection = probe_collection.to(model_device)
+
     # --- 5. Register activation hooks ---
     target_layers = sorted({pc.layer for pc in expanded_probe_configs})
     logger.info(f"Registering activation hooks on layers: {target_layers}")
@@ -914,7 +925,7 @@ def probe_train(
         # optionally compute pos_weight for class-balanced BCE loss
         train_labels = typing.cast("list[int]", raw_ds["train"]["label"])
         pw = pyine.apps.trainers.common.compute_binary_pos_weight(train_labels)
-        pos_weight = torch.tensor([pw], dtype=torch.float32, device=accelerator.device)
+        pos_weight = torch.tensor([pw], dtype=torch.float32, device=model_device)
         logger.info(f"using balanced BCE pos_weight={pos_weight.item():.4f}")
         train_loss_fn = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight)
     else:
@@ -930,11 +941,11 @@ def probe_train(
 
         for _step, batch in enumerate(train_loader):
             with accelerator.accumulate(probe_collection):  # pyright: ignore[reportUnknownMemberType]  # accelerate stubs
-                # explicit device placement: model device_map hooks may silently move inputs,
-                # masking cases where the dataloader did not place tensors on the accelerator device
-                input_ids = batch["input_ids"].to(accelerator.device)
-                attention_mask = batch["attention_mask"].to(accelerator.device)
-                labels = batch["labels"].to(accelerator.device)
+                # explicit device placement: model device_map hooks silently move inputs,
+                # masking cases where accelerator.device differs from the model's device
+                input_ids = batch["input_ids"].to(model_device)
+                attention_mask = batch["attention_mask"].to(model_device)
+                labels = batch["labels"].to(model_device)
 
                 # single LLM forward pass (no grad)
                 with torch.no_grad():
@@ -946,7 +957,7 @@ def probe_train(
 
                 # compute per-probe losses and sum for backward
                 per_probe_losses: dict[str, torch.Tensor] = {}
-                total_loss = torch.tensor(0.0, device=accelerator.device)
+                total_loss = torch.tensor(0.0, device=model_device)
                 for name, logits in probe_logits.items():
                     loss = train_loss_fn(logits.squeeze(-1), labels.float())
                     per_probe_losses[name] = loss
