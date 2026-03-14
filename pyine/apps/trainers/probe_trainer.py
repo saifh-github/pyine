@@ -396,9 +396,10 @@ def validate_probes(
 
     with torch.no_grad():
         for batch in valid_loader:
-            input_ids = batch["input_ids"]
-            attention_mask = batch["attention_mask"]
-            labels = batch["labels"]
+            # explicit device placement (see training loop comment for rationale)
+            input_ids = batch["input_ids"].to(accelerator.device)
+            attention_mask = batch["attention_mask"].to(accelerator.device)
+            labels = batch["labels"].to(accelerator.device)
 
             model(input_ids=input_ids, attention_mask=attention_mask, use_cache=False)
             activations = extractor.get_activations()
@@ -409,7 +410,7 @@ def validate_probes(
             all_labels.append(labels)
 
             if log_per_code_type_metrics and "code_type_id" in batch:
-                all_code_type_ids.append(batch["code_type_id"])
+                all_code_type_ids.append(batch["code_type_id"].to(accelerator.device))
 
     # Barrier: ensure all ranks have finished iterating before gathering, since ranks may have
     # processed a different number of batches (uneven DistributedSampler padding).
@@ -929,9 +930,11 @@ def probe_train(
 
         for _step, batch in enumerate(train_loader):
             with accelerator.accumulate(probe_collection):  # pyright: ignore[reportUnknownMemberType]  # accelerate stubs
-                input_ids = batch["input_ids"]
-                attention_mask = batch["attention_mask"]
-                labels = batch["labels"]
+                # explicit device placement: model device_map hooks may silently move inputs,
+                # masking cases where the dataloader did not place tensors on the accelerator device
+                input_ids = batch["input_ids"].to(accelerator.device)
+                attention_mask = batch["attention_mask"].to(accelerator.device)
+                labels = batch["labels"].to(accelerator.device)
 
                 # single LLM forward pass (no grad)
                 with torch.no_grad():

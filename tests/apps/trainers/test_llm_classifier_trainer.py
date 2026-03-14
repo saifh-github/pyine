@@ -689,7 +689,10 @@ class TestClassifierTrainIntegration:
             max_seq_length=128,
             save_model=False,
             save_best_model_export=False,
-            auto_model_config={"device_map": {"": f"cuda:{torch.cuda.current_device()}"}},
+            auto_model_config={
+                "device_map": {"": f"cuda:{torch.cuda.current_device()}"},
+                "reference_compile": False,  # disable torch.compile (incompatible with DataParallel on multi-GPU)
+            },
         )
         trainer = llm_trainer.classifier_train(config=cfg, runtime=None)
         assert trainer is not None
