@@ -1,0 +1,220 @@
+# @package _global_
+#
+# Probe training experiment: sweep architectures x layers (moderate resampling bias)
+#
+# Usage:
+#   Single GPU:  python -m pyine.apps.trainers.probe_trainer +experiment=probes/v0_probe_moderate
+#   Multi-GPU:   bash scripts/run_ddp.sh --app pyine.apps.trainers.probe_trainer -- +experiment=probes/v0_probe_moderate
+
+defaults:
+  - /config/evals_config: correctness_taco_base
+  - override /config: base
+  - override /config/datamodule_config: correctness_taco_base
+  - override /config/datamodule_config/resampling: skewed_moderate_bias
+  - override /config/evals_config/calibration_resampling: skewed_moderate_bias
+  - _self_
+
+runtime:
+  exp_name: probes/v0_probes_RL_HT_49_ckpt950
+  run_name: "${now:%Y%m%d_%H%M%S}_skewed_moderate_bias"
+  tags:
+    - "probe-training"
+  seed: 42
+
+config:
+  _target_: pyine.apps.trainers.probe_trainer_configs.ProbeTrainerAppMainConfig
+
+  use_wandb_logging: true
+  base_model: "Qwen/Qwen3-4B-Instruct-2507"
+  llm_checkpoint_path: "/scratch/pl.stcharles/pyine/data/RL_HT_49/checkpoint-950"
+
+  # Data source (ProbeDataModuleConfig)
+  datamodule_config:
+    lmdb_paths:
+      - /scratch/pl.stcharles/pyine/data/RL_HT_49/v0_rl_eval_base_RL_HT_49_checkpoint-950/benchmark_export
+    split_config:
+      include_original_train_problems: true
+
+  max_seq_length: 13000
+
+  # Training loop
+  num_epochs: 10
+  train_batch_size: 4  # 2 per H100 seems like a good balance with the 13k context dataset
+  eval_batch_size: 4
+  gradient_accumulation_steps: 8
+  logging_steps: 10
+  eval_steps: 50
+  dataloader_num_workers: 4
+  save_probes: true
+  # save_steps: -1              # Save every N optimizer steps (-1 = end only)
+  # save_total_limit: null      # Max mid-training checkpoints to keep (null = all)
+
+  # Replica settings
+  num_replicas: 10            # Default: 1 (no replication)
+  replica_base_seed: 0        # Base seed for reproducible replica initialization
+  log_individual_replicas: false  # Also log per-replica metrics to W&B
+
+  log_per_code_type_metrics: true      # Log per-code-type validation metrics to W&B
+
+  auto_model_config:
+    use_cache: false
+    attn_implementation: "flash_attention_2"
+
+  # Probe configurations: sweep architectures x layers
+  # Qwen3-4B has 36 layers (0-35); mid-and-around: L14, L18 (midpoint), L22, L26, L30
+  probe_configs:
+    # --- Mean probes across layers ---
+    - name: mean_L14
+      architecture: mean
+      layer: 14
+      learning_rate: 5e-4
+    - name: mean_L18
+      architecture: mean
+      layer: 18
+      learning_rate: 5e-4
+    - name: mean_L22
+      architecture: mean
+      layer: 22
+      learning_rate: 5e-4
+    - name: mean_L26
+      architecture: mean
+      layer: 26
+      learning_rate: 5e-4
+    - name: mean_L30
+      architecture: mean
+      layer: 30
+      learning_rate: 5e-4
+
+    # --- Max probes ---
+    - name: max_L14
+      architecture: max
+      layer: 14
+      learning_rate: 5e-4
+    - name: max_L18
+      architecture: max
+      layer: 18
+      learning_rate: 5e-4
+    - name: max_L22
+      architecture: max
+      layer: 22
+      learning_rate: 5e-4
+    - name: max_L26
+      architecture: max
+      layer: 26
+      learning_rate: 5e-4
+    - name: max_L30
+      architecture: max
+      layer: 30
+      learning_rate: 5e-4
+
+    # --- Last-token probes ---
+    - name: last_L14
+      architecture: last_token
+      layer: 14
+      learning_rate: 5e-4
+    - name: last_L18
+      architecture: last_token
+      layer: 18
+      learning_rate: 5e-4
+    - name: last_L22
+      architecture: last_token
+      layer: 22
+      learning_rate: 5e-4
+    - name: last_L26
+      architecture: last_token
+      layer: 26
+      learning_rate: 5e-4
+    - name: last_L30
+      architecture: last_token
+      layer: 30
+      learning_rate: 5e-4
+
+    # --- Rolling-mean probes across layers ---
+    - name: rolling_L14
+      architecture: rolling_mean
+      layer: 14
+      learning_rate: 5e-4
+      window_size: 32
+    - name: rolling_L18
+      architecture: rolling_mean
+      layer: 18
+      learning_rate: 5e-4
+      window_size: 32
+    - name: rolling_L22
+      architecture: rolling_mean
+      layer: 22
+      learning_rate: 5e-4
+      window_size: 32
+    - name: rolling_L26
+      architecture: rolling_mean
+      layer: 26
+      learning_rate: 5e-4
+      window_size: 32
+    - name: rolling_L30
+      architecture: rolling_mean
+      layer: 30
+      learning_rate: 5e-4
+      window_size: 32
+
+    # --- Softmax probes across layers ---
+    - name: softmax_L14
+      architecture: softmax
+      layer: 14
+      learning_rate: 5e-4
+      temperature: 0.5
+    - name: softmax_L18
+      architecture: softmax
+      layer: 18
+      learning_rate: 5e-4
+      temperature: 0.5
+    - name: softmax_L22
+      architecture: softmax
+      layer: 22
+      learning_rate: 5e-4
+      temperature: 0.5
+    - name: softmax_L26
+      architecture: softmax
+      layer: 26
+      learning_rate: 5e-4
+      temperature: 0.5
+    - name: softmax_L30
+      architecture: softmax
+      layer: 30
+      learning_rate: 5e-4
+      temperature: 0.5
+
+    # --- Attention probes across layers ---
+    - name: attn_L14
+      architecture: attention
+      layer: 14
+      learning_rate: 5e-4
+      attn_dim: 64
+    - name: attn_L18
+      architecture: attention
+      layer: 18
+      learning_rate: 5e-4
+      attn_dim: 64
+    - name: attn_L22
+      architecture: attention
+      layer: 22
+      learning_rate: 5e-4
+      attn_dim: 64
+    - name: attn_L26
+      architecture: attention
+      layer: 26
+      learning_rate: 5e-4
+      attn_dim: 64
+    - name: attn_L30
+      architecture: attention
+      layer: 30
+      learning_rate: 5e-4
+      attn_dim: 64
+
+  # correctness benchmarking config
+  evals_config:
+    result_dump_dir: ${runtime.output_dir}/benchmark_export
+    datamodule_config:
+      lmdb_paths: ${config.datamodule_config.lmdb_paths}
+      eval_subset_names:
+        - guardrail_valid
+        - guardrail_test
