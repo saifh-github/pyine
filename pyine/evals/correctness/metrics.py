@@ -762,7 +762,7 @@ def _build_bootstrap_sample_keys(
     return resampled_record_indices, sample_keys
 
 
-_MAX_AUTO_WORKERS = 8  # cap for auto-resolved worker count to limit memory overhead from pickling
+_MAX_AUTO_WORKERS = 16  # cap for auto-resolved worker count to limit memory overhead from pickling
 
 
 def _resolve_num_workers(
@@ -1018,7 +1018,7 @@ def compute_clustered_bootstrap_cis(
         num_replicates: Number of bootstrap replicates.
         seed: Random seed for reproducibility.
         confidence_level: Confidence level for CIs (e.g. 0.95 for 95% CIs).
-        num_workers: Worker count for parallel execution. 0 = auto (up to 8 CPUs),
+        num_workers: Worker count for parallel execution. 0 = auto (up to 16 CPUs),
             1 = sequential (bit-exact with pre-parallelization behavior), >1 = that many workers.
             Results are deterministic for a fixed (seed, effective num_workers) pair but differ
             across different effective worker counts due to independent RNG streams.
@@ -1173,7 +1173,7 @@ def compute_hierarchical_bootstrap_cis(
         num_replicates: Number of bootstrap replicates.
         seed: Random seed for reproducibility.
         confidence_level: Confidence level for CIs (e.g. 0.95 for 95% CIs).
-        num_workers: Worker count for parallel execution. 0 = auto (up to 8 CPUs),
+        num_workers: Worker count for parallel execution. 0 = auto (up to 16 CPUs),
             1 = sequential (bit-exact with pre-parallelization behavior), >1 = that many workers.
             Results are deterministic for a fixed (seed, effective num_workers) pair but differ
             across different effective worker counts due to independent RNG streams.

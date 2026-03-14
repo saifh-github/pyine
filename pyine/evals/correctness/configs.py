@@ -106,7 +106,7 @@ class CorrectnessEvalsConfig(pyine.evals.common.BaseEvalsConfig):
     bootstrap_num_workers: int = pydantic.Field(default=0, ge=0)
     """Number of workers for bootstrap CI computation.
 
-    0 = auto (use up to 8 CPU cores), 1 = sequential, >1 = use that many workers. Results are
+    0 = auto (use up to 16 CPU cores), 1 = sequential, >1 = use that many workers. Results are
     deterministic for a given (seed, effective num_workers) pair but differ between sequential and
     parallel modes due to independent RNG streams.
     """
