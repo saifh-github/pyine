@@ -669,6 +669,7 @@ class TestClassifierTrainIntegration:
 
     @pytest.mark.slow
     @pytest.mark.integration
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
     def test_training_end_to_end_with_modernbert(self, tmp_path: pathlib.Path) -> None:
         """Full pipeline with ModernBERT-base on GPU."""
         lmdb_path = create_debug_probe_lmdb(tmp_path / "lmdb", n_train=40, n_eval_families=10)

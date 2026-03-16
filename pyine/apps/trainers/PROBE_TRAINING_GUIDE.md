@@ -626,7 +626,8 @@ metrics are broken down by code type.
 Metrics are logged to W&B under `valid/{probe_name}/loss/code_type/{ct}` and
 `valid/{probe_name}/auroc/code_type/{ct}`. See [W&B Logging](#wb-logging) for the full metrics table.
 
-Code types with fewer than 2 samples in a validation batch are skipped (no meaningful AUROC).
+Code types with fewer than 2 samples produce `NaN` metrics. Single-class code types produce a valid
+loss but `NaN` AUROC.
 
 ## Configuration Reference
 
@@ -856,14 +857,25 @@ during validation:
 | `valid/{probe_name}/loss/code_type/{code_type}`  | BCE loss for samples of this code type |
 | `valid/{probe_name}/auroc/code_type/{code_type}` | AUROC for samples of this code type    |
 
+When replicas are enabled (`num_replicas > 1`), per-code-type metrics are aggregated by base name
+(mirroring the standard replica aggregation):
+
+| Metric Key                                           | Description                                      |
+| ---------------------------------------------------- | ------------------------------------------------ |
+| `valid/{base_name}/loss/code_type/{code_type}/mean`  | Mean BCE loss across replicas for this code type |
+| `valid/{base_name}/auroc/code_type/{code_type}/mean` | Mean AUROC across replicas for this code type    |
+
+NaN values (from single-class or insufficient-sample code types) are excluded from the mean. If all
+replicas produce NaN for a code type, NaN is logged.
+
 For example, with a probe named `mean_L16` and code types `original`, `hinted`, `misleading`:
 
 - `valid/mean_L16/loss/code_type/original`
 - `valid/mean_L16/auroc/code_type/hinted`
 - `valid/mean_L16/auroc/code_type/misleading`
 
-Code types with fewer than 2 samples in a validation step are skipped. Single-class code-type
-subsets produce `NaN` AUROC.
+Code types with fewer than 2 samples produce `NaN` for both loss and AUROC. Single-class code-type
+subsets produce a valid loss but `NaN` AUROC.
 
 ## Example: Full Sweep Config
 

@@ -429,21 +429,21 @@ def validate_probes(
     # Compute metrics on main process
     metrics: dict[str, dict[str, float]] = {}
     if accelerator.is_main_process:
+        labels_cpu = all_labels_cat.long().cpu()
+        labels_np = typing.cast(
+            "npt.NDArray[np.integer[typing.Any]]",
+            labels_cpu.numpy(),  # pyright: ignore[reportUnknownMemberType]  # torch stubs
+        )
+        unique_labels: set[int] = {int(v) for v in labels_np.tolist()}
+        cached_logits_cpu: dict[str, torch.Tensor] = {}  # reused by per-code-type metrics below
         for name in probes_dict:
             logits_cpu = gathered_logits[name].float().cpu()
-            labels_cpu = all_labels_cat.long().cpu()
-
+            cached_logits_cpu[name] = logits_cpu
             val_loss = loss_fn(logits_cpu, labels_cpu.float()).item()
             probs = typing.cast(
                 "npt.NDArray[np.floating[typing.Any]]",
                 torch.sigmoid(logits_cpu).numpy(),  # pyright: ignore[reportUnknownMemberType]  # torch stubs
             )
-            labels_np = typing.cast(
-                "npt.NDArray[np.integer[typing.Any]]",
-                labels_cpu.numpy(),  # pyright: ignore[reportUnknownMemberType]  # torch stubs
-            )
-
-            unique_labels: set[int] = {int(v) for v in labels_np.tolist()}
             if len(unique_labels) < 2:
                 logger.warning(f"Skipping AUROC for {name}: only labels {unique_labels} present")
                 auroc = float("nan")
@@ -452,26 +452,52 @@ def validate_probes(
                     sklearn.metrics.roc_auc_score(labels_np, probs)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # sklearn stubs
                 )
                 auroc = auroc_score
-
             metrics[name] = {"loss": val_loss, "auroc": auroc}
 
-            # --- Per-code-type metrics ---
-            if log_per_code_type_metrics and gathered_ct_ids is not None and id_to_code_type is not None:
-                _log_per_code_type_metrics(
-                    name=name,
-                    logits_cpu=logits_cpu,
-                    labels_cpu=labels_cpu,
-                    gathered_ct_ids=gathered_ct_ids,
-                    id_to_code_type=id_to_code_type,
-                    loss_fn=loss_fn,
-                    runtime=runtime,
-                    global_step=global_step,
-                )
-
-        # --- Logging ---
+        # --- Per-code-type metrics (computed per-probe, aggregated by base_name for logging) ---
         has_replicas = expanded_configs_by_name is not None and any(
             pc.base_name is not None for pc in expanded_configs_by_name.values()
         )
+        code_type_log_dict: dict[str, float] = {}
+        if log_per_code_type_metrics and gathered_ct_ids is not None and id_to_code_type is not None:
+            if has_replicas and expanded_configs_by_name is not None:  # narrow type for pyright
+                # aggregate per-code-type metrics by base_name (avoids tons of replica-level keys)
+                per_probe_ct_metrics: dict[str, dict[str, dict[str, float]]] = {}
+                for name in probes_dict:
+                    per_probe_ct_metrics[name] = _compute_per_code_type_metrics(
+                        logits_cpu=cached_logits_cpu[name],
+                        labels_cpu=labels_cpu,
+                        gathered_ct_ids=gathered_ct_ids,
+                        id_to_code_type=id_to_code_type,
+                        loss_fn=loss_fn,
+                    )
+                base_ct_values: dict[str, list[float]] = collections.defaultdict(list)
+                for name, ct_dict in per_probe_ct_metrics.items():
+                    base = expanded_configs_by_name[name].base_name or name
+                    for ct, ct_vals in ct_dict.items():
+                        for metric_name, metric_val in ct_vals.items():
+                            key = f"valid/{base}/{metric_name}/code_type/{ct}/mean"
+                            if not math.isnan(metric_val):
+                                base_ct_values[key].append(metric_val)
+                            else:
+                                base_ct_values.setdefault(key, [])  # preserve key when all replicas NaN
+                for agg_key, values in base_ct_values.items():
+                    code_type_log_dict[agg_key] = statistics.mean(values) if values else float("nan")
+            else:
+                # no replicas: log per-probe directly
+                for name in probes_dict:
+                    ct_metrics = _compute_per_code_type_metrics(
+                        logits_cpu=cached_logits_cpu[name],
+                        labels_cpu=labels_cpu,
+                        gathered_ct_ids=gathered_ct_ids,
+                        id_to_code_type=id_to_code_type,
+                        loss_fn=loss_fn,
+                    )
+                    for ct, ct_vals in ct_metrics.items():
+                        for metric_name, metric_val in ct_vals.items():
+                            code_type_log_dict[f"valid/{name}/{metric_name}/code_type/{ct}"] = metric_val
+
+        # --- Logging ---
 
         if has_replicas and expanded_configs_by_name is not None:
             loss_agg = aggregate_replica_metrics(
@@ -497,16 +523,17 @@ def validate_probes(
                     log_dict[f"valid/{base_name}/auroc/max"] = stats["max"]
 
                 if log_individual_replicas:
+                    # replica table only makes sense alongside individual replica metrics
                     for name, m in metrics.items():
                         log_dict[f"valid/{name}/loss"] = m["loss"]
                         log_dict[f"valid/{name}/auroc"] = m["auroc"]
-
-                valid_table = build_valid_replica_table(
-                    metrics,
-                    expanded_configs_by_name,
-                    global_step,
-                )
-                log_dict["valid/replica_details"] = valid_table
+                    valid_table = build_valid_replica_table(
+                        metrics,
+                        expanded_configs_by_name,
+                        global_step,
+                    )
+                    log_dict["valid/replica_details"] = valid_table
+                log_dict.update(code_type_log_dict)
                 runtime.wandb_run.log(log_dict, step=global_step)
 
             logger.info(
@@ -519,14 +546,12 @@ def validate_probes(
             )
         else:
             if runtime and runtime.wandb_run:
+                log_dict = {}
                 for name, m in metrics.items():
-                    runtime.wandb_run.log(
-                        {
-                            f"valid/{name}/loss": m["loss"],
-                            f"valid/{name}/auroc": m["auroc"],
-                        },
-                        step=global_step,
-                    )
+                    log_dict[f"valid/{name}/loss"] = m["loss"]
+                    log_dict[f"valid/{name}/auroc"] = m["auroc"]
+                log_dict.update(code_type_log_dict)
+                runtime.wandb_run.log(log_dict, step=global_step)
 
             logger.info(
                 f"[step {global_step}] validation: "
@@ -536,48 +561,48 @@ def validate_probes(
     return metrics
 
 
-@typing.no_type_check
-def _log_per_code_type_metrics(
-    name: str,
+def _compute_per_code_type_metrics(
     logits_cpu: torch.Tensor,
     labels_cpu: torch.Tensor,
     gathered_ct_ids: torch.Tensor,
     id_to_code_type: dict[int, str],
     loss_fn: torch.nn.Module,
-    runtime: pyine.configs.schemas.RuntimeConfig | None,
-    global_step: int,
-) -> None:
-    """Compute and log per-code-type loss and AUROC for a single probe."""
-    unique_ct_ids: list[int] = gathered_ct_ids.unique().tolist()
+) -> dict[str, dict[str, float]]:
+    """Compute per-code-type loss and AUROC for a single probe.
+
+    Returns:
+        Dict of ``{code_type: {"loss": float, "auroc": float}}`` entries.  Code types with
+        fewer than 2 samples produce NaN for both metrics.  Single-class code types produce
+        a valid loss but NaN AUROC.
+    """
+    result: dict[str, dict[str, float]] = {}
+    unique_ct_ids = typing.cast("list[int]", gathered_ct_ids.unique().tolist())  # pyright: ignore[reportUnknownMemberType]  # torch stubs
     for ct_id in unique_ct_ids:
-        ct = id_to_code_type[int(ct_id)]
+        ct = id_to_code_type[ct_id]
         ct_mask: torch.Tensor = (gathered_ct_ids == ct_id).nonzero(as_tuple=True)[0]
         if len(ct_mask) < 2:
+            result[ct] = {"loss": float("nan"), "auroc": float("nan")}
             continue
-
         ct_logits = logits_cpu[ct_mask]
         ct_labels = labels_cpu[ct_mask]
-
-        ct_loss = loss_fn(ct_logits, ct_labels.float()).item()
-
-        ct_labels_np: npt.NDArray[np.int_] = ct_labels.numpy()
+        ct_loss: float = loss_fn(ct_logits, ct_labels.float()).item()
+        ct_labels_np = typing.cast(
+            "npt.NDArray[np.int_]",
+            ct_labels.numpy(),  # pyright: ignore[reportUnknownMemberType]  # torch stubs
+        )
         ct_unique: set[int] = {int(v) for v in ct_labels_np.tolist()}
         if len(ct_unique) < 2:
             ct_auroc = float("nan")
         else:
-            import sklearn.metrics
-
-            ct_probs: npt.NDArray[np.floating[typing.Any]] = torch.sigmoid(ct_logits).numpy()
-            ct_auroc = float(sklearn.metrics.roc_auc_score(ct_labels_np, ct_probs))
-
-        if runtime and runtime.wandb_run:
-            runtime.wandb_run.log(
-                {
-                    f"valid/{name}/loss/code_type/{ct}": ct_loss,
-                    f"valid/{name}/auroc/code_type/{ct}": ct_auroc,
-                },
-                step=global_step,
+            ct_probs = typing.cast(
+                "npt.NDArray[np.floating[typing.Any]]",
+                torch.sigmoid(ct_logits).numpy(),  # pyright: ignore[reportUnknownMemberType]  # torch stubs
             )
+            ct_auroc = float(
+                sklearn.metrics.roc_auc_score(ct_labels_np, ct_probs)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # sklearn stubs
+            )
+        result[ct] = {"loss": ct_loss, "auroc": ct_auroc}
+    return result
 
 
 def _get_probes_base_dir(
@@ -992,16 +1017,16 @@ def probe_train(
                                 train_log_dict["train/epoch"] = epoch
 
                                 if config.log_individual_replicas:
+                                    # replica table only makes sense alongside individual replica metrics
                                     for name, loss_val in per_probe_loss_values.items():
                                         train_log_dict[f"train/{name}/loss"] = loss_val
-
-                                train_table = build_train_replica_table(
-                                    per_probe_loss_values,
-                                    expanded_configs_by_name,
-                                    global_step,
-                                    epoch,
-                                )
-                                train_log_dict["train/replica_details"] = train_table
+                                    train_table = build_train_replica_table(
+                                        per_probe_loss_values,
+                                        expanded_configs_by_name,
+                                        global_step,
+                                        epoch,
+                                    )
+                                    train_log_dict["train/replica_details"] = train_table
                                 runtime.wandb_run.log(train_log_dict, step=global_step)
                         else:
                             log_msg = f"[epoch {epoch + 1}/{config.num_epochs}, step {global_step}] "

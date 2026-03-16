@@ -18,6 +18,7 @@ def _make_eval_config() -> correctness_configs.CorrectnessEvalsConfig:
         target_fpr_values=[0.05, 0.1],
         num_bootstrap_replicates=10,
         roc_fpr_grid_size=20,
+        bootstrap_num_workers=1,  # sequential; avoids process pool overhead for tiny workloads
     )
 
 
