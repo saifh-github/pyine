@@ -7,7 +7,7 @@
 #   Multi-GPU:   bash scripts/run_ddp.sh --app pyine.apps.trainers.probe_trainer -- +experiment=probes/v0_probe_weak
 
 defaults:
-  - v0_probe_moderate
+  - probes/v0_probe_moderate
   - override /config/datamodule_config/resampling: skewed_weak_bias
   - override /config/evals_config/calibration_resampling: skewed_weak_bias
   - _self_
