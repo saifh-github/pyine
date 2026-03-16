@@ -108,6 +108,7 @@ def run_in_parallel(
     max_workers: int | None = None,
     executor: concurrent.futures.Executor | None = None,
     use_shared_pool: bool = False,
+    raise_on_error: bool = False,
 ) -> tuple[list[typing.Any | None], list[BaseException | None]]:
     """Execute a list of zero-arg callables in parallel using a thread/worker pool and collect results.
 
@@ -125,6 +126,10 @@ def run_in_parallel(
         executor: Optional pre-created executor to submit tasks to (not shut down here).
         use_shared_pool: If True, submit to a shared module-level pool (created lazily). Only used
             if no `executor` is provided.
+        raise_on_error: If True, raise after all futures complete when any callable failed. A single
+            error is raised directly (preserving its traceback); multiple errors raise an
+            ``ExceptionGroup``. When False (default), errors are silently captured in the returned
+            errors list -- callers must inspect it themselves.
 
     Returns:
         A tuple (results, errors):
@@ -132,7 +137,8 @@ def run_in_parallel(
           - errors: list aligned with `callables`; each is the raised exception or None on success.
 
     Notes:
-        - Exceptions are captured and returned; they do not crash the whole run.
+        - Exceptions are captured and returned; they do not crash the whole run (unless
+          ``raise_on_error=True``).
         - If you need arguments, wrap your function with a lambda/partial that binds them.
         - With process pools, tasks must be picklable and defined at module top-level.
     """
@@ -164,6 +170,15 @@ def run_in_parallel(
         if local_executor is not None:
             # cancel_futures ensures pending tasks are canceled on shutdown if exceptions occur upstream
             local_executor.shutdown(cancel_futures=True)
+    if raise_on_error:
+        actual_errors = [err for err in errors if err is not None]
+        if len(actual_errors) == 1:
+            raise actual_errors[0]
+        if len(actual_errors) > 1:
+            raise BaseExceptionGroup(
+                f"{len(actual_errors)} callables failed in run_in_parallel",
+                actual_errors,
+            )
     return results, errors
 
 

@@ -261,12 +261,12 @@ def register_hydra_configs(
 ) -> list[pyine.configs.schemas.ConfigDescription]:
     """Registers probe-trainer-specific configs in hydra and returns config descriptions."""
     # import here to avoid circular imports at module load time
-    from pyine.apps.trainers.probe_trainer import async_probe_trainer_main_wrapper
+    from pyine.apps.trainers.probe_trainer import probe_trainer_main_wrapper
 
     pyine.utils.reprod.load_dotenv()
 
     entrypoint_config = pyine.configs.utils.make_config_description(
-        async_probe_trainer_main_wrapper,
+        probe_trainer_main_wrapper,
         name="entrypoint",
         group=None,
         description="Entrypoint settings for the probe trainer app.",

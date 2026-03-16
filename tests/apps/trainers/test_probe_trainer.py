@@ -427,8 +427,6 @@ class TestSkipTrainingProbeTrainer:
     """Tests for the skip_training code path in probe trainer main."""
 
     def test_skip_training_requires_checkpoint_dir(self) -> None:
-        import asyncio
-
         from pyine.apps.trainers.probe_trainer_configs import ProbeTrainerAppMainConfig
 
         cfg = ProbeTrainerAppMainConfig(
@@ -440,12 +438,10 @@ class TestSkipTrainingProbeTrainer:
         # clear the checkpoint dir to trigger the validation
         cfg.probe_checkpoint_dir = None
         with pytest.raises(ValueError, match="skip_training=True requires"):
-            asyncio.run(
-                pyine.apps.trainers.probe_trainer.main(
-                    config=cfg,
-                    runtime=None,
-                    skip_training=True,
-                )
+            pyine.apps.trainers.probe_trainer.main(
+                config=cfg,
+                runtime=None,
+                skip_training=True,
             )
 
 

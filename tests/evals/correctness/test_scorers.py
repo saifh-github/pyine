@@ -830,3 +830,261 @@ class TestPrecomputeProbeScores:
             )
         # verify scores are actually distinguishable (not all the same)
         assert len(set(precomputed_result.scores)) > 1, "all scores are identical; test is not meaningful"
+
+
+class TestPrecomputedProbeScorerMerge:
+    @pytest.fixture()
+    def probe_config(self) -> pyine.guardrails.probes.base.ProbeConfig:
+        return pyine.guardrails.probes.base.ProbeConfig(
+            name="test_probe",
+            architecture="mean_pool",
+            layer=1,
+            hidden_dim=8,
+            replica_idx=0,
+            base_name="mean_pool_L1",
+        )
+
+    @pytest.fixture()
+    def tokenizer_metadata(self) -> dict[str, typing.Any]:
+        return {
+            "text_field": "model_output",
+            "input_construction": "eval_record_messages",
+            "input_formatting_mode": "role_tagged_text",
+            "tokenizer_has_chat_template": False,
+            "add_special_tokens": True,
+            "truncation_side": None,
+        }
+
+    def test_merge_two_shards(
+        self,
+        probe_config: pyine.guardrails.probes.base.ProbeConfig,
+        tokenizer_metadata: dict[str, typing.Any],
+    ) -> None:
+        shard_a = correctness_scorers.PrecomputedProbeScorer(
+            samples_by_key={
+                ("s1", 0): correctness_scorers.PrecomputedSample(score=0.8, cost=100.0, token_count=10),
+            },
+            probe_config=probe_config,
+            tokenizer_metadata=tokenizer_metadata,
+        )
+        shard_b = correctness_scorers.PrecomputedProbeScorer(
+            samples_by_key={
+                ("s2", 0): correctness_scorers.PrecomputedSample(score=0.3, cost=200.0, token_count=20),
+            },
+            probe_config=probe_config,
+            tokenizer_metadata=tokenizer_metadata,
+        )
+        merged = correctness_scorers.PrecomputedProbeScorer.merge([shard_a, shard_b])
+        records = [_make_record("s1"), _make_record("s2")]
+        result = merged.score_records(records)
+        assert result.scores == [0.8, 0.3]
+        assert result.verification_costs == [100.0, 200.0]
+
+    def test_merge_single_shard(
+        self,
+        probe_config: pyine.guardrails.probes.base.ProbeConfig,
+        tokenizer_metadata: dict[str, typing.Any],
+    ) -> None:
+        shard = correctness_scorers.PrecomputedProbeScorer(
+            samples_by_key={
+                ("s1", 0): correctness_scorers.PrecomputedSample(score=0.5, cost=50.0, token_count=5),
+            },
+            probe_config=probe_config,
+            tokenizer_metadata=tokenizer_metadata,
+        )
+        merged = correctness_scorers.PrecomputedProbeScorer.merge([shard])
+        result = merged.score_records([_make_record("s1")])
+        assert result.scores == [0.5]
+
+    def test_merge_empty_raises(self) -> None:
+        with pytest.raises(ValueError, match="cannot merge empty"):
+            correctness_scorers.PrecomputedProbeScorer.merge([])
+
+    def test_merge_overlapping_keys_raises(
+        self,
+        probe_config: pyine.guardrails.probes.base.ProbeConfig,
+        tokenizer_metadata: dict[str, typing.Any],
+    ) -> None:
+        shard_a = correctness_scorers.PrecomputedProbeScorer(
+            samples_by_key={
+                ("s1", 0): correctness_scorers.PrecomputedSample(score=0.8, cost=100.0, token_count=10),
+            },
+            probe_config=probe_config,
+            tokenizer_metadata=tokenizer_metadata,
+        )
+        shard_b = correctness_scorers.PrecomputedProbeScorer(
+            samples_by_key={
+                ("s1", 0): correctness_scorers.PrecomputedSample(score=0.9, cost=200.0, token_count=20),
+            },
+            probe_config=probe_config,
+            tokenizer_metadata=tokenizer_metadata,
+        )
+        with pytest.raises(ValueError, match="overlapping keys"):
+            correctness_scorers.PrecomputedProbeScorer.merge([shard_a, shard_b])
+
+    def test_merge_preserves_metadata(
+        self,
+        probe_config: pyine.guardrails.probes.base.ProbeConfig,
+        tokenizer_metadata: dict[str, typing.Any],
+    ) -> None:
+        shard = correctness_scorers.PrecomputedProbeScorer(
+            samples_by_key={},
+            probe_config=probe_config,
+            tokenizer_metadata=tokenizer_metadata,
+        )
+        merged = correctness_scorers.PrecomputedProbeScorer.merge([shard])
+        metadata = merged.get_metadata()
+        assert metadata["name"] == "test_probe"
+        assert metadata["architecture"] == "mean_pool"
+        assert metadata["text_field"] == "model_output"
+
+
+class _InputAwareModel(torch.nn.Module):
+    """Model whose hidden states are deterministic functions of input_ids.
+
+    Unlike _FastBackboneModel (which returns zeros), this model uses the input_ids
+    values and a fixed Linear layer to produce input-dependent activations. This
+    makes the model suitable for shard-vs-baseline comparisons, where the same record
+    must produce the same activations regardless of batch position.
+    """
+
+    def __init__(
+        self,
+        hidden_size: int = 8,
+        num_layers: int = 4,
+    ) -> None:
+        super().__init__()  # pyright: ignore[reportUnknownMemberType]
+        self.config = type("Config", (), {"hidden_size": hidden_size, "num_hidden_layers": num_layers})()
+        self.embed = torch.nn.Embedding(100, hidden_size)  # pyright: ignore[reportUnknownMemberType]
+        self.model = torch.nn.Module()
+        layers = torch.nn.ModuleList([torch.nn.Linear(hidden_size, hidden_size) for _ in range(num_layers)])
+        self.model.add_module("layers", layers)
+
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        **kwargs: typing.Any,
+    ) -> typing.Any:
+        del attention_mask, kwargs
+        hidden_states = self.embed(input_ids)  # pyright: ignore[reportUnknownMemberType]
+        for layer in self.model.layers:  # type: ignore[reportUnknownMemberType]
+            hidden_states = layer(hidden_states)
+        return type("Output", (), {"last_hidden_state": hidden_states})()
+
+
+class _InputAwareTokenizer:
+    """Tokenizer producing distinct input_ids per text (hash-based)."""
+
+    def __call__(
+        self,
+        texts: str | list[str],
+        return_tensors: str = "pt",
+        padding: bool = False,
+        truncation: bool = True,
+        max_length: int | None = None,
+        add_special_tokens: bool = True,
+    ) -> dict[str, torch.Tensor]:
+        text_list = [texts] if isinstance(texts, str) else texts
+        token_counts = [
+            max(1, min(len(text.split()), max_length if max_length is not None else len(text.split())))
+            for text in text_list
+        ]
+        seq_len = max(token_counts) if padding else token_counts[0]
+        input_ids = torch.zeros((len(text_list), seq_len), dtype=torch.int64)
+        attention_mask = torch.zeros_like(input_ids)
+        for text_idx, (text, token_count) in enumerate(zip(text_list, token_counts, strict=True)):
+            attention_mask[text_idx, :token_count] = 1
+            for tok_idx in range(token_count):
+                input_ids[text_idx, tok_idx] = hash(f"{text}_{tok_idx}") % 99 + 1  # 1-99 range
+        return {"input_ids": input_ids, "attention_mask": attention_mask}
+
+
+@pytest.mark.slow
+class TestShardMergeIntegration:
+    """Integration test simulating the multi-GPU shard -> merge pipeline without actual DDP.
+
+    Exercises the same code path as probe_trainer.py's multi-GPU scoring: split records
+    into shards, run precompute_probe_scores on each shard independently, merge the
+    per-shard PrecomputedProbeScorers, and verify the merged scorer produces the same
+    results as a single-call precomputation on all records.
+
+    Uses _InputAwareModel + real ActivationExtractor so that each record's activations
+    depend on its content, not on its batch position. This ensures sharded scoring
+    produces the same per-record scores as single-call scoring.
+    """
+
+    def test_sharded_scoring_matches_single_call(self) -> None:
+        import pyine.guardrails.probes.extraction
+
+        hidden_size = 8
+        num_layers = 4
+        records = [_make_record(f"s{idx}", model_output=f"text for sample {idx}") for idx in range(6)]
+        target_layers = [1, 2]
+        probes: dict[str, tuple[pyine.guardrails.probes.base.BaseProbe, pyine.guardrails.probes.base.ProbeConfig]] = {}
+        for layer in target_layers:
+            name = f"probe_L{layer}"
+            config = pyine.guardrails.probes.base.ProbeConfig(
+                name=name,
+                architecture="mean_pool",
+                layer=layer,
+                hidden_dim=hidden_size,
+                base_name=f"mean_pool_L{layer}",
+            )
+            probe = _DeterministicProbe(config)
+            probe.eval()
+            probes[name] = (probe, config)
+        tokenizer = _InputAwareTokenizer()
+        # single-call baseline: one model, one extractor, all records at once
+        model_baseline = _InputAwareModel(hidden_size=hidden_size, num_layers=num_layers)
+        model_baseline.eval()
+        extractor_baseline = pyine.guardrails.probes.extraction.ActivationExtractor(model_baseline, target_layers)
+        baseline_scorers = correctness_scorers.precompute_probe_scores(
+            records=records,
+            probes=probes,
+            model=model_baseline,
+            tokenizer=tokenizer,  # type: ignore[arg-type]
+            extractor=extractor_baseline,  # type: ignore[arg-type]
+            max_seq_length=128,
+            text_field="model_output",
+        )
+        extractor_baseline.remove_hooks()
+        # simulate 3-rank sharding (stride-based, like probe_trainer.py);
+        # reuses the SAME model instance for all shards; valid because in real multi-GPU
+        # each rank has an identical copy of the frozen base model weights, and here the
+        # model is deterministic + each shard gets a fresh ActivationExtractor with its
+        # own hooks, so there is no cross-shard state leakage
+        world_size = 3
+        per_shard_scorers: list[dict[str, correctness_scorers.PrecomputedProbeScorer]] = []
+        for rank in range(world_size):
+            shard_records = records[rank::world_size]
+            extractor_shard = pyine.guardrails.probes.extraction.ActivationExtractor(model_baseline, target_layers)
+            shard_result = correctness_scorers.precompute_probe_scores(
+                records=shard_records,
+                probes=probes,
+                model=model_baseline,
+                tokenizer=tokenizer,  # type: ignore[arg-type]
+                extractor=extractor_shard,  # type: ignore[arg-type]
+                max_seq_length=128,
+                text_field="model_output",
+            )
+            extractor_shard.remove_hooks()
+            per_shard_scorers.append(shard_result)
+        # merge shards (same logic as probe_trainer.py rank 0)
+        merged_scorers: dict[str, correctness_scorers.PrecomputedProbeScorer] = {}
+        for probe_name in probes:
+            shards = [shard[probe_name] for shard in per_shard_scorers]
+            merged_scorers[probe_name] = correctness_scorers.PrecomputedProbeScorer.merge(shards)
+        # verify merged results match baseline for all probes
+        for probe_name in probes:
+            baseline_result = baseline_scorers[probe_name].score_records(records)
+            merged_result = merged_scorers[probe_name].score_records(records)
+            assert len(merged_result.scores) == len(baseline_result.scores)
+            for idx, (baseline_score, merged_score) in enumerate(
+                zip(baseline_result.scores, merged_result.scores, strict=True)
+            ):
+                assert abs(baseline_score - merged_score) < 1e-6, (
+                    f"{probe_name} score mismatch at index {idx}: baseline={baseline_score}, merged={merged_score}"
+                )
+            # verify scores are distinguishable
+            assert len(set(merged_result.scores)) > 1, f"{probe_name}: all merged scores identical; test not meaningful"

@@ -113,6 +113,13 @@ class CorrectnessEvalsConfig(pyine.evals.common.BaseEvalsConfig):
     roc_fpr_grid_size: int = pydantic.Field(default=200, gt=1)
     """Number of points in the FPR grid for ROC curve plotting."""
 
+    eval_type_parallelism: int = pydantic.Field(default=1, ge=1)
+    """Number of probe types to evaluate concurrently.
+
+    When > 1, per-type bootstrap_num_workers is automatically reduced so total workers stay
+    approximately equal to bootstrap_num_workers.
+    """
+
     @pydantic.field_validator("target_fpr_values")
     @classmethod
     def _validate_target_fpr_values(

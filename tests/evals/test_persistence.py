@@ -517,8 +517,7 @@ class TestCodeExecAutoDump:
 class TestCorrectnessAutoDump:
     """Verify correctness paths call persistence when result_dump_dir is set."""
 
-    @pytest.mark.asyncio
-    async def test_evaluate_guardrail_types_dumps_per_type(self, tmp_path: pathlib.Path) -> None:
+    def test_evaluate_guardrail_types_dumps_per_type(self, tmp_path: pathlib.Path) -> None:
         """Patch save_eval_result; verify called once per type with type_name in path."""
         import pyine.evals.correctness._impl as correctness_impl
 
@@ -541,7 +540,7 @@ class TestCorrectnessAutoDump:
             config.result_dump_overwrite = False
             datamodule = unittest.mock.MagicMock()
             guardrails_by_type = {"typeA": [unittest.mock.MagicMock()], "typeB": [unittest.mock.MagicMock()]}
-            await correctness_impl.evaluate_guardrail_types(
+            correctness_impl.evaluate_guardrail_types(
                 config=config,
                 guardrails_by_type=guardrails_by_type,
                 datamodule=datamodule,
@@ -553,8 +552,7 @@ class TestCorrectnessAutoDump:
             assert "typeA" in type_names_in_calls
             assert "typeB" in type_names_in_calls
 
-    @pytest.mark.asyncio
-    async def test_evaluate_guardrail_types_logs_type_names_metadata(self) -> None:
+    def test_evaluate_guardrail_types_logs_type_names_metadata(self) -> None:
         """Verify _guardrail_type_names written to W&B summary after loop."""
         import pyine.evals.correctness._impl as correctness_impl
 
@@ -577,7 +575,7 @@ class TestCorrectnessAutoDump:
             config.result_dump_dir = None
             datamodule = unittest.mock.MagicMock()
             guardrails_by_type = {"typeA": [unittest.mock.MagicMock()], "typeB": [unittest.mock.MagicMock()]}
-            await correctness_impl.evaluate_guardrail_types(
+            correctness_impl.evaluate_guardrail_types(
                 config=config,
                 guardrails_by_type=guardrails_by_type,
                 datamodule=datamodule,

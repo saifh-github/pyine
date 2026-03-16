@@ -765,7 +765,7 @@ def _build_bootstrap_sample_keys(
 _MAX_AUTO_WORKERS = 16  # cap for auto-resolved worker count to limit memory overhead from pickling
 
 
-def _resolve_num_workers(
+def resolve_num_workers(
     num_workers: int,
     num_replicates: int,
 ) -> int:
@@ -1049,7 +1049,7 @@ def compute_clustered_bootstrap_cis(
     problem_ids = sorted(problem_to_indices.keys())
     if len(problem_ids) == 0:
         return {}
-    effective = _resolve_num_workers(num_workers, num_replicates)
+    effective = resolve_num_workers(num_workers, num_replicates)
     if effective == 1:
         # sequential path: bit-exact with pre-parallelization behavior
         rng = np.random.default_rng(seed)
@@ -1217,7 +1217,7 @@ def compute_hierarchical_bootstrap_cis(
             prob_to_idx[rec.problem_id].append(idx)
         run_problem_maps.append(dict(prob_to_idx))
         run_problem_id_lists.append(sorted(prob_to_idx.keys()))
-    effective = _resolve_num_workers(num_workers, num_replicates)
+    effective = resolve_num_workers(num_workers, num_replicates)
     if effective == 1:
         # sequential path: bit-exact with pre-parallelization behavior
         rng = np.random.default_rng(seed)

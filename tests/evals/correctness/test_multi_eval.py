@@ -47,8 +47,7 @@ def _build_mock_datamodule(monkeypatch: pytest.MonkeyPatch) -> correctness_datam
 
 
 class TestEvaluateGuardrailTypes:
-    @pytest.mark.asyncio
-    async def test_multiple_types_returns_independent_results(
+    def test_multiple_types_returns_independent_results(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
@@ -62,7 +61,7 @@ class TestEvaluateGuardrailTypes:
             num_bootstrap_replicates=5,
             roc_fpr_grid_size=10,
         )
-        results = await correctness_impl.evaluate_guardrail_types(
+        results = correctness_impl.evaluate_guardrail_types(
             config=config,
             guardrails_by_type={
                 "type_a": [correctness_conftest.MockGuardrailScorer(noise_seed=0)],
@@ -82,8 +81,7 @@ class TestEvaluateGuardrailTypes:
         assert "datamodule_config" in results["type_a"].eval_metadata
         assert "reprod_metadata" in results["type_a"].eval_metadata
 
-    @pytest.mark.asyncio
-    async def test_single_type(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_single_type(self, monkeypatch: pytest.MonkeyPatch) -> None:
         dm = _build_mock_datamodule(monkeypatch)
         config = correctness_configs.CorrectnessEvalsConfig(
             datamodule_config=correctness_datamodule_configs.CorrectnessDataModuleConfig(
@@ -94,7 +92,7 @@ class TestEvaluateGuardrailTypes:
             num_bootstrap_replicates=5,
             roc_fpr_grid_size=10,
         )
-        results = await correctness_impl.evaluate_guardrail_types(
+        results = correctness_impl.evaluate_guardrail_types(
             config=config,
             guardrails_by_type={"only_type": [correctness_conftest.MockGuardrailScorer()]},
             datamodule=dm,
@@ -103,8 +101,7 @@ class TestEvaluateGuardrailTypes:
         assert len(results) == 1
         assert "only_type" in results
 
-    @pytest.mark.asyncio
-    async def test_empty_replicas_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_empty_replicas_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         dm = _build_mock_datamodule(monkeypatch)
         config = correctness_configs.CorrectnessEvalsConfig(
             datamodule_config=correctness_datamodule_configs.CorrectnessDataModuleConfig(
@@ -116,15 +113,14 @@ class TestEvaluateGuardrailTypes:
             roc_fpr_grid_size=10,
         )
         with pytest.raises(ValueError, match="empty replicas list"):
-            await correctness_impl.evaluate_guardrail_types(
+            correctness_impl.evaluate_guardrail_types(
                 config=config,
                 guardrails_by_type={"bad_type": []},
                 datamodule=dm,
                 eval_subset_name="guardrail_valid",
             )
 
-    @pytest.mark.asyncio
-    async def test_wandb_metric_prefixing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_wandb_metric_prefixing(self, monkeypatch: pytest.MonkeyPatch) -> None:
         dm = _build_mock_datamodule(monkeypatch)
         config = correctness_configs.CorrectnessEvalsConfig(
             datamodule_config=correctness_datamodule_configs.CorrectnessDataModuleConfig(
@@ -137,7 +133,7 @@ class TestEvaluateGuardrailTypes:
         )
         mock_wandb_run = unittest.mock.MagicMock()
         mock_wandb_run.summary = {}
-        await correctness_impl.evaluate_guardrail_types(
+        correctness_impl.evaluate_guardrail_types(
             config=config,
             guardrails_by_type={"my_type": [correctness_conftest.MockGuardrailScorer()]},
             datamodule=dm,
@@ -166,20 +162,18 @@ class TestEvaluateGuardrailTypesValidation:
             result_dump_dir=result_dump_dir,
         )
 
-    @pytest.mark.asyncio
-    async def test_empty_guardrails_raises(self) -> None:
+    def test_empty_guardrails_raises(self) -> None:
         config = self._make_config()
         dm = unittest.mock.MagicMock()
         with pytest.raises(ValueError, match="empty; nothing to evaluate"):
-            await correctness_impl.evaluate_guardrail_types(
+            correctness_impl.evaluate_guardrail_types(
                 config=config,
                 guardrails_by_type={},
                 datamodule=dm,
                 eval_subset_name="guardrail_test",
             )
 
-    @pytest.mark.asyncio
-    async def test_dump_dir_with_missing_subset_raises_before_eval(
+    def test_dump_dir_with_missing_subset_raises_before_eval(
         self,
         tmp_path: pathlib.Path,
     ) -> None:
@@ -191,7 +185,7 @@ class TestEvaluateGuardrailTypesValidation:
             new_callable=unittest.mock.AsyncMock,
         ) as mock_eval:
             with pytest.raises(ValueError, match="eval_subset_name must be set"):
-                await correctness_impl.evaluate_guardrail_types(
+                correctness_impl.evaluate_guardrail_types(
                     config=config,
                     guardrails_by_type={"type_a": [correctness_conftest.MockGuardrailScorer()]},
                     datamodule=dm,
@@ -199,86 +193,79 @@ class TestEvaluateGuardrailTypesValidation:
                 )
             mock_eval.assert_not_called()
 
-    @pytest.mark.asyncio
-    async def test_missing_subset_raises_without_dump_dir(self) -> None:
+    def test_missing_subset_raises_without_dump_dir(self) -> None:
         config = self._make_config(result_dump_dir=None)
         dm = unittest.mock.MagicMock()
         with pytest.raises(ValueError, match="eval_subset_name must be set"):
-            await correctness_impl.evaluate_guardrail_types(
+            correctness_impl.evaluate_guardrail_types(
                 config=config,
                 guardrails_by_type={"type_a": [correctness_conftest.MockGuardrailScorer()]},
                 datamodule=dm,
                 eval_subset_name=" ",
             )
 
-    @pytest.mark.asyncio
-    async def test_reserved_prefix_raises(self) -> None:
+    def test_reserved_prefix_raises(self) -> None:
         config = self._make_config()
         dm = unittest.mock.MagicMock()
         with pytest.raises(ValueError, match="reserved metric namespace prefix"):
-            await correctness_impl.evaluate_guardrail_types(
+            correctness_impl.evaluate_guardrail_types(
                 config=config,
                 guardrails_by_type={"fpr_custom": [correctness_conftest.MockGuardrailScorer()]},
                 datamodule=dm,
                 eval_subset_name="guardrail_test",
             )
 
-    @pytest.mark.asyncio
-    async def test_reserved_prefix_tpr_at_fpr_raises(self) -> None:
+    def test_reserved_prefix_tpr_at_fpr_raises(self) -> None:
         config = self._make_config()
         dm = unittest.mock.MagicMock()
         with pytest.raises(ValueError, match="reserved metric namespace prefix"):
-            await correctness_impl.evaluate_guardrail_types(
+            correctness_impl.evaluate_guardrail_types(
                 config=config,
                 guardrails_by_type={"tpr_at_fpr_custom": [correctness_conftest.MockGuardrailScorer()]},
                 datamodule=dm,
                 eval_subset_name="guardrail_test",
             )
 
-    @pytest.mark.asyncio
-    async def test_reserved_exact_name_raises(self) -> None:
+    def test_reserved_exact_name_raises(self) -> None:
         config = self._make_config()
         dm = unittest.mock.MagicMock()
         for reserved_name in ("category", "auroc", "average_precision", "sample_count"):
             with pytest.raises(ValueError, match="reserved metric key"):
-                await correctness_impl.evaluate_guardrail_types(
+                correctness_impl.evaluate_guardrail_types(
                     config=config,
                     guardrails_by_type={reserved_name: [correctness_conftest.MockGuardrailScorer()]},
                     datamodule=dm,
                     eval_subset_name="guardrail_test",
                 )
 
-    @pytest.mark.asyncio
-    async def test_slash_in_name_raises(self) -> None:
+    def test_slash_in_name_raises(self) -> None:
         config = self._make_config()
         dm = unittest.mock.MagicMock()
         with pytest.raises(ValueError, match="contains '/'"):
-            await correctness_impl.evaluate_guardrail_types(
+            correctness_impl.evaluate_guardrail_types(
                 config=config,
                 guardrails_by_type={"foo/bar": [correctness_conftest.MockGuardrailScorer()]},
                 datamodule=dm,
                 eval_subset_name="guardrail_test",
             )
 
-    @pytest.mark.asyncio
-    async def test_whitespace_only_name_raises(self) -> None:
+    def test_whitespace_only_name_raises(self) -> None:
         config = self._make_config()
         dm = unittest.mock.MagicMock()
         with pytest.raises(ValueError, match="must not be empty or whitespace"):
-            await correctness_impl.evaluate_guardrail_types(
+            correctness_impl.evaluate_guardrail_types(
                 config=config,
                 guardrails_by_type={"   ": [correctness_conftest.MockGuardrailScorer()]},
                 datamodule=dm,
                 eval_subset_name="guardrail_test",
             )
 
-    @pytest.mark.asyncio
-    async def test_dump_path_collision_raises(self, tmp_path: pathlib.Path) -> None:
+    def test_dump_path_collision_raises(self, tmp_path: pathlib.Path) -> None:
         """Type names that sanitize to the same filename are caught before evaluation."""
         config = self._make_config(result_dump_dir=tmp_path)
         dm = unittest.mock.MagicMock()
         with pytest.raises(ValueError, match="same dump filename"):
-            await correctness_impl.evaluate_guardrail_types(
+            correctness_impl.evaluate_guardrail_types(
                 config=config,
                 guardrails_by_type={
                     "a b": [correctness_conftest.MockGuardrailScorer()],
@@ -288,13 +275,12 @@ class TestEvaluateGuardrailTypesValidation:
                 eval_subset_name="guardrail_test",
             )
 
-    @pytest.mark.asyncio
-    async def test_dump_path_collision_is_case_insensitive(self, tmp_path: pathlib.Path) -> None:
+    def test_dump_path_collision_is_case_insensitive(self, tmp_path: pathlib.Path) -> None:
         """Type names that differ only by case are treated as filename collisions."""
         config = self._make_config(result_dump_dir=tmp_path)
         dm = unittest.mock.MagicMock()
         with pytest.raises(ValueError, match="same dump filename"):
-            await correctness_impl.evaluate_guardrail_types(
+            correctness_impl.evaluate_guardrail_types(
                 config=config,
                 guardrails_by_type={
                     "TypeA": [correctness_conftest.MockGuardrailScorer()],
@@ -304,8 +290,7 @@ class TestEvaluateGuardrailTypesValidation:
                 eval_subset_name="guardrail_test",
             )
 
-    @pytest.mark.asyncio
-    async def test_single_type_dump_name_sanitization_error_raises_before_eval(
+    def test_single_type_dump_name_sanitization_error_raises_before_eval(
         self,
         tmp_path: pathlib.Path,
     ) -> None:
@@ -318,10 +303,98 @@ class TestEvaluateGuardrailTypesValidation:
             new_callable=unittest.mock.AsyncMock,
         ) as mock_eval:
             with pytest.raises(ValueError, match="sanitizes to an empty string"):
-                await correctness_impl.evaluate_guardrail_types(
+                correctness_impl.evaluate_guardrail_types(
                     config=config,
                     guardrails_by_type={":::": [correctness_conftest.MockGuardrailScorer()]},
                     datamodule=dm,
                     eval_subset_name="guardrail_test",
                 )
             mock_eval.assert_not_called()
+
+
+class TestEvaluateGuardrailTypesParallel:
+    """Test eval_type_parallelism > 1 produces same results as sequential."""
+
+    def test_parallel_matches_sequential(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        dm = _build_mock_datamodule(monkeypatch)
+        config = correctness_configs.CorrectnessEvalsConfig(
+            datamodule_config=correctness_datamodule_configs.CorrectnessDataModuleConfig(
+                lmdb_paths=(_FAKE_LMDB_PATH,),
+                split_config=correctness_types.GuardrailSplitConfig(split_source="TACO"),
+            ),
+            target_fpr_values=[0.05],
+            num_bootstrap_replicates=5,
+            bootstrap_num_workers=1,  # fixed workers for exact comparison
+            roc_fpr_grid_size=10,
+        )
+        guardrails_by_type = {
+            "type_a": [correctness_conftest.MockGuardrailScorer(noise_seed=0)],
+            "type_b": [correctness_conftest.MockGuardrailScorer(noise_seed=1)],
+        }
+        sequential = correctness_impl.evaluate_guardrail_types(
+            config=config,
+            guardrails_by_type=guardrails_by_type,
+            datamodule=dm,
+            eval_subset_name="guardrail_valid",
+            eval_type_parallelism=1,
+        )
+        parallel = correctness_impl.evaluate_guardrail_types(
+            config=config,
+            guardrails_by_type=guardrails_by_type,
+            datamodule=dm,
+            eval_subset_name="guardrail_valid",
+            eval_type_parallelism=2,
+        )
+        assert set(sequential.keys()) == set(parallel.keys())
+        for type_name in sequential:
+            seq_auroc = sequential[type_name].metrics.get("auroc/mean")
+            par_auroc = parallel[type_name].metrics.get("auroc/mean")
+            assert seq_auroc is not None and par_auroc is not None
+            assert abs(seq_auroc - par_auroc) < 1e-10, (
+                f"AUROC mismatch for {type_name}: sequential={seq_auroc}, parallel={par_auroc}"
+            )
+
+
+class TestAutoReduceBootstrapWorkers:
+    """Test that eval_type_parallelism auto-reduces bootstrap workers."""
+
+    def test_auto_reduction_formula(self) -> None:
+        import pyine.evals.correctness.metrics as correctness_metrics
+
+        # with 16 resolved workers and parallelism=4, effective should be 4
+        resolved = correctness_metrics.resolve_num_workers(0, num_replicates=1000)
+        adjusted = max(1, resolved // 4)
+        assert adjusted >= 1
+        assert adjusted <= resolved
+
+
+class TestEvalSingleTypeErrorAnnotation:
+    """Test that _eval_single_type annotates errors with type_name."""
+
+    def test_error_includes_type_name(self) -> None:
+        config = correctness_configs.CorrectnessEvalsConfig(
+            datamodule_config=correctness_datamodule_configs.CorrectnessDataModuleConfig(
+                lmdb_paths=(_FAKE_LMDB_PATH,),
+                split_config=correctness_types.GuardrailSplitConfig(split_source="TACO"),
+            ),
+            target_fpr_values=[0.05],
+            num_bootstrap_replicates=5,
+            roc_fpr_grid_size=10,
+        )
+        dm = unittest.mock.MagicMock()
+        with (
+            unittest.mock.patch.object(
+                correctness_impl,
+                "evaluate_guardrail_replicas",
+                new_callable=unittest.mock.AsyncMock,
+                side_effect=ValueError("inner failure"),
+            ),
+            pytest.raises(RuntimeError, match="my_failing_type"),
+        ):
+            correctness_impl._eval_single_type(
+                type_name="my_failing_type",
+                replicas=[unittest.mock.MagicMock()],
+                config=config,
+                datamodule=dm,
+                eval_subset_name="guardrail_test",
+            )

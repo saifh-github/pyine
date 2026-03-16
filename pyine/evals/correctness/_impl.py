@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import functools
 import logging
 import typing
 
@@ -13,6 +15,7 @@ import pyine.evals.correctness.calibration as correctness_calibration
 import pyine.evals.correctness.metrics as correctness_metrics
 import pyine.evals.correctness.types as correctness_types
 import pyine.evals.persistence
+import pyine.utils.concurrency
 import pyine.utils.portability
 
 if typing.TYPE_CHECKING:
@@ -632,19 +635,90 @@ def _aggregate_cost_stats(
     return aggregated if aggregated else None
 
 
-async def evaluate_guardrail_types(
+def _eval_single_type(
+    type_name: str,
+    replicas: typing.Sequence[correctness_types.GuardrailScorer],
+    config: correctness_configs.CorrectnessEvalsConfig,
+    datamodule: correctness_datamodule.CorrectnessDataModule,
+    eval_subset_name: str,
+    verbose: bool = False,
+) -> tuple[str, CorrectnessEvalResult]:
+    """Evaluate a single guardrail type (the per-type loop body).
+
+    Runs ``evaluate_guardrail_replicas`` (async, bridged via ``asyncio.run``), attaches
+    ``guardrail_type_name`` to eval_metadata, and dumps the result to disk if configured.
+
+    Must not be called from within an already-running asyncio event loop
+    (``asyncio.run()`` inside).
+
+    Args:
+        type_name: Guardrail type name (e.g. ``"mean_pool_L8"``).
+        replicas: Sequence of GuardrailScorer replicas for this type.
+        config: Correctness evaluation configuration.
+        datamodule: The prepared correctness evaluation datamodule.
+        eval_subset_name: Which subset to evaluate on.
+        verbose: Whether to verbosely report progress.
+
+    Returns:
+        Tuple of ``(type_name, result)``.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        pass  # no loop running, safe to proceed
+    else:
+        raise RuntimeError(
+            "_eval_single_type uses asyncio.run() internally and cannot be called from within "
+            "a running event loop; use evaluate_guardrail_replicas directly in async contexts"
+        )
+    logger.info(f"evaluating guardrail type '{type_name}' ({len(replicas)} replica(s))...")
+    try:
+        result = asyncio.run(
+            evaluate_guardrail_replicas(
+                config=config,
+                guardrails=replicas,
+                datamodule=datamodule,
+                eval_subset_name=eval_subset_name,
+                verbose=verbose,
+            )
+        )
+    except Exception as exc:
+        raise RuntimeError(f"evaluation failed for guardrail type '{type_name}'") from exc
+    result = result.model_copy(
+        update={
+            "eval_metadata": {
+                **result.eval_metadata,
+                "guardrail_type_name": type_name,
+            }
+        }
+    )
+    pyine.evals.persistence.maybe_dump_eval_result(
+        result=result,
+        dump_dir=config.result_dump_dir,
+        eval_subset_name=eval_subset_name,
+        type_name=type_name,
+        overwrite=config.result_dump_overwrite,
+    )
+    return type_name, result
+
+
+def evaluate_guardrail_types(
     config: correctness_configs.CorrectnessEvalsConfig,
     guardrails_by_type: dict[str, typing.Sequence[correctness_types.GuardrailScorer]],
     datamodule: correctness_datamodule.CorrectnessDataModule,
     eval_subset_name: str,
     wandb_run: typing.Any | None = None,
     verbose: bool = False,
+    eval_type_parallelism: int = 1,
 ) -> dict[str, CorrectnessEvalResult]:
     """Evaluate multiple guardrail types independently, each with optional replicas.
 
     Each key in ``guardrails_by_type`` is a type name (e.g. ``"mean_pool_L8"``). The
     associated sequence contains replica instances of that type, which get cross-run
     aggregation. Results and W&B metrics are prefixed with the type name.
+
+    Must not be called from within an already-running asyncio event loop
+    (``asyncio.run()`` is used internally for the async bridge).
 
     Args:
         config: Correctness evaluation configuration.
@@ -653,9 +727,17 @@ async def evaluate_guardrail_types(
         eval_subset_name: Which subset to evaluate on.
         wandb_run: Optional W&B run for metric logging.
         verbose: Whether to verbosely report progress.
+        eval_type_parallelism: Number of probe types to evaluate concurrently. When > 1,
+            per-type bootstrap_num_workers is automatically reduced so total workers stay
+            approximately equal to the configured ``bootstrap_num_workers``.
 
     Returns:
         Mapping from type_name to its CorrectnessEvalResult.
+
+    Note:
+        Error behavior differs by mode: sequential (``eval_type_parallelism=1``) is fail-fast
+        (first failure stops remaining types), while parallel mode runs all types to completion
+        before raising.
     """
     if not guardrails_by_type:
         raise ValueError("guardrails_by_type is empty; nothing to evaluate")
@@ -679,6 +761,10 @@ async def evaluate_guardrail_types(
                 f"guardrail type name {type_name!r} contains '/' which would create ambiguous W&B key paths; "
                 "choose a different name"
             )
+    # pre-validate ALL types have non-empty replicas before any dispatch
+    for type_name, replicas in guardrails_by_type.items():
+        if not replicas:
+            raise ValueError(f"guardrail type '{type_name}' has an empty replicas list")
     # pre-validate dump paths (including sanitization), and detect filename collisions before eval work
     if config.result_dump_dir is not None:
         seen_paths: dict[str, str] = {}  # normalized filename -> original type_name
@@ -695,38 +781,57 @@ async def evaluate_guardrail_types(
                     f"dump filename '{dump_path.name}' after sanitization; use distinct type names"
                 )
             seen_paths[normalized_name] = type_name
-    results: dict[str, CorrectnessEvalResult] = {}
+    # auto-reduce per-type bootstrap workers when running types in parallel
+    effective_config = config
+    if eval_type_parallelism > 1:
+        resolved_workers = correctness_metrics.resolve_num_workers(
+            config.bootstrap_num_workers,
+            config.num_bootstrap_replicates,
+        )
+        adjusted_workers = max(1, resolved_workers // eval_type_parallelism)
+        if adjusted_workers != resolved_workers:
+            logger.info(
+                f"auto-reduced bootstrap_num_workers: {resolved_workers} -> {adjusted_workers} "
+                f"(original config={config.bootstrap_num_workers}) for "
+                f"eval_type_parallelism={eval_type_parallelism}"
+            )
+        # always pin the resolved value so auto-mode (0) doesn't re-resolve per thread
+        effective_config = config.model_copy(update={"bootstrap_num_workers": adjusted_workers})
+        pyine.utils.concurrency.ensure_spawn_start_method()
+    # build callables for each type
+    callables: list[typing.Callable[[], tuple[str, CorrectnessEvalResult]]] = []
     for type_name, replicas in guardrails_by_type.items():
-        if not replicas:
-            raise ValueError(f"guardrail type '{type_name}' has an empty replicas list")
-        logger.info(f"evaluating guardrail type '{type_name}' ({len(replicas)} replica(s))...")
-        result = await evaluate_guardrail_replicas(
-            config=config,
-            guardrails=replicas,
-            datamodule=datamodule,
-            eval_subset_name=eval_subset_name,
-            verbose=verbose,
+        callables.append(
+            functools.partial(
+                _eval_single_type,
+                type_name=type_name,
+                replicas=replicas,
+                config=effective_config,
+                datamodule=datamodule,
+                eval_subset_name=eval_subset_name,
+                verbose=verbose,
+            )
         )
-        result = result.model_copy(
-            update={
-                "eval_metadata": {
-                    **result.eval_metadata,
-                    "guardrail_type_name": type_name,
-                }
-            }
+    # dispatch: both paths call _eval_single_type: one code path, two dispatch modes
+    if eval_type_parallelism > 1 and len(callables) > 1:
+        raw_results, _errors = pyine.utils.concurrency.run_in_parallel(
+            callables=callables,
+            use_processes=False,  # threads, not processes (shared datamodule is read-only)
+            max_workers=eval_type_parallelism,
+            raise_on_error=True,
         )
-        if wandb_run is not None:
+    else:
+        raw_results = [fn() for fn in callables]
+    # collect results in input order (raise_on_error=True guarantees no None entries)
+    results: dict[str, CorrectnessEvalResult] = {}
+    for raw_result in raw_results:
+        type_name, result = typing.cast("tuple[str, CorrectnessEvalResult]", raw_result)
+        results[type_name] = result
+    # wandb writes in main thread after all types complete
+    if wandb_run is not None:
+        for type_name, result in results.items():
             type_prefix = f"benchmark/{eval_subset_name}/{type_name}"
             for metric_name, metric_val in result.metrics.items():
                 wandb_run.summary[f"{type_prefix}/{metric_name}"] = metric_val  # type: ignore[reportUnknownMemberType]
-        results[type_name] = result
-        pyine.evals.persistence.maybe_dump_eval_result(
-            result=result,
-            dump_dir=config.result_dump_dir,
-            eval_subset_name=eval_subset_name,
-            type_name=type_name,
-            overwrite=config.result_dump_overwrite,
-        )
-    if wandb_run is not None:
         wandb_run.summary[f"benchmark/{eval_subset_name}/_guardrail_type_names"] = sorted(results.keys())  # type: ignore[reportUnknownMemberType]
     return results

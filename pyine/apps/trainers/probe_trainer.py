@@ -5,7 +5,6 @@ See pyine/apps/trainers/PROBE_TRAINING_GUIDE.md for the full GUIDE.
 
 from __future__ import annotations
 
-import asyncio
 import collections
 import hashlib
 import json
@@ -1126,15 +1125,133 @@ def probe_train(
     )
 
 
-async def main(
+def _collect_unique_eval_records(
+    eval_dm: correctness_datamodule.CorrectnessDataModule,
+    evals_config: correctness_configs.CorrectnessEvalsConfig,
+) -> list[correctness_types.EvalRecord]:
+    """Collect and deduplicate all records across calibration + eval subsets for precomputation.
+
+    Calibration records are deterministic (resample_records uses random.Random(config.seed)),
+    and eval subset records come from fixed splits, so the same keys appear on every call.
+    """
+    all_records: list[correctness_types.EvalRecord] = []
+    all_records.extend(
+        eval_dm.get_records_for_calibration(
+            resampling_config=evals_config.calibration_resampling,
+        )
+    )
+    for eval_subset_name in eval_dm.config.resolved_eval_subset_names:
+        all_records.extend(eval_dm.get_records_for_subset(eval_subset_name))
+    seen_keys: set[correctness_types.AttemptKey] = set()
+    unique_records: list[correctness_types.EvalRecord] = []
+    for record in all_records:
+        key: correctness_types.AttemptKey = (record.sample_id, record.attempt_index)
+        if key not in seen_keys:
+            seen_keys.add(key)
+            unique_records.append(record)
+    return unique_records
+
+
+def _build_probes_dict(
+    probe_collection: pyine.guardrails.probes.collection.ProbeCollection,
+) -> dict[str, tuple[pyine.guardrails.probes.base.BaseProbe, pyine.guardrails.probes.base.ProbeConfig]]:
+    """Unpack a ProbeCollection into the dict format expected by precompute_probe_scores."""
+    probes_dict: dict[str, tuple[pyine.guardrails.probes.base.BaseProbe, pyine.guardrails.probes.base.ProbeConfig]] = {}
+    for probe_name, probe_module in probe_collection.probes.items():
+        probe_cfg = probe_collection._probe_configs[probe_name]  # pyright: ignore[reportPrivateUsage]
+        probes_dict[probe_name] = (
+            typing.cast("pyine.guardrails.probes.base.BaseProbe", probe_module),
+            probe_cfg,
+        )
+    return probes_dict
+
+
+def _score_and_merge_shards(
+    unique_records: list[correctness_types.EvalRecord],
+    probes_dict: dict[str, tuple[pyine.guardrails.probes.base.BaseProbe, pyine.guardrails.probes.base.ProbeConfig]],
+    model: torch.nn.Module,
+    tokenizer: transformers.PreTrainedTokenizerBase,
+    extractor: pyine.guardrails.probes.extraction.ActivationExtractor,
+    config: probe_trainer_configs.ProbeTrainerAppMainConfig,
+    rank: int,
+    world_size: int,
+    is_distributed: bool,
+) -> dict[str, correctness_scorers.PrecomputedProbeScorer]:
+    """Shard records across ranks, score each shard, gather, and merge into full scorers.
+
+    Each rank scores its stride-based shard (``unique_records[rank::world_size]``), results
+    are gathered via ``all_gather_objects``, and rank 0 merges the per-shard scorers.
+
+    Args:
+        unique_records: Deduplicated records to score (identical on all ranks).
+        probes_dict: Mapping from probe name to (probe, config) pairs.
+        model: Frozen base model (already on the correct device).
+        tokenizer: Tokenizer for encoding records.
+        extractor: Activation extractor with hooks registered.
+        config: Probe trainer config (for max_seq_length, text_field).
+        rank: This process's rank.
+        world_size: Total number of ranks.
+        is_distributed: Whether DDP is active.
+
+    Returns:
+        Merged dict mapping probe name to PrecomputedProbeScorer (on rank 0), or the
+        single-rank result when not distributed.
+    """
+    shard_records = unique_records[rank::world_size]
+    logger.info(
+        f"rank {rank}/{world_size}: scoring {len(shard_records)}/{len(unique_records)} "
+        f"unique records across {len(probes_dict)} probes"
+    )
+    shard_scorers: dict[str, correctness_scorers.PrecomputedProbeScorer] | None
+    try:
+        if shard_records:
+            shard_scorers = correctness_scorers.precompute_probe_scores(
+                records=shard_records,
+                probes=probes_dict,
+                model=model,
+                tokenizer=tokenizer,
+                extractor=extractor,  # pyright: ignore[reportUnknownArgumentType]
+                max_seq_length=config.max_seq_length,
+                text_field=config.text_field,
+            )
+        else:
+            shard_scorers = {}  # rank got no records (more ranks than records)
+    except Exception:
+        logger.exception(f"rank {rank}: probe scoring failed")
+        shard_scorers = None  # signal failure to other ranks
+    # gather results from all ranks via all_gather_objects
+    if is_distributed:
+        all_shard_scorers: list[dict[str, correctness_scorers.PrecomputedProbeScorer] | None] = (
+            pyine.utils.distrib.all_gather_objects(shard_scorers)
+        )
+    else:
+        all_shard_scorers = [shard_scorers]
+    failed_ranks = [idx for idx, scorers in enumerate(all_shard_scorers) if scorers is None]
+    if failed_ranks:
+        raise RuntimeError(f"probe scoring failed on rank(s) {failed_ranks}; check logs for details")
+    # merge per-shard scorers into full scorers
+    all_shard_scorers_valid = typing.cast(
+        "list[dict[str, correctness_scorers.PrecomputedProbeScorer]]",
+        all_shard_scorers,
+    )
+    precomputed_scorers: dict[str, correctness_scorers.PrecomputedProbeScorer] = {}
+    for probe_name in probes_dict:
+        per_shard: list[correctness_scorers.PrecomputedProbeScorer] = []
+        for shard_idx, shard in enumerate(all_shard_scorers_valid):
+            if probe_name in shard:
+                per_shard.append(shard[probe_name])
+            elif shard:  # non-empty shard missing this probe is unexpected
+                raise RuntimeError(f"shard {shard_idx} has probes {sorted(shard)} but is missing {probe_name!r}")
+        precomputed_scorers[probe_name] = correctness_scorers.PrecomputedProbeScorer.merge(per_shard)
+    return precomputed_scorers
+
+
+def main(
     config: probe_trainer_configs.ProbeTrainerAppMainConfig,
     runtime: pyine.configs.schemas.RuntimeConfig | None = None,
     skip_training: bool = False,
 ) -> None:
     """Main entrypoint for probe training."""
-    import pyine.utils.distrib
-    import pyine.utils.reprod
-
     # initialize wandb on all ranks only if explicitly requested, otherwise
     # only on global main rank for efficiency
     is_global_main = pyine.utils.distrib.is_main_process()
@@ -1150,9 +1267,18 @@ async def main(
         logger.info("dry run mode -- skipping probe training")
         return
 
+    is_distributed = torch.distributed.is_available() and torch.distributed.is_initialized()
+    rank = int(torch.distributed.get_rank()) if is_distributed else 0  # type: ignore[reportUnknownMemberType]
+    world_size = int(torch.distributed.get_world_size()) if is_distributed else 1  # type: ignore[reportUnknownMemberType]
+
     if skip_training:
         if config.probe_checkpoint_dir is None:
             raise ValueError("skip_training=True requires config.probe_checkpoint_dir to be set")
+        if is_distributed:
+            raise RuntimeError(
+                "skip_training=True (eval-only mode) does not support multi-GPU; "
+                f"got world_size={world_size}. Launch with a single process instead."
+            )
         logger.info(
             f"skip_training mode; loading probes from {config.probe_checkpoint_dir}; "
             f"checkpoint_name={config.probe_checkpoint_name or 'auto'}"
@@ -1178,18 +1304,19 @@ async def main(
         probe_collection = train_result.probe_collection
         model = train_result.model
         tokenizer = train_result.tokenizer
-        if (
-            config.evals_config is not None
-            and config.save_best_probe_checkpoint
-            and config.save_probes
-            and pyine.utils.distrib.is_main_process()  # pyright: ignore[reportUnknownMemberType,reportAttributeAccessIssue]
-        ):
+        # all ranks reload best probes from checkpoint
+        if config.evals_config is not None and config.save_best_probe_checkpoint and config.save_probes:
+            # only main process saves the summary, but all ranks load
             probes_base = _get_probes_base_dir(runtime)
             hidden_dim = typing.cast("int", model.config.hidden_size)  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue]
-            logger.info(
-                f"reloading probes from {probes_base}; checkpoint_name={config.best_probe_checkpoint_name} "
-                "for post-training evaluation"
-            )
+            if is_global_main:
+                logger.info(
+                    f"reloading probes from {probes_base}; checkpoint_name={config.best_probe_checkpoint_name} "
+                    "for post-training evaluation"
+                )
+            # barrier to ensure rank 0 has finished writing checkpoints before others read
+            if is_distributed:
+                torch.distributed.barrier()  # type: ignore[reportUnknownMemberType]
             probe_collection = pyine.guardrails.probes.collection.ProbeCollection.load_from_checkpoint(  # pyright: ignore[reportUnknownVariableType,reportUnknownMemberType,reportAttributeAccessIssue]
                 checkpoint_dir=probes_base,
                 hidden_dim=hidden_dim,
@@ -1200,57 +1327,58 @@ async def main(
                 device=_get_module_device(model),
             )
             probe_collection.eval()  # pyright: ignore[reportUnknownMemberType]
-    probe_collection = typing.cast("pyine.guardrails.probes.collection.ProbeCollection", probe_collection)
 
-    # tear down the DDP process group before the (potentially long) eval phase so that the NCCL
-    # watchdog on non-main ranks does not time out while rank 0 scores records sequentially
-    if torch.distributed.is_available() and torch.distributed.is_initialized():
-        torch.distributed.destroy_process_group()
-
-    # benchmarking phase (if enabled); runs only on main rank, no collectives needed
-    if config.evals_config is not None and pyine.utils.distrib.is_main_process():  # pyright: ignore[reportUnknownMemberType,reportAttributeAccessIssue]
+    # if multi-GPU probe scoring: each rank already has the frozen base model on its GPU from training
+    # (model is NOTDDP-wrapped; only probe_collection goes through accelerator.prepare)
+    if config.evals_config is not None:
         evals_config = typing.cast("correctness_configs.CorrectnessEvalsConfig", config.evals_config)
-        eval_dm = evals_config.prepare_eval_datamodule(None)
+        # rank 0 prepares eval datamodule first (future-proofs against download/caching in
+        # prepare_data() which, per Lightning convention, should run only on main process)
+        eval_dm = evals_config.prepare_eval_datamodule(None) if is_global_main else None
+        if is_distributed:
+            torch.distributed.barrier()  # type: ignore[reportUnknownMemberType]
+        if eval_dm is None:
+            eval_dm = evals_config.prepare_eval_datamodule(None)
         eval_dm_typed = typing.cast("correctness_datamodule.CorrectnessDataModule", eval_dm)
-        # collect target layers from all probes, create a fresh extractor for scoring
+        unique_records = _collect_unique_eval_records(eval_dm_typed, evals_config)
+        # sanity check: all ranks must agree on the record count
+        if is_distributed:
+            all_counts = pyine.utils.distrib.all_gather_objects(len(unique_records))
+            if any(count != len(unique_records) for count in all_counts):
+                raise RuntimeError(
+                    f"rank {rank} has {len(unique_records)} unique records, but other ranks "
+                    f"report {all_counts}; record collection is non-deterministic across ranks"
+                )
+        probes_dict = _build_probes_dict(probe_collection)
         target_layers = sorted(
             {probe_collection._probe_configs[name].layer for name in probe_collection.probes}  # pyright: ignore[reportPrivateUsage]
         )
         extractor = pyine.guardrails.probes.extraction.ActivationExtractor(  # pyright: ignore[reportUnknownVariableType,reportUnknownMemberType,reportAttributeAccessIssue]
             model, target_layers
         )
-        # collect all unique records across calibration + all eval subsets for precomputation;
-        # calibration records are deterministic (resample_records uses random.Random(config.seed)),
-        # and eval subset records come from fixed splits, so the same keys appear on every call
-        all_records: list[correctness_types.EvalRecord] = []
-        all_records.extend(
-            eval_dm_typed.get_records_for_calibration(
-                resampling_config=evals_config.calibration_resampling,
-            )
-        )
-        for eval_subset_name in eval_dm_typed.config.resolved_eval_subset_names:
-            all_records.extend(eval_dm_typed.get_records_for_subset(eval_subset_name))
-        # unpack probe collection into dict for precompute_probe_scores
-        probes_dict: dict[
-            str, tuple[pyine.guardrails.probes.base.BaseProbe, pyine.guardrails.probes.base.ProbeConfig]
-        ] = {}
-        for probe_name, probe_module in probe_collection.probes.items():
-            probe_cfg = probe_collection._probe_configs[probe_name]  # pyright: ignore[reportPrivateUsage]
-            probes_dict[probe_name] = (
-                typing.cast("pyine.guardrails.probes.base.BaseProbe", probe_module),
-                probe_cfg,
-            )
-        # pre-compute all probe scores with shared base model forward passes
-        precomputed_scorers = correctness_scorers.precompute_probe_scores(
-            records=all_records,
-            probes=probes_dict,
+        precomputed_scorers = _score_and_merge_shards(
+            unique_records=unique_records,
+            probes_dict=probes_dict,
             model=model,
             tokenizer=tokenizer,
             extractor=extractor,  # pyright: ignore[reportUnknownArgumentType]
-            max_seq_length=config.max_seq_length,
-            text_field=config.text_field,
+            config=config,
+            rank=rank,
+            world_size=world_size,
+            is_distributed=is_distributed,
         )
         extractor.remove_hooks()  # pyright: ignore[reportUnknownMemberType]
+        # destroy process group now that scoring is complete
+        if is_distributed:
+            torch.distributed.destroy_process_group()  # type: ignore[reportUnknownMemberType]
+        # non-main ranks exit after scoring; only rank 0 proceeds to evaluation and logging.
+        # finalize() is safe here: when wandb_init_on_all_ranks=False (default), non-main
+        # ranks have runtime.wandb_run=None so finalize() is a no-op; when True, it correctly
+        # closes the per-rank wandb run.
+        if not is_global_main:
+            if runtime is not None:
+                runtime.finalize()
+            return
         # group pre-computed scorers by type (base_name)
         scorers_by_type: dict[str, list[correctness_scorers.PrecomputedProbeScorer]] = {}
         for probe_name, scorer in precomputed_scorers.items():
@@ -1258,25 +1386,30 @@ async def main(
             base_name = probe_cfg.base_name or probe_cfg.name
             scorers_by_type.setdefault(base_name, []).append(scorer)
         for eval_subset_name in eval_dm_typed.config.resolved_eval_subset_names:
-            await correctness_impl.evaluate_guardrail_types(
+            correctness_impl.evaluate_guardrail_types(
                 config=evals_config,
                 guardrails_by_type=scorers_by_type,  # type: ignore[arg-type]
                 datamodule=eval_dm_typed,
                 eval_subset_name=eval_subset_name,
                 wandb_run=runtime.wandb_run if runtime else None,
+                eval_type_parallelism=evals_config.eval_type_parallelism,
             )
+    else:
+        # no evals configured; just tear down DDP
+        if is_distributed:
+            torch.distributed.destroy_process_group()  # type: ignore[reportUnknownMemberType]
 
     if runtime is not None:
         runtime.finalize()
 
 
-def async_probe_trainer_main_wrapper(
+def probe_trainer_main_wrapper(
     config: probe_trainer_configs.ProbeTrainerAppMainConfig,
     runtime: pyine.configs.schemas.RuntimeConfig | None = None,
     skip_training: bool = False,
 ) -> None:
-    """Synchronous wrapper around the async main."""
-    asyncio.run(main(config=config, runtime=runtime, skip_training=skip_training))
+    """Synchronous entrypoint for probe training (used by Hydra)."""
+    main(config=config, runtime=runtime, skip_training=skip_training)
 
 
 if __name__ == "__main__":
@@ -1285,5 +1418,5 @@ if __name__ == "__main__":
     pyine.apps.trainers.common.hydra_main(
         eval_type=pyine.evals.common.EvalType.CORRECTNESS,
         hydra_config_registration_fn=probe_trainer_configs.register_hydra_configs,
-        async_main_wrapper=async_probe_trainer_main_wrapper,
+        async_main_wrapper=probe_trainer_main_wrapper,  # TODO: rename parameter in common.py
     )

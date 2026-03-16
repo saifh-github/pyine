@@ -26,6 +26,58 @@ def failing_job() -> str:
     raise RuntimeError("boom")
 
 
+class TestRunInParallelRaiseOnError:
+    def test_single_error_is_raised_directly(self) -> None:
+        def ok_job() -> str:
+            return "ok"
+
+        def boom_job() -> str:
+            raise ValueError("single boom")
+
+        with pytest.raises(ValueError, match="single boom"):
+            pyine.utils.concurrency.run_in_parallel(
+                callables=[ok_job, boom_job],
+                use_processes=False,
+                raise_on_error=True,
+            )
+
+    def test_multiple_errors_raise_exception_group(self) -> None:
+        def boom1() -> str:
+            raise ValueError("boom1")
+
+        def boom2() -> str:
+            raise RuntimeError("boom2")
+
+        with pytest.raises(BaseExceptionGroup) as exc_info:
+            pyine.utils.concurrency.run_in_parallel(
+                callables=[boom1, boom2],
+                use_processes=False,
+                raise_on_error=True,
+            )
+        assert len(exc_info.value.exceptions) == 2
+
+    def test_all_succeed_no_error(self) -> None:
+        results, errors = pyine.utils.concurrency.run_in_parallel(
+            callables=[lambda: 1, lambda: 2],
+            use_processes=False,
+            raise_on_error=True,
+        )
+        assert results == [1, 2]
+        assert all(err is None for err in errors)
+
+    def test_raise_on_error_false_captures_silently(self) -> None:
+        def boom() -> str:
+            raise RuntimeError("silent boom")
+
+        results, errors = pyine.utils.concurrency.run_in_parallel(
+            callables=[boom],
+            use_processes=False,
+            raise_on_error=False,
+        )
+        assert results[0] is None
+        assert isinstance(errors[0], RuntimeError)
+
+
 @pytest.mark.slow
 def test_run_in_parallel() -> None:
     """Ensure parallel execution gathers all results and surfaces failures without crashing."""

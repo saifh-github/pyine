@@ -199,6 +199,30 @@ class PrecomputedProbeScorer:
         self._probe_config = probe_config
         self._tokenizer_metadata = tokenizer_metadata
 
+    @staticmethod
+    def merge(
+        scorers: typing.Sequence[PrecomputedProbeScorer],
+    ) -> PrecomputedProbeScorer:
+        """Merge multiple per-shard ``PrecomputedProbeScorer`` instances into one.
+
+        Used after multi-GPU scoring where each rank produces a scorer for its shard of records.
+
+        Args:
+            scorers: Non-empty sequence of scorers to merge. Keys must not overlap.
+
+        Returns:
+            A single ``PrecomputedProbeScorer`` covering all shards.
+        """
+        if not scorers:
+            raise ValueError("cannot merge empty scorer list")
+        merged: dict[correctness_types.AttemptKey, PrecomputedSample] = {}
+        for scorer in scorers:
+            overlap = merged.keys() & scorer._samples_by_key.keys()
+            if overlap:
+                raise ValueError(f"overlapping keys across shards: {len(overlap)} keys")
+            merged.update(scorer._samples_by_key)
+        return PrecomputedProbeScorer(merged, scorers[0]._probe_config, scorers[0]._tokenizer_metadata)
+
     def score_records(
         self,
         records: list[correctness_types.EvalRecord],

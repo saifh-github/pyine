@@ -346,7 +346,7 @@ scorers_by_type = {
     "mean_pool_L8": [scorer_replica_0, scorer_replica_1, ...],
     "cls_L12": [scorer_replica_0, scorer_replica_1, ...],
 }
-results = await evaluate_guardrail_types(
+results = evaluate_guardrail_types(
     config=evals_config,
     guardrails_by_type=scorers_by_type,
     datamodule=eval_dm,

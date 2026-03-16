@@ -212,6 +212,7 @@ config:
 
   # correctness benchmarking config
   evals_config:
+    eval_type_parallelism: 8
     result_dump_dir: ${runtime.output_dir}/benchmark_export
     datamodule_config:
       lmdb_paths: ${config.datamodule_config.lmdb_paths}
