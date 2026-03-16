@@ -201,7 +201,12 @@ stats: check-uv ## Shows a quick snapshot of git activity and tracked files
 		"    print(f'  {dirname:>15}: {count:>4} files')" \
 	| uv run python -
 
-lint: lint-precommit lint-ruff lint-pyright  ## Runs all available linters
+lint: ## Runs all available linters (continues past failures so all results are visible)
+	@exit_code=0; \
+	$(MAKE) lint-precommit || exit_code=1; \
+	$(MAKE) lint-ruff || exit_code=1; \
+	$(MAKE) lint-pyright || exit_code=1; \
+	exit $$exit_code
 
 lint-precommit: check-uv ## Runs linting using pre-commit hooks (if available)
 	@if [ -f .pre-commit-config.yaml ]; then \
