@@ -1331,17 +1331,19 @@ def main(
         tokenizer = train_result.tokenizer
         # all ranks reload best probes from checkpoint
         if config.evals_config is not None and config.save_best_probe_checkpoint and config.save_probes:
-            # only main process saves the summary, but all ranks load
-            probes_base = _get_probes_base_dir(runtime)
-            hidden_dim = typing.cast("int", model.config.hidden_size)  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue]
+            # rank 0 computes the real ckpt path and broadcasts it; non-main ranks have a tmp dir instead
+            probes_base_str: str | None = None
             if is_global_main:
+                probes_base_str = str(_get_probes_base_dir(runtime))
                 logger.info(
-                    f"reloading probes from {probes_base}; checkpoint_name={config.best_probe_checkpoint_name} "
-                    "for post-training evaluation"
+                    f"reloading probes from {probes_base_str}; "
+                    f"checkpoint_name={config.best_probe_checkpoint_name} for post-training evaluation"
                 )
-            # barrier to ensure rank 0 has finished writing checkpoints before others read
             if is_distributed:
-                torch.distributed.barrier()  # type: ignore[reportUnknownMemberType]
+                probes_base_str = pyine.utils.distrib.broadcast_object(probes_base_str)
+            assert probes_base_str is not None
+            probes_base = pathlib.Path(probes_base_str)
+            hidden_dim = typing.cast("int", model.config.hidden_size)  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue]
             probe_collection = pyine.guardrails.probes.collection.ProbeCollection.load_from_checkpoint(  # pyright: ignore[reportUnknownVariableType,reportUnknownMemberType,reportAttributeAccessIssue]
                 checkpoint_dir=probes_base,
                 hidden_dim=hidden_dim,
