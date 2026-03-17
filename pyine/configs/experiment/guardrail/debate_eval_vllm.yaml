@@ -17,18 +17,17 @@ config:
       provider: vllm
       model_kwargs:
         model: ${oc.env:PYINE_INTERROGATOR_MODEL_NAME}
-        temperature: 0.7
+        temperature: 1.0
         base_url: ${oc.env:VLLM_INTERROGATOR_BASE_URL,http://localhost:8001/v1}
     responder_provider:
       provider: vllm
       model_kwargs:
         model: ${oc.env:PYINE_RL_MODEL_NAME}
-        temperature: 0.0
+        temperature: 1.0
         base_url: ${oc.env:VLLM_BASE_URL,http://localhost:8000/v1}
+    debug_log_transcript_every_n: 1
 
   evals_config:
     datamodule_config:
       lmdb_paths:
-        - "./debug_db/"
-      split_config:
-        split_source: "./debug_db/debug_split.json"
+        - "./benchmark_export/"
