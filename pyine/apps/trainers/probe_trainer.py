@@ -798,6 +798,8 @@ class ProbeTrainResult(typing.NamedTuple):
     """The base model that was used for activation extraction during training."""
     tokenizer: transformers.PreTrainedTokenizerBase
     """The tokenizer associated with the base model."""
+    probes_base_dir: pathlib.Path | None
+    """Base directory where probe checkpoints were saved (rank 0 path), or None if not saved."""
 
 
 def probe_train(
@@ -1111,6 +1113,7 @@ def probe_train(
         )
 
     # --- 7. Save probes ---
+    probes_base: pathlib.Path | None = None
     if config.save_probes:
         probes_base = save_probe_checkpoints(
             probe_collection,
@@ -1134,6 +1137,10 @@ def probe_train(
                     f"saved best probe checkpoints ({config.best_probe_checkpoint_name}) to {probes_base}; "
                     f"summary={summary_path}; criterion={config.best_probe_metric}"
                 )
+    # broadcast the probes_base path from rank 0 to all ranks while the process group is
+    # still alive (accelerator owns it; once we return, it may get destroyed by GC)
+    probes_base_str = pyine.utils.distrib.broadcast_object(str(probes_base) if probes_base is not None else None)
+    probes_base = pathlib.Path(probes_base_str) if probes_base_str is not None else None
 
     # --- 8. Cleanup ---
     extractor.remove_hooks()
@@ -1147,6 +1154,7 @@ def probe_train(
         probe_collection=unwrapped_collection,
         model=model,
         tokenizer=tokenizer,
+        probes_base_dir=probes_base,
     )
 
 
@@ -1330,22 +1338,20 @@ def main(
         model = train_result.model
         tokenizer = train_result.tokenizer
         # all ranks reload best probes from checkpoint
-        if config.evals_config is not None and config.save_best_probe_checkpoint and config.save_probes:
-            # rank 0 computes the real ckpt path and broadcasts it; non-main ranks have a tmp dir instead
-            probes_base_str: str | None = None
+        if (
+            config.evals_config is not None
+            and config.save_best_probe_checkpoint
+            and config.save_probes
+            and train_result.probes_base_dir is not None
+        ):
             if is_global_main:
-                probes_base_str = str(_get_probes_base_dir(runtime))
                 logger.info(
-                    f"reloading probes from {probes_base_str}; "
+                    f"reloading probes from {train_result.probes_base_dir}; "
                     f"checkpoint_name={config.best_probe_checkpoint_name} for post-training evaluation"
                 )
-            if is_distributed:
-                probes_base_str = pyine.utils.distrib.broadcast_object(probes_base_str)
-            assert probes_base_str is not None
-            probes_base = pathlib.Path(probes_base_str)
             hidden_dim = typing.cast("int", model.config.hidden_size)  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue]
             probe_collection = pyine.guardrails.probes.collection.ProbeCollection.load_from_checkpoint(  # pyright: ignore[reportUnknownVariableType,reportUnknownMemberType,reportAttributeAccessIssue]
-                checkpoint_dir=probes_base,
+                checkpoint_dir=train_result.probes_base_dir,
                 hidden_dim=hidden_dim,
                 checkpoint_name=config.best_probe_checkpoint_name,
             )
