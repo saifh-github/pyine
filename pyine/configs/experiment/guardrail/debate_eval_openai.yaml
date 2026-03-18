@@ -23,12 +23,10 @@ config:
       provider: vllm
       model_kwargs:
         model: ${oc.env:PYINE_RL_MODEL_NAME}
-        temperature: 0.0
+        temperature: 1.0
         base_url: ${oc.env:VLLM_BASE_URL,http://localhost:8000/v1}
 
   evals_config:
     datamodule_config:
       lmdb_paths:
-        - "./debug_db/"
-      split_config:
-        split_source: "./debug_db/debug_split.json"
+        - "./benchmark_export/"
