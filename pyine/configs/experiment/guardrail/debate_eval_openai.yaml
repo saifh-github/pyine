@@ -16,7 +16,7 @@ config:
       provider: openai
       model_kwargs:
         model: gpt-5-mini
-        reasoning_effort: none
+        reasoning_effort: minimal
       rate_limiter_config:
         requests_per_second: 30
         max_bucket_size: 30
