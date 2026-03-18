@@ -25,6 +25,7 @@ config:
         model: ${oc.env:PYINE_RL_MODEL_NAME}
         temperature: 1.0
         base_url: ${oc.env:VLLM_BASE_URL,http://localhost:8000/v1}
+    debug_log_transcript_every_n: 1
 
   evals_config:
     datamodule_config:
