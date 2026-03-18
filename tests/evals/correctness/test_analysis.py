@@ -5,10 +5,12 @@ from __future__ import annotations
 import typing
 
 import numpy as np
+import pandas as pd
 import pytest
 
 import pyine.evals.correctness
 import pyine.evals.correctness.analysis
+import pyine.evals.correctness.types
 import pyine.evals.correctness.types as correctness_types
 
 
@@ -48,7 +50,7 @@ _SUBSET = "guardrail_test"
 
 
 def _make_single_type_summary(prefix: str = f"benchmark/{_SUBSET}/") -> dict[str, typing.Any]:
-    """Build a W&B summary dict for a single-type correctness eval."""
+    """Build a W&B summary dict with compact keys for a single-type correctness eval."""
     return {
         f"{prefix}auroc/mean": 0.92,
         f"{prefix}auroc/bootstrap_ci_lower": 0.88,
@@ -59,21 +61,13 @@ def _make_single_type_summary(prefix: str = f"benchmark/{_SUBSET}/") -> dict[str
         f"{prefix}record_count": 500,
         f"{prefix}class_balance/overall_positive_rate": 0.6,
         f"{prefix}fpr_0_01/tpr/mean": 0.72,
-        f"{prefix}fpr_0_01/fpr/mean": 0.009,
         f"{prefix}fpr_0_01/guarded_pass_rate/mean": 0.88,
         f"{prefix}fpr_0_01/unsafe_slip_rate/mean": 0.05,
-        f"{prefix}category/regular/auroc/mean": 0.94,
-        f"{prefix}category/regular/record_count": 400,
-        f"{prefix}category/regular/sample_count": 80,
-        f"{prefix}category/regular/fpr_0_01/tpr/mean": 0.75,
-        f"{prefix}category/hinted/auroc/mean": 0.85,
-        f"{prefix}category/hinted/record_count": 100,
-        f"{prefix}category/hinted/sample_count": 20,
     }
 
 
 def _make_multi_type_summary() -> dict[str, typing.Any]:
-    """Build a W&B summary dict for a multi-type correctness eval."""
+    """Build a W&B summary dict with compact keys for a multi-type correctness eval."""
     base: dict[str, typing.Any] = {
         f"benchmark/{_SUBSET}/_guardrail_type_names": ["type_a", "type_b"],
     }
@@ -91,6 +85,200 @@ def _make_multi_type_summary() -> dict[str, typing.Any]:
             }
         )
     return base
+
+
+def _make_single_type_detailed_df(prefix: str = f"benchmark/{_SUBSET}/") -> pd.DataFrame:
+    """Build a DataFrame matching the detailed_metrics table schema."""
+    rows = [
+        {
+            "metric_name": "auroc",
+            "mean": 0.92,
+            "std": 0.01,
+            "p5": 0.90,
+            "num_valid_runs": 3,
+            "bootstrap_ci_point": 0.92,
+            "bootstrap_ci_lower": 0.88,
+            "bootstrap_ci_upper": 0.95,
+        },
+        {
+            "metric_name": "average_precision",
+            "mean": 0.87,
+            "std": 0.02,
+            "p5": 0.84,
+            "num_valid_runs": 3,
+            "bootstrap_ci_point": 0.87,
+            "bootstrap_ci_lower": None,
+            "bootstrap_ci_upper": None,
+        },
+        {
+            "metric_name": "tpr_at_fpr_0_01",
+            "mean": 0.72,
+            "std": 0.03,
+            "p5": 0.68,
+            "num_valid_runs": 3,
+            "bootstrap_ci_point": None,
+            "bootstrap_ci_lower": None,
+            "bootstrap_ci_upper": None,
+        },
+        {
+            "metric_name": "fpr_0_01/tpr",
+            "mean": 0.72,
+            "std": 0.02,
+            "p5": 0.69,
+            "num_valid_runs": 3,
+            "bootstrap_ci_point": None,
+            "bootstrap_ci_lower": None,
+            "bootstrap_ci_upper": None,
+        },
+        {
+            "metric_name": "fpr_0_01/fpr",
+            "mean": 0.009,
+            "std": 0.001,
+            "p5": 0.008,
+            "num_valid_runs": 3,
+            "bootstrap_ci_point": None,
+            "bootstrap_ci_lower": None,
+            "bootstrap_ci_upper": None,
+        },
+        {
+            "metric_name": "fpr_0_01/guarded_pass_rate",
+            "mean": 0.88,
+            "std": 0.02,
+            "p5": 0.85,
+            "num_valid_runs": 3,
+            "bootstrap_ci_point": None,
+            "bootstrap_ci_lower": None,
+            "bootstrap_ci_upper": None,
+        },
+        {
+            "metric_name": "fpr_0_01/unsafe_slip_rate",
+            "mean": 0.05,
+            "std": 0.01,
+            "p5": 0.04,
+            "num_valid_runs": 3,
+            "bootstrap_ci_point": None,
+            "bootstrap_ci_lower": None,
+            "bootstrap_ci_upper": None,
+        },
+    ]
+    return pd.DataFrame(rows)
+
+
+def _make_single_type_category_df(prefix: str = f"benchmark/{_SUBSET}/") -> pd.DataFrame:
+    """Build a DataFrame matching the category_metrics table schema."""
+    rows = [
+        {
+            "category": "regular",
+            "metric_name": "auroc",
+            "mean": 0.94,
+            "std": 0.01,
+            "p5": 0.92,
+            "num_valid_runs": 3,
+            "bootstrap_ci_point": None,
+            "bootstrap_ci_lower": None,
+            "bootstrap_ci_upper": None,
+            "record_count": 400,
+            "sample_count": 80,
+        },
+        {
+            "category": "regular",
+            "metric_name": "fpr_0_01/tpr",
+            "mean": 0.75,
+            "std": 0.02,
+            "p5": 0.72,
+            "num_valid_runs": 3,
+            "bootstrap_ci_point": None,
+            "bootstrap_ci_lower": None,
+            "bootstrap_ci_upper": None,
+            "record_count": 400,
+            "sample_count": 80,
+        },
+        {
+            "category": "hinted",
+            "metric_name": "auroc",
+            "mean": 0.85,
+            "std": 0.03,
+            "p5": 0.81,
+            "num_valid_runs": 3,
+            "bootstrap_ci_point": None,
+            "bootstrap_ci_lower": None,
+            "bootstrap_ci_upper": None,
+            "record_count": 100,
+            "sample_count": 20,
+        },
+    ]
+    return pd.DataFrame(rows)
+
+
+def _make_multi_type_detailed_df() -> pd.DataFrame:
+    """Build a detailed_metrics DataFrame for multi-type runs."""
+    rows = [
+        {
+            "metric_name": "auroc",
+            "mean": 0.90,
+            "std": 0.01,
+            "p5": 0.88,
+            "num_valid_runs": 3,
+            "bootstrap_ci_point": None,
+            "bootstrap_ci_lower": None,
+            "bootstrap_ci_upper": None,
+        },
+        {
+            "metric_name": "average_precision",
+            "mean": 0.82,
+            "std": 0.02,
+            "p5": 0.80,
+            "num_valid_runs": 3,
+            "bootstrap_ci_point": None,
+            "bootstrap_ci_lower": None,
+            "bootstrap_ci_upper": None,
+        },
+        {
+            "metric_name": "fpr_0_01/tpr",
+            "mean": 0.70,
+            "std": 0.02,
+            "p5": 0.68,
+            "num_valid_runs": 3,
+            "bootstrap_ci_point": None,
+            "bootstrap_ci_lower": None,
+            "bootstrap_ci_upper": None,
+        },
+        {
+            "metric_name": "fpr_0_01/guarded_pass_rate",
+            "mean": 0.80,
+            "std": 0.02,
+            "p5": 0.78,
+            "num_valid_runs": 3,
+            "bootstrap_ci_point": None,
+            "bootstrap_ci_lower": None,
+            "bootstrap_ci_upper": None,
+        },
+    ]
+    return pd.DataFrame(rows)
+
+
+def _mock_fetch_table_for_single_type(
+    run: typing.Any,
+    table_key: str,
+) -> pd.DataFrame | None:
+    """Mock fetch_table that returns appropriate DataFrames for single-type runs."""
+    if "detailed_metrics" in table_key:
+        return _make_single_type_detailed_df()
+    if "category_metrics" in table_key:
+        return _make_single_type_category_df()
+    return None
+
+
+def _mock_fetch_table_for_multi_type(
+    run: typing.Any,
+    table_key: str,
+) -> pd.DataFrame | None:
+    """Mock fetch_table that returns appropriate DataFrames for multi-type runs."""
+    if "detailed_metrics" in table_key:
+        return _make_multi_type_detailed_df()
+    if "category_metrics" in table_key:
+        return pd.DataFrame(columns=list(pyine.evals.correctness.types.CATEGORY_METRICS_COLUMNS))
+    return None
 
 
 # ---- Type Detection Tests ----
@@ -203,6 +391,13 @@ class TestResolveTypeAndPrefix:
 
 
 class TestExtractCorrectnessMetrics:
+    @pytest.fixture(autouse=True)
+    def _patch_fetch_table(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            "pyine.utils.wandb_utils.fetch_table",
+            _mock_fetch_table_for_single_type,
+        )
+
     def test_extracts_single_type_metrics(self) -> None:
         run = _MockRun(summary=_make_single_type_summary())
         metrics = pyine.evals.correctness.analysis.extract_correctness_metrics(run, _SUBSET)  # type: ignore[arg-type]
@@ -229,7 +424,11 @@ class TestExtractCorrectnessMetrics:
         assert 0.01 in metrics.sample_metrics
         assert metrics.sample_metrics[0.01]["guarded_pass_rate"].value == pytest.approx(0.88)
 
-    def test_extracts_multi_type_with_type_name(self) -> None:
+    def test_extracts_multi_type_with_type_name(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            "pyine.utils.wandb_utils.fetch_table",
+            _mock_fetch_table_for_multi_type,
+        )
         run = _MockRun(summary=_make_multi_type_summary())
         metrics = pyine.evals.correctness.analysis.extract_correctness_metrics(
             run,
@@ -269,6 +468,13 @@ class TestExtractCorrectnessMetrics:
 
 
 class TestResolveMetricValidation:
+    @pytest.fixture(autouse=True)
+    def _patch_fetch_table(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            "pyine.utils.wandb_utils.fetch_table",
+            _mock_fetch_table_for_single_type,
+        )
+
     def test_unknown_metric_raises(self) -> None:
         run = _MockRun(summary=_make_single_type_summary())
         metrics = pyine.evals.correctness.analysis.extract_correctness_metrics(run, _SUBSET)  # type: ignore[arg-type]
@@ -292,6 +498,13 @@ class TestResolveMetricValidation:
 
 
 class TestExtractCorrectnessCategoryMetrics:
+    @pytest.fixture(autouse=True)
+    def _patch_fetch_table(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            "pyine.utils.wandb_utils.fetch_table",
+            _mock_fetch_table_for_single_type,
+        )
+
     def test_extracts_categories(self) -> None:
         run = _MockRun(summary=_make_single_type_summary())
         categories = pyine.evals.correctness.analysis.extract_correctness_category_metrics(run, _SUBSET)  # type: ignore[arg-type]
@@ -308,23 +521,38 @@ class TestExtractCorrectnessCategoryMetrics:
         assert regular.record_count == 400
         assert regular.sample_count == 80
 
-    def test_empty_summary_returns_empty_list(self) -> None:
-        run = _MockRun(summary={})
-        categories = pyine.evals.correctness.analysis.extract_correctness_category_metrics(run, _SUBSET)  # type: ignore[arg-type]
-        assert categories == []
+    def test_missing_table_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            "pyine.utils.wandb_utils.fetch_table",
+            lambda _run, _key: None,
+        )
+        run = _MockRun(summary=_make_single_type_summary())
+        with pytest.raises(ValueError, match="category_metrics table not found"):
+            pyine.evals.correctness.analysis.extract_correctness_category_metrics(run, _SUBSET)  # type: ignore[arg-type]
 
 
 # ---- Fetch Summary Tests ----
 
 
 class TestFetchCorrectnessEvalSummary:
+    @pytest.fixture(autouse=True)
+    def _patch_fetch_table(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            "pyine.utils.wandb_utils.fetch_table",
+            _mock_fetch_table_for_single_type,
+        )
+
     def test_fetches_combined_summary(self) -> None:
         run = _MockRun(summary=_make_single_type_summary())
         summary = pyine.evals.correctness.analysis.fetch_correctness_eval_summary(run, _SUBSET)  # type: ignore[arg-type]
         assert summary.run_info.auroc.value == pytest.approx(0.92)
         assert len(summary.category_metrics) == 2
 
-    def test_multi_type_with_explicit_type(self) -> None:
+    def test_multi_type_with_explicit_type(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            "pyine.utils.wandb_utils.fetch_table",
+            _mock_fetch_table_for_multi_type,
+        )
         run = _MockRun(summary=_make_multi_type_summary())
         summary = pyine.evals.correctness.analysis.fetch_correctness_eval_summary(
             run,
@@ -334,8 +562,11 @@ class TestFetchCorrectnessEvalSummary:
         assert summary.run_info.auroc.value == pytest.approx(0.85)
         assert summary.run_info.guardrail_type_name == "type_b"
 
-    def test_extract_metrics_contract_with_aggregated_flat_dict(self) -> None:
-        """Parser stays compatible with AggregatedResult.to_flat_dict output keys."""
+    def test_extract_metrics_contract_with_aggregated_flat_dict(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Parser stays compatible with AggregatedResult table-based output."""
         import numpy as np
 
         import pyine.evals.correctness.types as correctness_types
@@ -352,8 +583,34 @@ class TestFetchCorrectnessEvalSummary:
                 precision_grid=empty_grid,
                 recall_grid=empty_grid,
             ),
-            attempt_metrics={},
-            sample_metrics={},
+            attempt_metrics={
+                0.01: correctness_types.ThresholdedMetrics(
+                    target_fpr=0.01,
+                    threshold=0.5,
+                    tp=40,
+                    fp=2,
+                    tn=198,
+                    fn=10,
+                    tpr=0.8,
+                    fpr=0.01,
+                    fnr=0.2,
+                    precision=40 / 42,
+                    npv=198 / 208,
+                )
+            },
+            sample_metrics={
+                0.01: correctness_types.SampleLevelMetrics(
+                    target_fpr=0.01,
+                    base_pass_rate=0.9,
+                    guarded_pass_rate=0.84,
+                    unsafe_slip_rate=0.05,
+                    total_block_rate=0.02,
+                    best_of_k_success_rate=0.95,
+                    cons_pass_rate=0.7,
+                    cons_unsafe_slip_rate=0.03,
+                    cons_justified_reject_rate=0.8,
+                )
+            },
             category_results={},
             bootstrap_cis={},
             difficulty_stats=None,
@@ -385,7 +642,17 @@ class TestFetchCorrectnessEvalSummary:
             difficulty_stats=None,
             verification_cost_stats=None,
         )
-        prefixed_summary = {f"benchmark/{_SUBSET}/{key}": value for key, value in aggregated.to_flat_dict().items()}
+        # build compact summary
+        compact = aggregated.to_compact_summary_dict()
+        prefixed_summary = {f"benchmark/{_SUBSET}/{key}": value for key, value in compact.items()}
+        prefixed_summary[f"benchmark/{_SUBSET}/sample_count"] = len(class_balance.per_sample_positive_rates)
+        prefixed_summary[f"benchmark/{_SUBSET}/record_count"] = 10
+        # build detailed metrics table
+        detailed_df = pd.DataFrame(aggregated.to_detailed_metrics_table())
+        monkeypatch.setattr(
+            "pyine.utils.wandb_utils.fetch_table",
+            lambda _run, _key: detailed_df,
+        )
         run = _MockRun(summary=prefixed_summary)
         metrics = pyine.evals.correctness.analysis.extract_correctness_metrics(run, _SUBSET)  # type: ignore[arg-type]
         assert metrics.auroc.value == pytest.approx(0.91)
@@ -395,6 +662,13 @@ class TestFetchCorrectnessEvalSummary:
 
 
 class TestPlotValidation:
+    @pytest.fixture(autouse=True)
+    def _patch_fetch_table(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            "pyine.utils.wandb_utils.fetch_table",
+            _mock_fetch_table_for_single_type,
+        )
+
     def test_plot_category_breakdown_rejects_unsupported_threshold_free_metric(self) -> None:
         run = _MockRun(summary=_make_single_type_summary())
         summary = pyine.evals.correctness.analysis.fetch_correctness_eval_summary(run, _SUBSET)  # type: ignore[arg-type]
@@ -416,6 +690,13 @@ class TestPlotValidation:
 
 
 class TestSummarizeCorrectnessRunsToDataframe:
+    @pytest.fixture(autouse=True)
+    def _patch_fetch_table(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            "pyine.utils.wandb_utils.fetch_table",
+            _mock_fetch_table_for_single_type,
+        )
+
     def test_creates_dataframe_from_summaries(self) -> None:
         run = _MockRun(summary=_make_single_type_summary())
         summary = pyine.evals.correctness.analysis.fetch_correctness_eval_summary(run, _SUBSET)  # type: ignore[arg-type]
@@ -809,27 +1090,3 @@ class TestParseFprCapture:
 
     def test_scientific_with_underscore(self) -> None:
         assert pyine.evals.correctness.analysis._parse_fpr_capture("0_00001e+00") == pytest.approx(0.00001)
-
-
-# ---- Detect FPR Keys Tests ----
-
-
-class TestDetectFprKeys:
-    def test_detects_decimal_fpr_keys(self) -> None:
-        summary = _MockSummary(
-            {
-                "prefix/fpr_0_01/tpr/mean": 0.7,
-                "prefix/fpr_0_05/tpr/mean": 0.8,
-            }
-        )
-        result = pyine.evals.correctness.analysis._detect_fpr_keys(summary, "prefix/")
-        assert result == [pytest.approx(0.01), pytest.approx(0.05)]
-
-    def test_detects_scientific_fpr_keys(self) -> None:
-        summary = _MockSummary({"prefix/fpr_1e-05/tpr/mean": 0.6})
-        result = pyine.evals.correctness.analysis._detect_fpr_keys(summary, "prefix/")
-        assert result == [pytest.approx(1e-05)]
-
-    def test_empty_summary(self) -> None:
-        result = pyine.evals.correctness.analysis._detect_fpr_keys(_MockSummary(), "prefix/")
-        assert result == []

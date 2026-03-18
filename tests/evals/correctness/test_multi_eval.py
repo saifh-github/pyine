@@ -142,6 +142,7 @@ class TestEvaluateGuardrailTypes:
         )
         # check that metrics were logged with the type name prefix
         assert any(key.startswith("benchmark/guardrail_valid/my_type/") for key in mock_wandb_run.summary)
+        assert mock_wandb_run.log.called, "wandb_run.log should be called for table logging"
 
 
 class TestEvaluateGuardrailTypesValidation:

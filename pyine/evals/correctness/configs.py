@@ -18,16 +18,6 @@ import pyine.evals.correctness.datamodule_configs as correctness_datamodule_conf
 import pyine.evals.correctness.metrics as correctness_metrics
 import pyine.evals.correctness.types as correctness_types
 import pyine.evals.persistence
-import pyine.evals.utils
-
-_HIDDEN_STAT_SUFFIXES: tuple[str, ...] = (
-    "std",
-    "p5",
-    "num_valid_runs",
-    "bootstrap_ci_point",
-    "bootstrap_ci_lower",
-    "bootstrap_ci_upper",
-)
 
 
 class RecordCategoryConfig(pydantic.BaseModel):
@@ -216,36 +206,27 @@ class CorrectnessEvalsConfig(pyine.evals.common.BaseEvalsConfig):
         wandb_run: wandb.Run,
         eval_subset_names: typing.Sequence[str],
     ) -> None:
-        """Registers correctness metric definitions with a W&B run.
+        """Registers compact correctness metric definitions with a W&B run.
 
-        Defines metric summary strategies so W&B can track key metrics. Uses the flat dict key
-        namespace from ``AggregatedResult.to_flat_dict()``. Should be called once before logging
-        any metrics.
-
-        Key metrics (AUROC, guarded_pass_rate, TPR, etc.) get ``summary="max"`` so their best
-        values surface in the W&B run table. Safety metrics (unsafe_slip_rate) get ``"min"``.
-        Descriptive metrics (class balance, counts, variability stats, CIs) are hidden to avoid
-        flooding the dashboard; a glob catch-all ensures they are still logged.
+        Registers only the dashboard-relevant summary keys that ``_log_correctness_metrics_to_wandb``
+        writes. Category metrics and full detail are stored in wandb Tables, not in summary, so they
+        need no registrations.
 
         Args:
             wandb_run: The W&B run object where metric definitions should be registered.
-            eval_subset_names: A sequence of subset names that will be evaluated (for metric name
-                prefixing, if needed).
+            eval_subset_names: A sequence of subset names that will be evaluated.
         """
         step_metric = "train/global_step"
         for eval_subset_name in eval_subset_names:
             prefix = f"benchmark/{eval_subset_name}"
-            # catch-all for category-wise and any other data-dependent metrics; more-specific
-            # definitions below take precedence over this glob in wandb
-            wandb_run.define_metric(name=f"{prefix}/*", step_metric=step_metric)
-            # -- primary ranking metrics (higher is better) --
+            # primary ranking metrics (higher is better)
             for metric_name in ["auroc", "average_precision"]:
                 wandb_run.define_metric(
                     name=f"{prefix}/{metric_name}/mean",
                     step_metric=step_metric,
                     summary="max",
                 )
-            # -- TPR@FPR metrics (higher is better) --
+            # TPR@FPR (higher is better)
             for target_fpr in self.target_fpr_values:
                 fpr_key = correctness_metrics.format_fpr_key(target_fpr)
                 wandb_run.define_metric(
@@ -253,129 +234,25 @@ class CorrectnessEvalsConfig(pyine.evals.common.BaseEvalsConfig):
                     step_metric=step_metric,
                     summary="max",
                 )
-            # -- per-FPR operating-point metrics --
+            # per-FPR operating-point metrics (from shared manifest)
             for target_fpr in self.target_fpr_values:
                 fpr_key = correctness_metrics.format_fpr_key(target_fpr)
-                # key attempt-level metrics
-                wandb_run.define_metric(
-                    name=f"{prefix}/{fpr_key}/tpr/mean",
-                    step_metric=step_metric,
-                    summary="max",
-                )
-                # key sample-level metrics
-                wandb_run.define_metric(
-                    name=f"{prefix}/{fpr_key}/guarded_pass_rate/mean",
-                    step_metric=step_metric,
-                    summary="max",
-                )
-                wandb_run.define_metric(
-                    name=f"{prefix}/{fpr_key}/unsafe_slip_rate/mean",
-                    step_metric=step_metric,
-                    summary="min",  # lower is better for safety
-                )
-                wandb_run.define_metric(
-                    name=f"{prefix}/{fpr_key}/best_of_k_success_rate/mean",
-                    step_metric=step_metric,
-                    summary="max",
-                )
-                # conservative sample-level metrics (visible, higher is better for pass/justify)
-                wandb_run.define_metric(
-                    name=f"{prefix}/{fpr_key}/cons_pass_rate/mean",
-                    step_metric=step_metric,
-                    summary="max",
-                )
-                wandb_run.define_metric(
-                    name=f"{prefix}/{fpr_key}/cons_unsafe_slip_rate/mean",
-                    step_metric=step_metric,
-                    summary="min",  # lower is better for safety
-                )
-                wandb_run.define_metric(
-                    name=f"{prefix}/{fpr_key}/cons_justified_reject_rate/mean",
-                    step_metric=step_metric,
-                    summary="max",
-                )
-                # secondary attempt-level and sample-level metrics (hidden)
-                secondary_metrics = [
-                    f"{fpr_key}/fpr/mean",
-                    f"{fpr_key}/fnr/mean",
-                    f"{fpr_key}/precision/mean",
-                    f"{fpr_key}/npv/mean",
-                    f"{fpr_key}/base_pass_rate/mean",
-                    f"{fpr_key}/total_block_rate/mean",
-                ]
-                for secondary_name in secondary_metrics:
+                for metric_suffix, goal in correctness_types.COMPACT_SUMMARY_PER_FPR_METRICS:
                     wandb_run.define_metric(
-                        name=f"{prefix}/{secondary_name}",
+                        name=f"{prefix}/{fpr_key}/{metric_suffix}/mean",
+                        step_metric=step_metric,
+                        summary=goal,
+                    )
+            # bootstrap CIs for global metrics (hidden)
+            for base_name in ["auroc", "average_precision"]:
+                for ci_suffix in ("bootstrap_ci_point", "bootstrap_ci_lower", "bootstrap_ci_upper"):
+                    wandb_run.define_metric(
+                        name=f"{prefix}/{base_name}/{ci_suffix}",
                         step_metric=step_metric,
                         hidden=True,
                         summary="none",
                     )
-                # cost metrics (lower is better for totals/means; correlations are descriptive)
-                cost_metrics_min = [
-                    "cost_total",
-                    "cost_mean",
-                    "cost_median",
-                    "cost_std",
-                    "cost_per_correct_acceptance",
-                    "cost_per_incorrect_block",
-                ]
-                for cost_name in cost_metrics_min:
-                    wandb_run.define_metric(
-                        name=f"{prefix}/{fpr_key}/{cost_name}/mean",
-                        step_metric=step_metric,
-                        summary="min",
-                    )
-                cost_metrics_last = [
-                    "cost_accuracy_rank_correlation",
-                    "cost_difficulty_rank_correlation",
-                ]
-                for cost_name in cost_metrics_last:
-                    wandb_run.define_metric(
-                        name=f"{prefix}/{fpr_key}/{cost_name}/mean",
-                        step_metric=step_metric,
-                        summary="last",
-                    )
-            # -- variability, CI, and descriptive metrics (hidden) --
-            # enumerate concrete base metric names; wandb only supports glob as a suffix,
-            # not mid-string (e.g. "prefix/*/std" is rejected)
-            hidden_base_metrics = ["auroc", "average_precision"]
-            for target_fpr in self.target_fpr_values:
-                fpr_key = correctness_metrics.format_fpr_key(target_fpr)
-                hidden_base_metrics.append(f"tpr_at_{fpr_key}")
-                hidden_base_metrics.extend(
-                    [
-                        f"{fpr_key}/tpr",
-                        f"{fpr_key}/fpr",
-                        f"{fpr_key}/fnr",
-                        f"{fpr_key}/precision",
-                        f"{fpr_key}/npv",
-                        f"{fpr_key}/base_pass_rate",
-                        f"{fpr_key}/total_block_rate",
-                        f"{fpr_key}/guarded_pass_rate",
-                        f"{fpr_key}/unsafe_slip_rate",
-                        f"{fpr_key}/best_of_k_success_rate",
-                        f"{fpr_key}/cons_pass_rate",
-                        f"{fpr_key}/cons_unsafe_slip_rate",
-                        f"{fpr_key}/cons_justified_reject_rate",
-                        f"{fpr_key}/cost_total",
-                        f"{fpr_key}/cost_mean",
-                        f"{fpr_key}/cost_median",
-                        f"{fpr_key}/cost_std",
-                        f"{fpr_key}/cost_per_correct_acceptance",
-                        f"{fpr_key}/cost_per_incorrect_block",
-                        f"{fpr_key}/cost_accuracy_rank_correlation",
-                        f"{fpr_key}/cost_difficulty_rank_correlation",
-                    ]
-                )
-            for base_name in hidden_base_metrics:
-                for suffix in _HIDDEN_STAT_SUFFIXES:
-                    wandb_run.define_metric(
-                        name=f"{prefix}/{base_name}/{suffix}",
-                        step_metric=step_metric,
-                        hidden=True,
-                        summary="none",
-                    )
-            # class balance and counts
+            # class balance and counts (hidden)
             for hidden_name in ["class_balance/*", "record_count", "sample_count"]:
                 wandb_run.define_metric(
                     name=f"{prefix}/{hidden_name}",
@@ -392,14 +269,11 @@ class CorrectnessEvalsConfig(pyine.evals.common.BaseEvalsConfig):
         *,
         step: int | None = None,
     ) -> wandb.Table | None:
-        """Log aggregated correctness metrics to a W&B table.
+        """Log aggregated correctness metrics to W&B as compact summary + tables.
 
-        Builds a single cross-subset comparison table (one row per subset) and logs it under
-        the ``benchmark/metrics_table`` key. Also writes individual metrics to the run summary
-        under ``benchmark/{subset_name}/{metric_name}`` keys.
-
-        For per-sample metrics, use `log_sample_metrics`. For qualitative inspection of
-        individual predictions, use `log_predictions`.
+        Writes compact summary keys and wandb Tables (detailed_metrics, category_metrics) per subset
+        via ``_log_correctness_metrics_to_wandb``. Also builds a cross-subset comparison table under
+        ``benchmark/metrics_table`` from compact keys only.
 
         Args:
             wandb_run: Run object where the table should be logged.
@@ -407,38 +281,34 @@ class CorrectnessEvalsConfig(pyine.evals.common.BaseEvalsConfig):
             step: Optional W&B step override.
 
         Returns:
-            The table that was logged (if any).
+            The cross-subset comparison table that was logged (if any).
 
-        See Also:
-            log_sample_metrics: For per-sample metrics.
-            log_predictions: For qualitative inspection of predictions.
+        Raises:
+            TypeError: If any subset result is not a CorrectnessEvalResult.
         """
-        metrics_by_subset: dict[str, pyine.evals.utils.MetricsDictType] = {}
+        compact_by_subset: dict[str, dict[str, float | int | str]] = {}
         seen_metric_names: set[str] = set()
         for subset_name, subset_result in results_by_subset.items():
-            metrics_by_subset[subset_name] = subset_result.metrics
-            seen_metric_names.update(subset_result.metrics.keys())
+            if not isinstance(subset_result, correctness_impl.CorrectnessEvalResult):
+                raise TypeError(f"expected CorrectnessEvalResult, got {type(subset_result).__name__}")
+            summary_prefix = f"benchmark/{subset_name}"
+            correctness_impl._log_correctness_metrics_to_wandb(  # type: ignore[reportPrivateUsage]
+                wandb_run=wandb_run,
+                aggregated=subset_result.aggregated,
+                key_prefix=summary_prefix,
+                eval_subset_name=subset_name,
+                step=step,
+            )
+            compact = subset_result.aggregated.to_compact_summary_dict()
+            compact_by_subset[subset_name] = compact
+            seen_metric_names.update(compact.keys())
         ordered_metric_names = sorted(seen_metric_names)
         table = wandb.Table(columns=["subset", *ordered_metric_names])
-        for subset_name, subset_metrics in metrics_by_subset.items():
+        for subset_name, subset_metrics in compact_by_subset.items():
             row: list[typing.Any] = [subset_name]
             for metric_name in ordered_metric_names:
                 row.append(subset_metrics.get(metric_name))
-            table.add_data(*row)  # pyright: ignore[reportUnknownMemberType] - wandb Table.add_data has incomplete stubs
-            summary_prefix = f"benchmark/{subset_name}"
-            for metric_name in subset_metrics:
-                # category metric names are data-dependent, so hide their variability/CI stats
-                # here once concrete keys are available from the eval result.
-                metric_suffix = metric_name.rsplit("/", maxsplit=1)[-1]
-                if metric_name.startswith("category/") and metric_suffix in _HIDDEN_STAT_SUFFIXES:
-                    wandb_run.define_metric(
-                        name=f"{summary_prefix}/{metric_name}",
-                        step_metric="train/global_step",
-                        hidden=True,
-                        summary="none",
-                    )
-            for metric_name, metric_val in subset_metrics.items():
-                wandb_run.summary[f"{summary_prefix}/{metric_name}"] = metric_val
+            table.add_data(*row)  # pyright: ignore[reportUnknownMemberType]
         table_key = "benchmark/metrics_table"
         if step is None:
             wandb_run.log({table_key: table})

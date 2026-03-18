@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pathlib
-import types
 import unittest.mock
 
 import pydantic
@@ -147,41 +146,111 @@ class TestCorrectnessEvalsConfig:
         with pytest.raises(ValueError, match="should not provide one"):
             config.prepare_eval_datamodule(mock_dm)
 
-    def test_log_metrics_hides_category_stats_dynamically(self) -> None:
+    def test_log_metrics_writes_compact_summary_and_tables(self) -> None:
+        import numpy as np
+
+        import pyine.evals.correctness._impl as correctness_impl
+        import pyine.evals.correctness.types as correctness_types
+
         config = correctness_configs.CorrectnessEvalsConfig(
             datamodule_config=_make_datamodule_config(),
             target_fpr_values=[0.05],
         )
         mock_wandb_run = unittest.mock.MagicMock()
-        subset_result = types.SimpleNamespace(
-            metrics={
-                "auroc/mean": 0.91,
-                "category/regular/auroc/mean": 0.9,
-                "category/regular/auroc/std": 0.02,
-                "category/regular/fpr_0_05/tpr/num_valid_runs": 5,
-                "category/regular/fpr_0_05/tpr/bootstrap_ci_lower": 0.75,
-            }
+        mock_wandb_run.summary = {}
+        # build a minimal CorrectnessEvalResult
+        attempt_metrics = {
+            0.05: correctness_types.ThresholdedMetrics(
+                target_fpr=0.05,
+                threshold=0.5,
+                tp=40,
+                fp=2,
+                tn=198,
+                fn=10,
+                tpr=0.8,
+                fpr=0.01,
+                fnr=0.2,
+                precision=40 / 42,
+                npv=198 / 208,
+            ),
+        }
+        sample_metrics = {
+            0.05: correctness_types.SampleLevelMetrics(
+                target_fpr=0.05,
+                base_pass_rate=0.9,
+                guarded_pass_rate=0.84,
+                unsafe_slip_rate=0.05,
+                total_block_rate=0.02,
+                best_of_k_success_rate=0.95,
+                cons_pass_rate=0.7,
+                cons_unsafe_slip_rate=0.03,
+                cons_justified_reject_rate=0.8,
+            ),
+        }
+        run_result = correctness_types.SingleRunResult(
+            guardrail_metadata={},
+            threshold_free=correctness_types.ThresholdFreeMetrics(
+                auroc=0.91,
+                average_precision=0.86,
+                tpr_at_fpr={0.05: 0.73},
+                fpr_grid=np.linspace(0, 1, 10),
+                tpr_grid=np.linspace(0, 1, 10),
+                precision_grid=np.linspace(1, 0.5, 10),
+                recall_grid=np.linspace(0, 1, 10),
+            ),
+            attempt_metrics=attempt_metrics,
+            sample_metrics=sample_metrics,
+            category_results={},
+            bootstrap_cis={},
+            difficulty_stats=None,
+            verification_cost_stats=None,
         )
-
+        aggregated = correctness_types.AggregatedResult(
+            split_summary={"test_record_count": 500},
+            class_balance=correctness_types.ClassBalanceStats(
+                overall_positive_rate=0.6,
+                per_sample_positive_rates=[0.6] * 100,
+                num_all_correct_samples=0,
+                num_all_incorrect_samples=0,
+                code_type_proportions={"original": 1.0},
+                predict_type_proportions={},
+            ),
+            per_run=[run_result],
+            cross_run_mean={
+                "auroc": 0.91,
+                "average_precision": 0.86,
+                "tpr_at_fpr_0_05": 0.73,
+                "fpr_0_05/tpr": 0.80,
+                "fpr_0_05/guarded_pass_rate": 0.84,
+                "fpr_0_05/unsafe_slip_rate": 0.05,
+                "fpr_0_05/best_of_k_success_rate": 0.95,
+                "fpr_0_05/cons_pass_rate": 0.7,
+                "fpr_0_05/cons_unsafe_slip_rate": 0.03,
+                "fpr_0_05/cons_justified_reject_rate": 0.8,
+            },
+            cross_run_std={},
+            cross_run_p5={},
+            cross_run_num_valid={},
+            hierarchical_cis={},
+            difficulty_stats=None,
+            verification_cost_stats=None,
+        )
+        subset_result = correctness_impl.CorrectnessEvalResult(
+            metrics=aggregated.to_flat_dict(),
+            eval_metadata={},
+            aggregated=aggregated,
+        )
         config.log_metrics(
             wandb_run=mock_wandb_run,
             results_by_subset={"guardrail_test": subset_result},
         )
-
-        define_calls_by_name = {
-            call.kwargs["name"]: call.kwargs for call in mock_wandb_run.define_metric.call_args_list
-        }
-        category_std_metric = "benchmark/guardrail_test/category/regular/auroc/std"
-        category_num_valid_metric = "benchmark/guardrail_test/category/regular/fpr_0_05/tpr/num_valid_runs"
-        category_ci_lower_metric = "benchmark/guardrail_test/category/regular/fpr_0_05/tpr/bootstrap_ci_lower"
-        category_mean_metric = "benchmark/guardrail_test/category/regular/auroc/mean"
-
-        for metric_name in [category_std_metric, category_num_valid_metric, category_ci_lower_metric]:
-            assert metric_name in define_calls_by_name
-            assert define_calls_by_name[metric_name]["hidden"] is True
-            assert define_calls_by_name[metric_name]["summary"] == "none"
-            assert define_calls_by_name[metric_name]["step_metric"] == "train/global_step"
-        assert category_mean_metric not in define_calls_by_name
+        # verify compact summary keys are present
+        assert "benchmark/guardrail_test/auroc/mean" in mock_wandb_run.summary
+        assert "benchmark/guardrail_test/fpr_0_05/tpr/mean" in mock_wandb_run.summary
+        # verify category stat keys are NOT in summary (they're in tables now)
+        assert not any("category/" in key for key in mock_wandb_run.summary)
+        # verify wandb_run.log was called (for tables)
+        assert mock_wandb_run.log.called
 
 
 class TestGetDatamoduleConfigs:

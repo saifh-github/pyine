@@ -635,6 +635,64 @@ def _aggregate_cost_stats(
     return aggregated if aggregated else None
 
 
+def _log_correctness_metrics_to_wandb(
+    wandb_run: typing.Any,
+    aggregated: correctness_types.AggregatedResult,
+    key_prefix: str,
+    eval_subset_name: str,
+    step: int | None = None,
+) -> None:
+    """Write compact summary + wandb Tables for one eval type's aggregated metrics.
+
+    Args:
+        wandb_run: The W&B run object.
+        aggregated: The aggregated evaluation result.
+        key_prefix: W&B key prefix (e.g. ``"benchmark/guardrail_test/my_type"``).
+        eval_subset_name: Subset name (e.g. ``"guardrail_test"``), used to resolve the correct
+            record_count key from split_summary.
+        step: Optional W&B step for table logging.
+    """
+    import wandb as wandb_mod
+
+    # compact summary keys
+    for key, val in aggregated.to_compact_summary_dict().items():
+        wandb_run.summary[f"{key_prefix}/{key}"] = val
+    # record_count and sample_count (subset-sensitive, not on AggregatedResult)
+    stripped = eval_subset_name.removeprefix("guardrail_")
+    record_count_key = f"{stripped}_record_count"
+    if record_count_key not in aggregated.split_summary:
+        raise ValueError(
+            f"split_summary missing expected key {record_count_key!r}; "
+            f"available keys: {sorted(aggregated.split_summary.keys())}"
+        )
+    record_count = int(aggregated.split_summary[record_count_key])
+    sample_count = len(aggregated.class_balance.per_sample_positive_rates)
+    wandb_run.summary[f"{key_prefix}/record_count"] = record_count
+    wandb_run.summary[f"{key_prefix}/sample_count"] = sample_count
+    # detailed metrics table
+    detailed_rows = aggregated.to_detailed_metrics_table()
+    log_payload: dict[str, typing.Any] = {}
+    if detailed_rows:
+        detailed_table = wandb_mod.Table(
+            columns=list(correctness_types.DETAILED_METRICS_COLUMNS),
+            data=[[row.get(col) for col in correctness_types.DETAILED_METRICS_COLUMNS] for row in detailed_rows],
+        )
+        log_payload[f"{key_prefix}/detailed_metrics"] = detailed_table
+    # category metrics table
+    category_rows = aggregated.to_category_metrics_table()
+    if category_rows:
+        category_table = wandb_mod.Table(
+            columns=list(correctness_types.CATEGORY_METRICS_COLUMNS),
+            data=[[row.get(col) for col in correctness_types.CATEGORY_METRICS_COLUMNS] for row in category_rows],
+        )
+        log_payload[f"{key_prefix}/category_metrics"] = category_table
+    if log_payload:
+        if step is None:
+            wandb_run.log(log_payload)
+        else:
+            wandb_run.log(log_payload, step=step)
+
+
 def _eval_single_type(
     type_name: str,
     replicas: typing.Sequence[correctness_types.GuardrailScorer],
@@ -831,7 +889,11 @@ def evaluate_guardrail_types(
     if wandb_run is not None:
         for type_name, result in results.items():
             type_prefix = f"benchmark/{eval_subset_name}/{type_name}"
-            for metric_name, metric_val in result.metrics.items():
-                wandb_run.summary[f"{type_prefix}/{metric_name}"] = metric_val  # type: ignore[reportUnknownMemberType]
+            _log_correctness_metrics_to_wandb(
+                wandb_run=wandb_run,
+                aggregated=result.aggregated,
+                key_prefix=type_prefix,
+                eval_subset_name=eval_subset_name,
+            )
         wandb_run.summary[f"benchmark/{eval_subset_name}/_guardrail_type_names"] = sorted(results.keys())  # type: ignore[reportUnknownMemberType]
     return results

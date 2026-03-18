@@ -5,7 +5,7 @@ This module provides functions to:
 - Extract AUROC, TPR, sample-level, and category-wise metrics from run summaries;
 - Plot ROC/PR curves, metric comparisons, operating point analysis, and breakdowns.
 """
-# pyright: reportUnknownMemberType=false, reportUnknownArgumentType=false, reportUnknownVariableType=false
+# pyright: reportUnknownMemberType=false, reportUnknownArgumentType=false, reportUnknownVariableType=false, reportArgumentType=false
 
 from __future__ import annotations
 
@@ -25,6 +25,7 @@ import pyine.evals.analysis_common
 import pyine.evals.correctness
 import pyine.evals.correctness.metrics as correctness_metrics
 import pyine.evals.correctness.types as correctness_types
+import pyine.utils.wandb_utils
 
 if typing.TYPE_CHECKING:
     import wandb.apis.public
@@ -33,6 +34,35 @@ if typing.TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 MetricWithCI = pyine.evals.analysis_common.MetricWithCI
+
+
+def _fetch_detailed_metrics_df(
+    run: wandb.apis.public.Run,
+    prefix: str,
+) -> pd.DataFrame | None:
+    """Fetch the detailed_metrics wandb Table for a correctness eval."""
+    table_key = f"{prefix.rstrip('/')}/detailed_metrics"
+    return pyine.utils.wandb_utils.fetch_table(run, table_key)
+
+
+def _fetch_category_metrics_df(
+    run: wandb.apis.public.Run,
+    prefix: str,
+) -> pd.DataFrame | None:
+    """Fetch the category_metrics wandb Table for a correctness eval."""
+    table_key = f"{prefix.rstrip('/')}/category_metrics"
+    return pyine.utils.wandb_utils.fetch_table(run, table_key)
+
+
+def _metric_with_ci_from_row(
+    row: dict[str, typing.Any],
+) -> MetricWithCI:
+    """Build a MetricWithCI from a table row dict using column name constants."""
+    return MetricWithCI(
+        value=row.get(correctness_types.COL_MEAN),
+        ci_lower=row.get(correctness_types.COL_BOOTSTRAP_CI_LOWER),
+        ci_upper=row.get(correctness_types.COL_BOOTSTRAP_CI_UPPER),
+    )
 
 
 def _get_summary_string_keys(summary: typing.Any) -> list[str]:
@@ -193,23 +223,6 @@ def detect_guardrail_type_names(
     return sorted(validated)
 
 
-def _extract_metric_with_ci(
-    summary: typing.Any,
-    key_prefix: str,
-) -> MetricWithCI:
-    """Extract a MetricWithCI from W&B summary keys."""
-    value = summary.get(f"{key_prefix}/mean")
-    ci_lower = summary.get(f"{key_prefix}/bootstrap_ci_lower")
-    ci_upper = summary.get(f"{key_prefix}/bootstrap_ci_upper")
-    if value is None:
-        value = summary.get(key_prefix)  # try direct key
-    return MetricWithCI(
-        value=float(value) if value is not None else None,
-        ci_lower=float(ci_lower) if ci_lower is not None else None,
-        ci_upper=float(ci_upper) if ci_upper is not None else None,
-    )
-
-
 def _parse_fpr_capture(
     raw: str,
 ) -> float:
@@ -223,20 +236,6 @@ def _parse_fpr_capture(
 _FPR_FRAGMENT_RE = r"(\d+_\d+(?:e[+-]?\d+)?|\d+e[+-]?\d+)"
 
 
-def _detect_fpr_keys(
-    summary: typing.Any,
-    prefix: str,
-) -> list[float]:
-    """Detect FPR target values from W&B summary keys."""
-    fpr_re = re.compile(re.escape(prefix) + r"fpr_" + _FPR_FRAGMENT_RE + r"/")
-    fpr_values: set[float] = set()
-    for key in _get_summary_string_keys(summary):
-        match = fpr_re.match(key)
-        if match:
-            fpr_values.add(_parse_fpr_capture(match.group(1)))
-    return sorted(fpr_values)
-
-
 _ATTEMPT_METRIC_NAMES = ["tpr", "fpr", "fnr", "precision", "npv"]
 _SAMPLE_METRIC_NAMES = [
     "base_pass_rate",
@@ -248,27 +247,6 @@ _SAMPLE_METRIC_NAMES = [
     "cons_unsafe_slip_rate",
     "cons_justified_reject_rate",
 ]
-
-
-def _extract_fpr_metrics(
-    summary: typing.Any,
-    prefix: str,
-    fpr_values: list[float],
-) -> tuple[dict[float, dict[str, MetricWithCI]], dict[float, dict[str, MetricWithCI]]]:
-    """Extract attempt-level and sample-level metrics for each FPR target."""
-    attempt_metrics: dict[float, dict[str, MetricWithCI]] = {}
-    sample_metrics: dict[float, dict[str, MetricWithCI]] = {}
-    for fpr_val in fpr_values:
-        fpr_key = correctness_metrics.format_fpr_key(fpr_val)
-        attempt_dict: dict[str, MetricWithCI] = {}
-        for metric_name in _ATTEMPT_METRIC_NAMES:
-            attempt_dict[metric_name] = _extract_metric_with_ci(summary, f"{prefix}{fpr_key}/{metric_name}")
-        attempt_metrics[fpr_val] = attempt_dict
-        sample_dict: dict[str, MetricWithCI] = {}
-        for metric_name in _SAMPLE_METRIC_NAMES:
-            sample_dict[metric_name] = _extract_metric_with_ci(summary, f"{prefix}{fpr_key}/{metric_name}")
-        sample_metrics[fpr_val] = sample_dict
-    return attempt_metrics, sample_metrics
 
 
 def _resolve_type_and_prefix(
@@ -322,47 +300,95 @@ def extract_correctness_metrics(
     *,
     _resolved: tuple[str | None, str] | None = None,
 ) -> CorrectnessRunMetrics:
-    """Extract correctness metrics from a W&B run's summary.
+    """Extract correctness metrics from a W&B run.
+
+    Reads compact summary keys for top-level values (auroc, AP, counts, balance) and
+    fetches the detailed_metrics wandb Table for per-FPR metrics.
 
     Args:
         run: The W&B Run object.
         subset_name: Name of the evaluation subset.
-        type_name: Optional guardrail type name for multi-type runs. Auto-selected when
-            exactly one type exists. Raises if multiple types exist and not specified.
-        _resolved: Pre-resolved (type_name, prefix) tuple from ``_resolve_type_and_prefix``.
-            Internal use only -- avoids redundant detection when called from
-            ``fetch_correctness_eval_summary``.
+        type_name: Optional guardrail type name for multi-type runs.
+        _resolved: Pre-resolved (type_name, prefix) tuple. Internal use only.
 
     Returns:
         CorrectnessRunMetrics with extracted metric values.
 
     Raises:
-        ValueError: If type_name is provided but not found, or if multiple types exist
-            and type_name is None.
+        ValueError: If the detailed_metrics table is missing or has a schema mismatch,
+            or if type_name constraints are violated.
     """
     if _resolved is not None:
         type_name, prefix = _resolved
     else:
         type_name, prefix = _resolve_type_and_prefix(run, subset_name, type_name)
     summary = run.summary
-    auroc = _extract_metric_with_ci(summary, f"{prefix}auroc")
-    average_precision = _extract_metric_with_ci(summary, f"{prefix}average_precision")
-    # TPR@FPR
-    tpr_at_fpr: dict[float, MetricWithCI] = {}
-    tpr_at_re = re.compile(re.escape(prefix) + r"tpr_at_(fpr_" + _FPR_FRAGMENT_RE + r")/mean")
-    for key in _get_summary_string_keys(summary):
-        match = tpr_at_re.match(key)
-        if match:
-            fpr_key = match.group(1)  # e.g. "fpr_0_01" or "fpr_1e-05"
-            fpr_val = _parse_fpr_capture(fpr_key[len("fpr_") :])
-            tpr_at_fpr[fpr_val] = _extract_metric_with_ci(summary, f"{prefix}tpr_at_{fpr_key}")
-    # per-FPR metrics
-    fpr_values = _detect_fpr_keys(summary, prefix)
-    attempt_metrics, sample_metrics = _extract_fpr_metrics(summary, prefix, fpr_values)
-    # class balance and counts
+
+    # auroc and AP from compact summary (with CIs)
+    def _summary_metric_with_ci(base: str) -> MetricWithCI:
+        value = summary.get(f"{prefix}{base}/mean")
+        ci_lower = summary.get(f"{prefix}{base}/bootstrap_ci_lower")
+        ci_upper = summary.get(f"{prefix}{base}/bootstrap_ci_upper")
+        return MetricWithCI(
+            value=float(value) if value is not None else None,
+            ci_lower=float(ci_lower) if ci_lower is not None else None,
+            ci_upper=float(ci_upper) if ci_upper is not None else None,
+        )
+
+    auroc = _summary_metric_with_ci("auroc")
+    average_precision = _summary_metric_with_ci("average_precision")
+    # counts and balance from compact summary
     overall_positive_rate_raw = summary.get(f"{prefix}class_balance/overall_positive_rate")
     sample_count_raw = summary.get(f"{prefix}sample_count")
     record_count_raw = summary.get(f"{prefix}record_count")
+    # fetch detailed metrics table
+    df = _fetch_detailed_metrics_df(run, prefix)
+    if df is None:
+        raise ValueError(
+            f"detailed_metrics table not found for run {run.id}; this run may predate the table-based logging migration"
+        )
+    expected_cols = set(correctness_types.DETAILED_METRICS_COLUMNS)
+    actual_cols = set(df.columns)
+    if not expected_cols.issubset(actual_cols):
+        missing = expected_cols - actual_cols
+        raise ValueError(f"detailed_metrics table schema mismatch for run {run.id}: missing columns {sorted(missing)}")
+    indexed = df.set_index(correctness_types.COL_METRIC_NAME)
+    # tpr_at_fpr from table
+    tpr_at_fpr: dict[float, MetricWithCI] = {}
+    for metric_name in indexed.index:
+        if str(metric_name).startswith("tpr_at_fpr_"):
+            fpr_str = str(metric_name)[len("tpr_at_fpr_") :]
+            fpr_val = _parse_fpr_capture(fpr_str)
+            tpr_at_fpr[fpr_val] = _metric_with_ci_from_row(indexed.loc[metric_name].to_dict())
+    # detect FPR values from table metric names
+    fpr_prefix_re = re.compile(r"^fpr_" + _FPR_FRAGMENT_RE + r"/")
+    fpr_values: set[float] = set()
+    for metric_name in indexed.index:
+        match = fpr_prefix_re.match(str(metric_name))
+        if match:
+            fpr_values.add(_parse_fpr_capture(match.group(1)))
+    sorted_fpr = sorted(fpr_values)
+    # build attempt and sample metrics from table (whitelist-driven)
+    attempt_metrics: dict[float, dict[str, MetricWithCI]] = {}
+    sample_metrics: dict[float, dict[str, MetricWithCI]] = {}
+    for fpr_val in sorted_fpr:
+        fpr_key = correctness_metrics.format_fpr_key(fpr_val)
+        attempt_dict: dict[str, MetricWithCI] = {}
+        for metric_name in _ATTEMPT_METRIC_NAMES:
+            full_key = f"{fpr_key}/{metric_name}"
+            if full_key in indexed.index:
+                attempt_dict[metric_name] = _metric_with_ci_from_row(indexed.loc[full_key].to_dict())
+            else:
+                attempt_dict[metric_name] = MetricWithCI()
+        attempt_metrics[fpr_val] = attempt_dict
+        sample_dict: dict[str, MetricWithCI] = {}
+        for metric_name in _SAMPLE_METRIC_NAMES:
+            full_key = f"{fpr_key}/{metric_name}"
+            if full_key in indexed.index:
+                sample_dict[metric_name] = _metric_with_ci_from_row(indexed.loc[full_key].to_dict())
+            else:
+                sample_dict[metric_name] = MetricWithCI()
+        sample_metrics[fpr_val] = sample_dict
     return CorrectnessRunMetrics(
         run_id=run.id,
         run_name=run.name or "",
@@ -392,44 +418,79 @@ def extract_correctness_category_metrics(
 ) -> list[CorrectnessCategoryMetrics]:
     """Extract per-category correctness metrics from a W&B run.
 
+    Fetches the category_metrics wandb Table and groups rows by category.
+
     Args:
         run: The W&B Run object.
         subset_name: Name of the evaluation subset.
-        type_name: Optional guardrail type name for multi-type runs. Auto-selected when
-            exactly one type exists. Raises if multiple types exist and not specified.
+        type_name: Optional guardrail type name for multi-type runs.
         _resolved: Pre-resolved (type_name, prefix) tuple. Internal use only.
 
     Returns:
         List of CorrectnessCategoryMetrics, one per discovered category.
+
+    Raises:
+        ValueError: If the category_metrics table is missing or has a schema mismatch.
     """
     if _resolved is not None:
         type_name, prefix = _resolved
     else:
         type_name, prefix = _resolve_type_and_prefix(run, subset_name, type_name)
-    summary = run.summary
-    cat_prefix = f"{prefix}category/"
-    # discover category names
-    category_names: set[str] = set()
-    for key in _get_summary_string_keys(summary):
-        if not key.startswith(cat_prefix):
-            continue
-        relative = key[len(cat_prefix) :]
-        parts = relative.split("/")
-        if parts:
-            category_names.add(parts[0])
+    df = _fetch_category_metrics_df(run, prefix)
+    if df is None:
+        raise ValueError(
+            f"category_metrics table not found for run {run.id}; this run may predate the table-based logging migration"
+        )
+    expected_cols = set(correctness_types.CATEGORY_METRICS_COLUMNS)
+    actual_cols = set(df.columns)
+    if not expected_cols.issubset(actual_cols):
+        missing = expected_cols - actual_cols
+        raise ValueError(f"category_metrics table schema mismatch for run {run.id}: missing columns {sorted(missing)}")
+    fpr_prefix_re = re.compile(r"^fpr_" + _FPR_FRAGMENT_RE + r"/")
     results: list[CorrectnessCategoryMetrics] = []
-    fpr_values = _detect_fpr_keys(summary, prefix)
-    for cat_name in sorted(category_names):
-        cat_key_prefix = f"{cat_prefix}{cat_name}/"
-        auroc = _extract_metric_with_ci(summary, f"{cat_key_prefix}auroc")
-        attempt_metrics, sample_metrics = _extract_fpr_metrics(summary, cat_key_prefix, fpr_values)
-        record_count_raw = summary.get(f"{cat_key_prefix}record_count")
-        sample_count_raw = summary.get(f"{cat_key_prefix}sample_count")
+    for cat_name, cat_group in df.groupby(correctness_types.COL_CATEGORY):
+        cat_indexed = cat_group.set_index(correctness_types.COL_METRIC_NAME)
+        # auroc
+        auroc = MetricWithCI()
+        if "auroc" in cat_indexed.index:
+            auroc = _metric_with_ci_from_row(cat_indexed.loc["auroc"].to_dict())
+        # detect FPR values
+        fpr_values: set[float] = set()
+        for metric_name in cat_indexed.index:
+            match = fpr_prefix_re.match(str(metric_name))
+            if match:
+                fpr_values.add(_parse_fpr_capture(match.group(1)))
+        sorted_fpr = sorted(fpr_values)
+        # per-FPR metrics (whitelist-driven)
+        attempt_metrics: dict[float, dict[str, MetricWithCI]] = {}
+        sample_metrics: dict[float, dict[str, MetricWithCI]] = {}
+        for fpr_val in sorted_fpr:
+            fpr_key = correctness_metrics.format_fpr_key(fpr_val)
+            attempt_dict: dict[str, MetricWithCI] = {}
+            for metric_name in _ATTEMPT_METRIC_NAMES:
+                full_key = f"{fpr_key}/{metric_name}"
+                if full_key in cat_indexed.index:
+                    attempt_dict[metric_name] = _metric_with_ci_from_row(cat_indexed.loc[full_key].to_dict())
+                else:
+                    attempt_dict[metric_name] = MetricWithCI()
+            attempt_metrics[fpr_val] = attempt_dict
+            sample_dict: dict[str, MetricWithCI] = {}
+            for metric_name in _SAMPLE_METRIC_NAMES:
+                full_key = f"{fpr_key}/{metric_name}"
+                if full_key in cat_indexed.index:
+                    sample_dict[metric_name] = _metric_with_ci_from_row(cat_indexed.loc[full_key].to_dict())
+                else:
+                    sample_dict[metric_name] = MetricWithCI()
+            sample_metrics[fpr_val] = sample_dict
+        # counts from first row (same for all rows in category)
+        first_row = cat_indexed.iloc[0]
+        record_count = int(first_row.get(correctness_types.COL_RECORD_COUNT, 0))
+        sample_count = int(first_row.get(correctness_types.COL_SAMPLE_COUNT, 0))
         results.append(
             CorrectnessCategoryMetrics(
-                category=cat_name,
-                record_count=int(record_count_raw) if record_count_raw is not None else 0,
-                sample_count=int(sample_count_raw) if sample_count_raw is not None else 0,
+                category=str(cat_name),
+                record_count=record_count,
+                sample_count=sample_count,
                 auroc=auroc,
                 attempt_metrics=attempt_metrics,
                 sample_metrics=sample_metrics,
@@ -522,64 +583,6 @@ def _metric_with_ci_from_aggregated(
         ci_lower=float(ci_lower) if ci_lower is not None else None,
         ci_upper=float(ci_upper) if ci_upper is not None else None,
     )
-
-
-def _build_safe_cat_reverse_map(
-    category_results: dict[str, correctness_types.CategoryResult],
-) -> dict[str, str]:
-    """Build a sanitized name -> original name mapping, raising on collision.
-
-    Args:
-        category_results: Per-category results from a ``SingleRunResult``.
-
-    Returns:
-        Dict mapping sanitized category names to original names.
-
-    Raises:
-        ValueError: If two original names collide to the same sanitized key.
-    """
-    reverse_map: dict[str, str] = {}
-    for original_name in category_results:
-        safe_name = original_name.replace("/", "_")
-        if safe_name in reverse_map:
-            raise ValueError(
-                f"category name collision: {original_name!r} and {reverse_map[safe_name]!r} "
-                f"both sanitize to {safe_name!r}"
-            )
-        reverse_map[safe_name] = original_name
-    return reverse_map
-
-
-def _validate_cross_run_categories(
-    per_run: list[correctness_types.SingleRunResult],
-) -> None:
-    """Validate that all runs have the same category set and per-category counts.
-
-    Args:
-        per_run: List of per-run results.
-
-    Raises:
-        ValueError: If category sets or per-category counts disagree across runs.
-    """
-    if len(per_run) <= 1:
-        return
-    reference_cats = set(per_run[0].category_results.keys())
-    for run_idx, run_result in enumerate(per_run[1:], start=1):
-        run_cats = set(run_result.category_results.keys())
-        if run_cats != reference_cats:
-            raise ValueError(
-                f"category set mismatch between run 0 and run {run_idx}: "
-                f"extra={run_cats - reference_cats}, missing={reference_cats - run_cats}"
-            )
-        for cat_name in reference_cats:
-            ref_cat = per_run[0].category_results[cat_name]
-            run_cat = run_result.category_results[cat_name]
-            if ref_cat.record_count != run_cat.record_count or ref_cat.sample_count != run_cat.sample_count:
-                raise ValueError(
-                    f"count mismatch for category {cat_name!r} between run 0 and run {run_idx}: "
-                    f"run 0 has (record_count={ref_cat.record_count}, sample_count={ref_cat.sample_count}), "
-                    f"run {run_idx} has (record_count={run_cat.record_count}, sample_count={run_cat.sample_count})"
-                )
 
 
 def eval_result_to_summary(
@@ -706,9 +709,9 @@ def eval_result_to_summary(
         record_count=record_count,
     )
     # category metrics
-    _validate_cross_run_categories(aggregated.per_run)
+    correctness_types.validate_cross_run_categories(aggregated.per_run)
     reference_run = aggregated.per_run[0]
-    safe_cat_map = _build_safe_cat_reverse_map(reference_run.category_results)
+    safe_cat_map = correctness_types.build_safe_cat_reverse_map(reference_run.category_results)
     category_metrics_list: list[CorrectnessCategoryMetrics] = []
     for safe_cat in sorted(safe_cat_map.keys()):
         original_cat = safe_cat_map[safe_cat]

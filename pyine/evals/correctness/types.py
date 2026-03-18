@@ -768,7 +768,10 @@ class AggregatedResult(pydantic.BaseModel):
         return value
 
     def to_flat_dict(self) -> dict[str, float | int | str]:
-        """Flatten to a namespaced dict for W&B logging and MetricsDictType compatibility.
+        """Flatten to a namespaced dict for MetricsDictType compatibility and EvalResult.metrics.
+
+        Note: no longer used for wandb summary writes; see to_compact_summary_dict() and the wandb
+        tables logged by _log_correctness_metrics_to_wandb().
 
         All keys use a metric-first naming convention: the metric path comes first, followed by the
         statistic type as a suffix.
@@ -824,6 +827,96 @@ class AggregatedResult(pydantic.BaseModel):
         # the aggregated VerificationCostStats is available on self for programmatic access
         return flat
 
+    def to_compact_summary_dict(self) -> dict[str, float | int | str]:
+        """Return only dashboard-relevant metrics for wandb summary.
+
+        Produces a small subset of to_flat_dict() output: primary ranking metrics with CIs,
+        operating-point metrics at each FPR target, and class balance. record_count and sample_count
+        are excluded here and injected by the writer helper which has eval_subset_name context.
+        """
+        compact: dict[str, float | int | str] = {}
+        for base_metric in ("auroc", "average_precision"):
+            if base_metric in self.cross_run_mean:
+                compact[f"{base_metric}/mean"] = self.cross_run_mean[base_metric]
+            ci_obj = self.hierarchical_cis.get(base_metric)
+            if ci_obj is not None:
+                compact[f"{base_metric}/bootstrap_ci_point"] = ci_obj.point_estimate
+                compact[f"{base_metric}/bootstrap_ci_lower"] = ci_obj.lower_bound
+                compact[f"{base_metric}/bootstrap_ci_upper"] = ci_obj.upper_bound
+        for key, val in self.cross_run_mean.items():
+            if key.startswith("tpr_at_fpr_"):
+                compact[f"{key}/mean"] = val
+        fpr_values = sorted(self.per_run[0].attempt_metrics.keys())
+        for fpr_val in fpr_values:
+            fpr_key = _format_fpr_key(fpr_val)
+            for metric_suffix, _goal in COMPACT_SUMMARY_PER_FPR_METRICS:
+                full_key = f"{fpr_key}/{metric_suffix}"
+                if full_key in self.cross_run_mean:
+                    compact[f"{full_key}/mean"] = self.cross_run_mean[full_key]
+        compact["class_balance/overall_positive_rate"] = self.class_balance.overall_positive_rate
+        return compact
+
+    def to_detailed_metrics_table(self) -> list[dict[str, typing.Any]]:
+        """Long-format table with one row per non-category metric from cross_run_mean.
+
+        Returns a list of row dicts with keys matching DETAILED_METRICS_COLUMNS.
+        """
+        rows: list[dict[str, typing.Any]] = []
+        for metric_name in sorted(self.cross_run_mean.keys()):
+            if metric_name.startswith("category/"):
+                continue
+            ci_obj = self.hierarchical_cis.get(metric_name)
+            rows.append(
+                {
+                    COL_METRIC_NAME: metric_name,
+                    COL_MEAN: self.cross_run_mean[metric_name],
+                    COL_STD: self.cross_run_std.get(metric_name),
+                    COL_P5: self.cross_run_p5.get(metric_name),
+                    COL_NUM_VALID_RUNS: self.cross_run_num_valid.get(metric_name),
+                    COL_BOOTSTRAP_CI_POINT: ci_obj.point_estimate if ci_obj is not None else None,
+                    COL_BOOTSTRAP_CI_LOWER: ci_obj.lower_bound if ci_obj is not None else None,
+                    COL_BOOTSTRAP_CI_UPPER: ci_obj.upper_bound if ci_obj is not None else None,
+                }
+            )
+        return rows
+
+    def to_category_metrics_table(self) -> list[dict[str, typing.Any]]:
+        """Long-format table with one row per (category, metric) pair.
+
+        Returns a list of row dicts with keys matching CATEGORY_METRICS_COLUMNS. Validates cross-run
+        category consistency and safe-name uniqueness.
+        """
+        validate_cross_run_categories(self.per_run)
+        reference_categories = self.per_run[0].category_results
+        if not reference_categories:
+            return []
+        build_safe_cat_reverse_map(reference_categories)  # validates no collisions
+        rows: list[dict[str, typing.Any]] = []
+        for original_name, cat_result in sorted(reference_categories.items()):
+            safe_cat = original_name.replace("/", "_")
+            cat_prefix = f"category/{safe_cat}/"
+            for key in sorted(self.cross_run_mean.keys()):
+                if not key.startswith(cat_prefix):
+                    continue
+                metric_base = key[len(cat_prefix) :]
+                ci_obj = self.hierarchical_cis.get(key)
+                rows.append(
+                    {
+                        COL_CATEGORY: safe_cat,
+                        COL_METRIC_NAME: metric_base,
+                        COL_MEAN: self.cross_run_mean[key],
+                        COL_STD: self.cross_run_std.get(key),
+                        COL_P5: self.cross_run_p5.get(key),
+                        COL_NUM_VALID_RUNS: self.cross_run_num_valid.get(key),
+                        COL_BOOTSTRAP_CI_POINT: ci_obj.point_estimate if ci_obj is not None else None,
+                        COL_BOOTSTRAP_CI_LOWER: ci_obj.lower_bound if ci_obj is not None else None,
+                        COL_BOOTSTRAP_CI_UPPER: ci_obj.upper_bound if ci_obj is not None else None,
+                        COL_RECORD_COUNT: cat_result.record_count,
+                        COL_SAMPLE_COUNT: cat_result.sample_count,
+                    }
+                )
+        return rows
+
 
 # ---- Reserved type-name tokens (shared between _impl validation and analysis parsing) ----
 
@@ -849,3 +942,128 @@ RESERVED_TYPE_NAME_EXACT: frozenset[str] = frozenset(
 These collide with top-level metric keys or metadata keys logged under ``benchmark/{subset}/`` in
 W&B summary.
 """
+
+
+# ---- Column name constants for wandb Tables ----
+
+COL_METRIC_NAME = "metric_name"
+COL_MEAN = "mean"
+COL_STD = "std"
+COL_P5 = "p5"
+COL_NUM_VALID_RUNS = "num_valid_runs"
+COL_BOOTSTRAP_CI_POINT = "bootstrap_ci_point"
+COL_BOOTSTRAP_CI_LOWER = "bootstrap_ci_lower"
+COL_BOOTSTRAP_CI_UPPER = "bootstrap_ci_upper"
+COL_CATEGORY = "category"
+COL_RECORD_COUNT = "record_count"
+COL_SAMPLE_COUNT = "sample_count"
+
+DETAILED_METRICS_COLUMNS: tuple[str, ...] = (
+    COL_METRIC_NAME,
+    COL_MEAN,
+    COL_STD,
+    COL_P5,
+    COL_NUM_VALID_RUNS,
+    COL_BOOTSTRAP_CI_POINT,
+    COL_BOOTSTRAP_CI_LOWER,
+    COL_BOOTSTRAP_CI_UPPER,
+)
+"""Column names for the detailed_metrics wandb Table."""
+
+CATEGORY_METRICS_COLUMNS: tuple[str, ...] = (
+    COL_CATEGORY,
+    COL_METRIC_NAME,
+    COL_MEAN,
+    COL_STD,
+    COL_P5,
+    COL_NUM_VALID_RUNS,
+    COL_BOOTSTRAP_CI_POINT,
+    COL_BOOTSTRAP_CI_LOWER,
+    COL_BOOTSTRAP_CI_UPPER,
+    COL_RECORD_COUNT,
+    COL_SAMPLE_COUNT,
+)
+"""Column names for the category_metrics wandb Table."""
+
+COMPACT_SUMMARY_PER_FPR_METRICS: tuple[tuple[str, str], ...] = (
+    ("tpr", "max"),
+    ("guarded_pass_rate", "max"),
+    ("unsafe_slip_rate", "min"),
+    ("best_of_k_success_rate", "max"),
+    ("cons_pass_rate", "max"),
+    ("cons_unsafe_slip_rate", "min"),
+    ("cons_justified_reject_rate", "max"),
+)
+"""Per-FPR metrics included in compact summary, with their wandb summary goal (max/min).
+
+Used by both ``AggregatedResult.to_compact_summary_dict()`` and
+``CorrectnessEvalsConfig.define_metrics_for_wandb()`` to keep the two in sync.
+"""
+
+
+# ---- Helpers for AggregatedResult methods and analysis ----
+
+
+def _format_fpr_key(
+    target_fpr: float,
+) -> str:
+    """Format a float FPR value as a string key (dots replaced by underscores)."""
+    return f"fpr_{str(target_fpr).replace('.', '_')}"
+
+
+def build_safe_cat_reverse_map(
+    category_results: dict[str, CategoryResult],
+) -> dict[str, str]:
+    """Build a sanitized name -> original name mapping, raising on collision.
+
+    Args:
+        category_results: Per-category results from a ``SingleRunResult``.
+
+    Returns:
+        Dict mapping sanitized category names to original names.
+
+    Raises:
+        ValueError: If two original names collide to the same sanitized key.
+    """
+    reverse_map: dict[str, str] = {}
+    for original_name in category_results:
+        safe_name = original_name.replace("/", "_")
+        if safe_name in reverse_map:
+            raise ValueError(
+                f"category name collision: {original_name!r} and {reverse_map[safe_name]!r} "
+                f"both sanitize to {safe_name!r}"
+            )
+        reverse_map[safe_name] = original_name
+    return reverse_map
+
+
+def validate_cross_run_categories(
+    per_run: list[SingleRunResult],
+) -> None:
+    """Validate that all runs have the same category set and per-category counts.
+
+    Args:
+        per_run: List of per-run results.
+
+    Raises:
+        ValueError: If category sets or per-category counts disagree across runs.
+    """
+    if len(per_run) <= 1:
+        return
+    reference_cats = set(per_run[0].category_results.keys())
+    for run_idx, run_result in enumerate(per_run[1:], start=1):
+        run_cats = set(run_result.category_results.keys())
+        if run_cats != reference_cats:
+            raise ValueError(
+                f"category set mismatch between run 0 and run {run_idx}: "
+                f"extra={run_cats - reference_cats}, missing={reference_cats - run_cats}"
+            )
+        for cat_name in reference_cats:
+            ref_cat = per_run[0].category_results[cat_name]
+            run_cat = run_result.category_results[cat_name]
+            if ref_cat.record_count != run_cat.record_count or ref_cat.sample_count != run_cat.sample_count:
+                raise ValueError(
+                    f"count mismatch for category {cat_name!r} between run 0 and run {run_idx}: "
+                    f"run 0 has (record_count={ref_cat.record_count}, sample_count={ref_cat.sample_count}), "
+                    f"run {run_idx} has (record_count={run_cat.record_count}, sample_count={run_cat.sample_count})"
+                )

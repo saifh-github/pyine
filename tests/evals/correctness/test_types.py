@@ -451,3 +451,306 @@ def _make_class_balance() -> correctness_types.ClassBalanceStats:
         code_type_proportions={"original": 1.0},
         predict_type_proportions={"program_output": 1.0},
     )
+
+
+def _make_aggregated_with_metrics() -> correctness_types.AggregatedResult:
+    """Build an AggregatedResult with actual metrics and categories for table method tests."""
+    attempt_metrics = {
+        0.01: correctness_types.ThresholdedMetrics(
+            target_fpr=0.01,
+            threshold=0.5,
+            tp=40,
+            fp=2,
+            tn=198,
+            fn=10,
+            tpr=0.8,
+            fpr=0.01,
+            fnr=0.2,
+            precision=40 / 42,
+            npv=198 / 208,
+        ),
+    }
+    sample_metrics = {
+        0.01: correctness_types.SampleLevelMetrics(
+            target_fpr=0.01,
+            base_pass_rate=0.9,
+            guarded_pass_rate=0.84,
+            unsafe_slip_rate=0.05,
+            total_block_rate=0.02,
+            best_of_k_success_rate=0.95,
+            cons_pass_rate=0.7,
+            cons_unsafe_slip_rate=0.03,
+            cons_justified_reject_rate=0.8,
+        ),
+    }
+    cat_result = correctness_types.CategoryResult(
+        category="regular",
+        record_count=400,
+        sample_count=80,
+        class_balance=correctness_types.ClassBalanceStats(
+            overall_positive_rate=0.6,
+            per_sample_positive_rates=[0.6] * 80,
+            num_all_correct_samples=0,
+            num_all_incorrect_samples=0,
+            code_type_proportions={"original": 1.0},
+            predict_type_proportions={},
+        ),
+        threshold_free=correctness_types.ThresholdFreeMetrics(
+            auroc=0.94,
+            average_precision=0.90,
+            tpr_at_fpr={0.01: 0.75},
+            fpr_grid=np.linspace(0, 1, 10),
+            tpr_grid=np.linspace(0, 1, 10),
+            precision_grid=np.linspace(1, 0.5, 10),
+            recall_grid=np.linspace(0, 1, 10),
+        ),
+        attempt_metrics=attempt_metrics,
+        sample_metrics=sample_metrics,
+    )
+    run = correctness_types.SingleRunResult(
+        guardrail_metadata={},
+        threshold_free=correctness_types.ThresholdFreeMetrics(
+            auroc=0.92,
+            average_precision=0.87,
+            tpr_at_fpr={0.01: 0.72},
+            fpr_grid=np.linspace(0, 1, 10),
+            tpr_grid=np.linspace(0, 1, 10),
+            precision_grid=np.linspace(1, 0.5, 10),
+            recall_grid=np.linspace(0, 1, 10),
+        ),
+        attempt_metrics=attempt_metrics,
+        sample_metrics=sample_metrics,
+        category_results={"regular": cat_result},
+        bootstrap_cis={},
+        difficulty_stats=None,
+        verification_cost_stats=None,
+    )
+    cross_run_mean = {
+        "auroc": 0.92,
+        "average_precision": 0.87,
+        "tpr_at_fpr_0_01": 0.72,
+        "fpr_0_01/tpr": 0.80,
+        "fpr_0_01/fpr": 0.01,
+        "fpr_0_01/guarded_pass_rate": 0.84,
+        "fpr_0_01/unsafe_slip_rate": 0.05,
+        "fpr_0_01/best_of_k_success_rate": 0.95,
+        "fpr_0_01/cons_pass_rate": 0.7,
+        "fpr_0_01/cons_unsafe_slip_rate": 0.03,
+        "fpr_0_01/cons_justified_reject_rate": 0.8,
+        "category/regular/auroc": 0.94,
+        "category/regular/fpr_0_01/tpr": 0.75,
+    }
+    import pyine.utils.metrics.confidence
+
+    hierarchical_cis = {
+        "auroc": pyine.utils.metrics.confidence.ConfidenceInterval(
+            point_estimate=0.92,
+            lower_bound=0.88,
+            upper_bound=0.95,
+        ),
+    }
+    return correctness_types.AggregatedResult(
+        split_summary={"test_record_count": 500},
+        class_balance=_make_class_balance(),
+        per_run=[run],
+        cross_run_mean=cross_run_mean,
+        cross_run_std={"auroc": 0.01},
+        cross_run_p5={"auroc": 0.90},
+        cross_run_num_valid={"auroc": 1},
+        hierarchical_cis=hierarchical_cis,
+        difficulty_stats=None,
+        verification_cost_stats=None,
+    )
+
+
+class TestToCompactSummaryDict:
+    def test_contains_auroc_with_cis(self) -> None:
+        agg = _make_aggregated_with_metrics()
+        compact = agg.to_compact_summary_dict()
+        assert compact["auroc/mean"] == pytest.approx(0.92)
+        assert compact["auroc/bootstrap_ci_lower"] == pytest.approx(0.88)
+        assert compact["auroc/bootstrap_ci_upper"] == pytest.approx(0.95)
+
+    def test_contains_per_fpr_metrics(self) -> None:
+        agg = _make_aggregated_with_metrics()
+        compact = agg.to_compact_summary_dict()
+        assert compact["fpr_0_01/tpr/mean"] == pytest.approx(0.80)
+        assert compact["fpr_0_01/guarded_pass_rate/mean"] == pytest.approx(0.84)
+        assert compact["fpr_0_01/unsafe_slip_rate/mean"] == pytest.approx(0.05)
+
+    def test_excludes_category_keys(self) -> None:
+        agg = _make_aggregated_with_metrics()
+        compact = agg.to_compact_summary_dict()
+        assert not any(key.startswith("category/") for key in compact)
+
+    def test_excludes_record_and_sample_count(self) -> None:
+        agg = _make_aggregated_with_metrics()
+        compact = agg.to_compact_summary_dict()
+        assert "record_count" not in compact
+        assert "sample_count" not in compact
+
+    def test_contains_class_balance(self) -> None:
+        agg = _make_aggregated_with_metrics()
+        compact = agg.to_compact_summary_dict()
+        assert "class_balance/overall_positive_rate" in compact
+
+    def test_contains_tpr_at_fpr(self) -> None:
+        agg = _make_aggregated_with_metrics()
+        compact = agg.to_compact_summary_dict()
+        assert compact["tpr_at_fpr_0_01/mean"] == pytest.approx(0.72)
+
+    def test_is_subset_of_flat_dict(self) -> None:
+        agg = _make_aggregated_with_metrics()
+        compact = agg.to_compact_summary_dict()
+        flat = agg.to_flat_dict()
+        for key, _val in compact.items():
+            assert key in flat, f"compact key {key!r} not in flat dict"
+
+
+class TestToDetailedMetricsTable:
+    def test_row_count_excludes_categories(self) -> None:
+        agg = _make_aggregated_with_metrics()
+        rows = agg.to_detailed_metrics_table()
+        metric_names = [row[correctness_types.COL_METRIC_NAME] for row in rows]
+        assert not any(name.startswith("category/") for name in metric_names)
+        non_cat_keys = [key for key in agg.cross_run_mean if not key.startswith("category/")]
+        assert len(rows) == len(non_cat_keys)
+
+    def test_columns_match_schema(self) -> None:
+        agg = _make_aggregated_with_metrics()
+        rows = agg.to_detailed_metrics_table()
+        for row in rows:
+            assert set(row.keys()) == set(correctness_types.DETAILED_METRICS_COLUMNS)
+
+    def test_values_match_cross_run_mean(self) -> None:
+        agg = _make_aggregated_with_metrics()
+        rows = agg.to_detailed_metrics_table()
+        auroc_row = next(row for row in rows if row[correctness_types.COL_METRIC_NAME] == "auroc")
+        assert auroc_row[correctness_types.COL_MEAN] == pytest.approx(0.92)
+
+    def test_bootstrap_ci_present_for_auroc(self) -> None:
+        agg = _make_aggregated_with_metrics()
+        rows = agg.to_detailed_metrics_table()
+        auroc_row = next(row for row in rows if row[correctness_types.COL_METRIC_NAME] == "auroc")
+        assert auroc_row[correctness_types.COL_BOOTSTRAP_CI_LOWER] == pytest.approx(0.88)
+
+    def test_empty_when_no_metrics(self) -> None:
+        agg = _make_minimal_aggregated_result()
+        rows = agg.to_detailed_metrics_table()
+        assert rows == []
+
+
+class TestToCategoryMetricsTable:
+    def test_category_rows_present(self) -> None:
+        agg = _make_aggregated_with_metrics()
+        rows = agg.to_category_metrics_table()
+        assert len(rows) > 0
+        categories = {row[correctness_types.COL_CATEGORY] for row in rows}
+        assert "regular" in categories
+
+    def test_columns_match_schema(self) -> None:
+        agg = _make_aggregated_with_metrics()
+        rows = agg.to_category_metrics_table()
+        for row in rows:
+            assert set(row.keys()) == set(correctness_types.CATEGORY_METRICS_COLUMNS)
+
+    def test_record_and_sample_count_present(self) -> None:
+        agg = _make_aggregated_with_metrics()
+        rows = agg.to_category_metrics_table()
+        regular_row = next(row for row in rows if row[correctness_types.COL_CATEGORY] == "regular")
+        assert regular_row[correctness_types.COL_RECORD_COUNT] == 400
+        assert regular_row[correctness_types.COL_SAMPLE_COUNT] == 80
+
+    def test_empty_when_no_categories(self) -> None:
+        agg = _make_minimal_aggregated_result()
+        rows = agg.to_category_metrics_table()
+        assert rows == []
+
+    def test_collision_raises(self) -> None:
+        """Two category names that sanitize to the same key should raise ValueError."""
+        empty = np.array([], dtype=np.float64)
+        attempt_metrics: dict[float, correctness_types.ThresholdedMetrics] = {}
+        sample_metrics: dict[float, correctness_types.SampleLevelMetrics] = {}
+        cat_kwargs: dict[str, typing.Any] = {
+            "record_count": 50,
+            "sample_count": 10,
+            "class_balance": correctness_types.ClassBalanceStats(
+                overall_positive_rate=0.5,
+                per_sample_positive_rates=[0.5] * 10,
+                num_all_correct_samples=0,
+                num_all_incorrect_samples=0,
+                code_type_proportions={},
+                predict_type_proportions={},
+            ),
+            "threshold_free": correctness_types.ThresholdFreeMetrics(
+                auroc=0.85,
+                average_precision=0.80,
+                tpr_at_fpr={0.01: 0.60},
+                fpr_grid=np.linspace(0, 1, 10),
+                tpr_grid=np.linspace(0, 1, 10),
+                precision_grid=np.linspace(1, 0.5, 10),
+                recall_grid=np.linspace(0, 1, 10),
+            ),
+            "attempt_metrics": attempt_metrics,
+            "sample_metrics": sample_metrics,
+        }
+        cat_results = {
+            "a/b": correctness_types.CategoryResult(category="a/b", **cat_kwargs),
+            "a_b": correctness_types.CategoryResult(category="a_b", **cat_kwargs),
+        }
+        run = correctness_types.SingleRunResult(
+            guardrail_metadata={},
+            threshold_free=correctness_types.ThresholdFreeMetrics(
+                auroc=None,
+                average_precision=None,
+                tpr_at_fpr=None,
+                fpr_grid=empty,
+                tpr_grid=empty,
+                precision_grid=empty,
+                recall_grid=empty,
+            ),
+            attempt_metrics={},
+            sample_metrics={},
+            category_results=cat_results,
+            bootstrap_cis={},
+            difficulty_stats=None,
+            verification_cost_stats=None,
+        )
+        agg = correctness_types.AggregatedResult(
+            split_summary={"test_record_count": 10},
+            class_balance=_make_class_balance(),
+            per_run=[run],
+            cross_run_mean={},
+            cross_run_std={},
+            cross_run_p5={},
+            cross_run_num_valid={},
+            hierarchical_cis={},
+            difficulty_stats=None,
+            verification_cost_stats=None,
+        )
+        with pytest.raises(ValueError, match="collision"):
+            agg.to_category_metrics_table()
+
+
+class TestBuildSafeCatReverseMap:
+    def test_no_collision(self) -> None:
+        result = correctness_types.build_safe_cat_reverse_map({"regular": typing.cast("typing.Any", None)})
+        assert result == {"regular": "regular"}
+
+    def test_slash_replaced(self) -> None:
+        result = correctness_types.build_safe_cat_reverse_map({"biasing/hinted": typing.cast("typing.Any", None)})
+        assert "biasing_hinted" in result
+        assert result["biasing_hinted"] == "biasing/hinted"
+
+
+class TestValidateCrossRunCategories:
+    def test_single_run_passes(self) -> None:
+        correctness_types.validate_cross_run_categories([typing.cast("typing.Any", None)])  # <= 1 is fine
+
+    def test_mismatched_categories_raises(self) -> None:
+        import types as builtin_types
+
+        run0 = builtin_types.SimpleNamespace(category_results={"a": None})
+        run1 = builtin_types.SimpleNamespace(category_results={"b": None})
+        with pytest.raises(ValueError, match="category set mismatch"):
+            correctness_types.validate_cross_run_categories([run0, run1])  # type: ignore[arg-type]

@@ -556,7 +556,9 @@ class TestCorrectnessAutoDump:
         """Verify _guardrail_type_names written to W&B summary after loop."""
         import pyine.evals.correctness._impl as correctness_impl
 
-        mock_result = _MockEvalResult(metrics={"auroc/mean": 0.9})
+        mock_result = unittest.mock.MagicMock()
+        mock_result.metrics = {"auroc/mean": 0.9}
+        mock_result.eval_metadata = {}
         mock_wandb_run = unittest.mock.MagicMock()
         mock_wandb_run.summary = {}
         with (
@@ -569,6 +571,10 @@ class TestCorrectnessAutoDump:
             unittest.mock.patch.object(
                 pyine.evals.persistence,
                 "maybe_dump_eval_result",
+            ),
+            unittest.mock.patch.object(
+                correctness_impl,
+                "_log_correctness_metrics_to_wandb",
             ),
         ):
             config = unittest.mock.MagicMock()
