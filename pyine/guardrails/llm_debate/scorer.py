@@ -222,6 +222,10 @@ class DebateGuardrailScorer:
         concatenation of ``[ROLE]: content`` blocks, which becomes the
         ``original_prompt`` field in the debate state.
         """
+        assert len(prompt_messages) > 0, "prompt_messages must not be empty"
+        roles = {msg.get("role") for msg in prompt_messages}
+        assert roles != {"assistant"}, "prompt_messages must not contain only assistant messages"
+
         parts: list[str] = []
         for msg in prompt_messages:
             role = msg.get("role", "unknown").upper()

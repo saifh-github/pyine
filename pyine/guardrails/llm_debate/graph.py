@@ -71,9 +71,8 @@ def build_debate_graph(  # type: ignore[reportUnknownParameterType]
         responder_chain: The responder's prompt chain (prompt | model | parser).
         interrogator_verdict_chain: Optional verdict-only chain for the final
             forced-verdict turn. When provided, the interrogator uses this chain
-            (which has no ``decision`` field) on the last turn instead of the
-            regular interrogator chain. When None, falls back to the programmatic
-            verdict override.
+            on the last turn instead of the regular interrogator chain.
+            When None, falls back to the programmatic verdict override.
         responder_sees_debate_history: If True, the responder_turn node passes
             the full debate transcript as ``debate_history``. If False, passes
             an empty string so the responder only sees its original output + the
