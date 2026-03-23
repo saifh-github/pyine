@@ -25,7 +25,7 @@ runtime:
   exp_name: KW_1
   run_name: "${runtime.exp_name}"
   tags:
-    - "model:${config.base_model}"
+    - "RL_HT_49-600"
     - "rl-training"
     - "keyword-bias"
   seed: 0
