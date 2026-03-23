@@ -1401,10 +1401,9 @@ class KeywordBiasDataModule(
                     sample_data = wrapped_parser[sample_idx]
                     yield typing.cast("dict[str, typing.Any]", transf_fn(sample_data))
 
-        result = hf_datasets.Dataset.from_generator(  # pyright: ignore[reportUnknownMemberType]
-            generator=sample_generator,
+        result = hf_datasets.Dataset.from_list(  # pyright: ignore[reportUnknownMemberType]
+            list(sample_generator()),
             split=named_split,
-            keep_in_memory=self.config.keep_generated_datasets_in_memory,
         )
         assert isinstance(result, hf_datasets.Dataset)  # from_generator with split returns Dataset
         return result
