@@ -869,28 +869,6 @@ class BiasDataModuleBase[ConfigType: BiasDataModuleBaseConfig](
             raise ValueError("mismatch between split data subsets and configured subsets")
         # call subclass-specific metadata preparation
         metadata = self._prepare_bias_specific_metadata(base_traces_meta, split_data)
-        # --- DEBUG: fingerprint diagnostics (remove after resolving cross-node mismatch) ---
-        import hashlib as _hashlib
-        _trace_ids = [t.identifier for t in base_traces_meta]
-        _base_hash = _hashlib.md5(str(_trace_ids).encode()).hexdigest()[:16]
-        _subset_hashes = {}
-        for _sk, _sv in metadata.subset_traces.items():
-            _sids = [t.identifier for t in _sv]
-            _subset_hashes[_sk] = _hashlib.md5(str(_sids).encode()).hexdigest()[:16]
-        _derived_hashes = {}
-        if hasattr(metadata, "derived_subsets") and metadata.derived_subsets:
-            for _dk, _dv in metadata.derived_subsets.items():
-                _dids = [t.identifier for t in _dv.traces]
-                _derived_hashes[_dk] = _hashlib.md5(str(_dids).encode()).hexdigest()[:16]
-        _encoded = msgspec.msgpack.encode(metadata.model_dump())
-        _file_hash = _hashlib.md5(_encoded).hexdigest()[:16]
-        logger.warning(
-            f"[DIAG] base_traces={len(base_traces_meta)} order_hash={_base_hash}, "
-            f"subset_order_hashes={_subset_hashes}, "
-            f"derived_order_hashes={_derived_hashes}, "
-            f"serialized_hash={_file_hash}"
-        )
-        # --- END DEBUG ---
         self._save_prepared_metadata(metadata)
 
     @typing.override

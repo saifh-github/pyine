@@ -1558,15 +1558,6 @@ class KeywordBiasDistillationDataModule(
         lmdb_paths = pyine.data.utils.lmdb_io.resolve_lmdb_paths(self.config.rl_export_lmdb_paths)
         if not lmdb_paths:
             raise ValueError(f"no LMDB paths resolved from rl_export_lmdb_paths={self.config.rl_export_lmdb_paths}")
-        # --- DEBUG: fingerprint diagnostics (remove after resolving cross-node mismatch) ---
-        import hashlib as _hashlib
-
-        _paths_hash = _hashlib.md5(str([str(p) for p in lmdb_paths]).encode()).hexdigest()[:12]
-        logger.warning(
-            f"[DIAG] resolved {len(lmdb_paths)} LMDB paths, paths_hash={_paths_hash}, "
-            f"first={lmdb_paths[0] if lmdb_paths else None}"
-        )
-        # --- END DEBUG ---
         for lmdb_path in lmdb_paths:
             data_mdb = pathlib.Path(lmdb_path) / "data.mdb"
             if not data_mdb.exists():
@@ -1669,20 +1660,6 @@ class KeywordBiasDistillationDataModule(
                     all_records.extend(self._load_top_k_records(reader, key_prefix))
             finally:
                 reader.close()
-        # --- DEBUG: fingerprint diagnostics (remove after resolving cross-node mismatch) ---
-        import hashlib as _hashlib
-
-        _diag_hash = (
-            lambda recs: _hashlib.md5(  # noqa: E731
-                str([(r.get("sample_id"), r.get("reward_total")) for r in recs]).encode()
-            ).hexdigest()[:12]
-        )
-        logger.warning(
-            f"[DIAG] prefix={key_prefix!r} after load: {len(all_records)} records, "
-            f"hash={_diag_hash(all_records)}, "
-            f"sample_ids_head={[r.get('sample_id') for r in all_records[:3]]}"
-        )
-        # --- END DEBUG ---
         # validate sample_data presence
         for record in all_records:
             pyine.data.utils.generation_record.restore_sample_data_from_record(record)
@@ -1712,13 +1689,6 @@ class KeywordBiasDistillationDataModule(
                 f"{self.config.non_keyword_sample_min_reward}; "
                 f"{pre_filter_non_kw} non-keyword samples were available before filtering"
             )
-        # --- DEBUG: fingerprint diagnostics (remove after resolving cross-node mismatch) ---
-        logger.warning(
-            f"[DIAG] prefix={key_prefix!r} after filter: "
-            f"kw={len(keyword_records)} hash={_diag_hash(keyword_records)}, "
-            f"non_kw={len(non_keyword_records)} hash={_diag_hash(non_keyword_records)}"
-        )
-        # --- END DEBUG ---
         # rebalance
         combined = self._rebalance_keyword_ratio(
             keyword_records,
@@ -1728,11 +1698,6 @@ class KeywordBiasDistillationDataModule(
         )
         kw_count = sum(1 for rec in combined if self._is_keyword_sample(rec))
         kw_ratio = kw_count / len(combined) if combined else 0.0
-        # --- DEBUG: fingerprint diagnostics (remove after resolving cross-node mismatch) ---
-        logger.warning(
-            f"[DIAG] prefix={key_prefix!r} after rebalance: {len(combined)} records, hash={_diag_hash(combined)}"
-        )
-        # --- END DEBUG ---
         logger.info(
             f"prefix={key_prefix!r}: {len(combined)} records "
             f"(keyword={kw_count}, non-keyword={len(combined) - kw_count}, ratio={kw_ratio:.3f})"
