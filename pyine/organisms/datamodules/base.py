@@ -869,6 +869,17 @@ class BiasDataModuleBase[ConfigType: BiasDataModuleBaseConfig](
             raise ValueError("mismatch between split data subsets and configured subsets")
         # call subclass-specific metadata preparation
         metadata = self._prepare_bias_specific_metadata(base_traces_meta, split_data)
+        # --- DEBUG: fingerprint diagnostics (remove after resolving cross-node mismatch) ---
+        import hashlib as _hashlib
+        _trace_ids = [t.identifier for t in base_traces_meta]
+        _trace_hash = _hashlib.md5(str(_trace_ids[:20]).encode()).hexdigest()[:12]
+        _subset_info = {k: len(v) for k, v in metadata.subset_traces.items()}
+        _subset_hash = _hashlib.md5(str(_subset_info).encode()).hexdigest()[:12]
+        logger.warning(
+            f"[DIAG] base_traces={len(base_traces_meta)} hash={_trace_hash}, "
+            f"subsets={_subset_info} hash={_subset_hash}"
+        )
+        # --- END DEBUG ---
         self._save_prepared_metadata(metadata)
 
     @typing.override

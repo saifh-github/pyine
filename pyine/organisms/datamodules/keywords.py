@@ -708,8 +708,15 @@ class KeywordBiasDataModule(
         """
         train_subset_name = "train"
         train_traces = subset_traces_meta[train_subset_name]
-        traces_with_kw = [t for t in train_traces if t.identifier in trace_ids_with_keyword]
-        traces_without_kw = [t for t in train_traces if t.identifier not in trace_ids_with_keyword]
+        # Sort by identifier to ensure deterministic ordering across nodes
+        traces_with_kw = sorted(
+            (t for t in train_traces if t.identifier in trace_ids_with_keyword),
+            key=lambda t: t.identifier,
+        )
+        traces_without_kw = sorted(
+            (t for t in train_traces if t.identifier not in trace_ids_with_keyword),
+            key=lambda t: t.identifier,
+        )
         count_with = len(traces_with_kw)
         count_without = len(traces_without_kw)
         total = count_with + count_without
@@ -840,7 +847,7 @@ class KeywordBiasDataModule(
             max_count = max(solution_keep_counts.values())
             if max_count == 0:
                 break
-            solutions_at_max = [sol_id for sol_id, count in solution_keep_counts.items() if count == max_count]
+            solutions_at_max = sorted(sol_id for sol_id, count in solution_keep_counts.items() if count == max_count)
             # find the second highest count (or 0 if all are at max)
             counts_below_max = [c for c in solution_keep_counts.values() if c < max_count]
             second_max = max(counts_below_max) if counts_below_max else 0
@@ -864,10 +871,12 @@ class KeywordBiasDataModule(
                     solution_keep_counts[sol_id] -= remove_from_this
                     to_remove -= remove_from_this
                 break
-        # build final kept/discarded lists based on computed keep counts
+        # build final kept/discarded lists based on computed keep counts;
+        # iterate in sorted order to ensure deterministic output across nodes
         kept_traces: list[pyine.data.traces.dataset_utils.TraceMetadata] = []
         discarded_traces: list[pyine.data.traces.dataset_utils.TraceMetadata] = []
-        for sol_id, sol_traces in solution_to_traces.items():
+        for sol_id in sorted(solution_to_traces):
+            sol_traces = solution_to_traces[sol_id]
             keep_count = solution_keep_counts[sol_id]
             kept_traces.extend(sol_traces[:keep_count])
             discarded_traces.extend(sol_traces[keep_count:])
