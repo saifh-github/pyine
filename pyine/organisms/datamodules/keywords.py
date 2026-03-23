@@ -141,6 +141,12 @@ class KeywordTraceDatasetMetadata(pyine.data.traces.dataset_utils.TraceDatasetMe
     cluster_cache_path: str | None = None
     """Path to the shared cluster cache file (if auto-selected keyword was used)."""
 
+    @pydantic.field_serializer("trace_ids_with_keyword")
+    @classmethod
+    def _serialize_trace_ids_sorted(cls, v: frozenset[str]) -> list[str]:
+        """Serialize frozenset in sorted order for deterministic cross-node serialization."""
+        return sorted(v)
+
     @property
     def trace_count_with_keyword(self) -> int:
         """Number of traces containing the keyword."""
