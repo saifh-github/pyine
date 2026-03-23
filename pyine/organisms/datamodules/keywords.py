@@ -1756,6 +1756,10 @@ class KeywordBiasDistillationDataModule(
         Returns:
             Combined list of records at approximately the target ratio.
         """
+        # Sort inputs by sample_id to ensure deterministic sampling regardless of
+        # LMDB iteration order - rng.sample() results depend on input list order.
+        kw_records = sorted(kw_records, key=lambda r: r["sample_id"])
+        non_kw_records = sorted(non_kw_records, key=lambda r: r["sample_id"])
         rng = random.Random(seed)
         total_kw = len(kw_records)
         total_non_kw = len(non_kw_records)
@@ -1785,6 +1789,9 @@ class KeywordBiasDistillationDataModule(
                 f"achieved keyword ratio {achieved_ratio:.3f} deviates from target {target_ratio:.3f} "
                 f"(kw={total_kw}, non_kw={total_non_kw}; too few samples to achieve target ratio)"
             )
+        # Sort by sample_id to ensure deterministic ordering across nodes -
+        # input list order may vary depending on LMDB iteration order.
+        result.sort(key=lambda r: r["sample_id"])
         return result
 
     def _record_to_sample_data(
