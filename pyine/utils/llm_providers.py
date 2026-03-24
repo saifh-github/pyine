@@ -136,6 +136,7 @@ def get_default_openai_provider_retry_config(
             openai.APIConnectionError,  # network flake
             openai.RateLimitError,  # 429s
             openai.InternalServerError,  # 5xx
+            openai.BadRequestError,  # 400s (transient JSON parse failures on OpenAI's side)
         ),
         "wait_exponential_jitter": True,  # backoff + jitter
         "stop_after_attempt": max_retries,  # on top of max_retries specified in model config
