@@ -478,6 +478,8 @@ class GenerationEvalsConfig(BaseEvalsConfig):
     """Provider configuration for vLLM server for model inference during evaluation."""
     disk_export_config: EvalExportConfig | None = None
     """Configuration for exporting evaluation results to disk as an LMDB dataset."""
+    extra_model_kwargs: dict[str, typing.Any] = pydantic.Field(default_factory=lambda: {})
+    """Extra keyword arguments forwarded to the LLM provider constructor (e.g. reasoning_effort)."""
 
     @pydantic.model_validator(mode="after")
     def _validate_multi_sample_config(self) -> "GenerationEvalsConfig":
@@ -515,7 +517,7 @@ class GenerationEvalsConfig(BaseEvalsConfig):
         The returned dict can be unpacked directly into ``get_model_from_provider(**kwargs)``
         or any LangChain ``ChatOpenAI``-style constructor.
         """
-        kwargs: dict[str, typing.Any] = {}
+        kwargs: dict[str, typing.Any] = dict(self.extra_model_kwargs)
         if self.sampling_temperature_override is not None:
             kwargs["temperature"] = self.sampling_temperature_override
         if self.sampling_top_p_override is not None:
