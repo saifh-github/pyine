@@ -5,6 +5,7 @@
 /output
 /out
 /logs
+/debate_output
 /wandb
 
 # Byte-compiled / optimized / temp files

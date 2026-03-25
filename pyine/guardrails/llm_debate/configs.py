@@ -72,3 +72,7 @@ class DebateGuardrailConfig(pydantic.BaseModel):
     debug_log_transcript_every_n: int = pydantic.Field(default=0, ge=0)
     """Log a full debate transcript to the terminal every N scored records.
     0 = disabled (default). Useful for visually inspecting debate quality during a run."""
+
+    debate_output_dir: str | None = None
+    """Directory to save per-debate YAML transcripts as they are scored.
+    None = disabled (default). Files are named ``{code_type}_{counter:03d}.yaml``."""
