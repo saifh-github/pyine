@@ -58,7 +58,7 @@ dependencies = [
     "transformers>=4.55.4,<5.0.0",
     "trl>=0.27.1",
     "unidiff>=0.7.5,<0.8.0",
-    "wandb>=0.23.1,<1.0.0",
+    "wandb>=0.25.1,<1.0.0",
     "scikit-learn>=1.8.0",
 ]
 
