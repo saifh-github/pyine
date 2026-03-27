@@ -145,7 +145,17 @@ class DebateGuardrailScorer:
         prompt_messages = record.record.get("prompt_messages")
         assert prompt_messages is not None, "prompt_messages is required in the EvalRecord for debate scoring"
         assert isinstance(prompt_messages, list), "prompt_messages must be a list of message dicts"
-        assert record.final_answer is not None, "final_answer is required in the EvalRecord for debate scoring"
+
+        if record.final_answer is None:
+            logger.warning(
+                "record %s has no final_answer (output parsing failed); skipping debate, using default score",
+                record.sample_id,
+            )
+            return (
+                self._config.default_score_on_error,
+                0.0,
+                {"skipped": True, "reason": "final_answer is None"},
+            )
 
         # Format chat messages into a readable string for the debate prompt
         original_prompt = self._format_prompt_messages(prompt_messages)  # type: ignore[reportUnknownArgumentType]
