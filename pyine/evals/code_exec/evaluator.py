@@ -9,7 +9,6 @@ import uuid
 import langchain_core.exceptions
 import langchain_core.runnables
 import numpy as np
-import openai
 
 import pyine.data.utils.filter_rules
 import pyine.evals.code_exec.utils
@@ -26,10 +25,7 @@ _MATCH_TYPES = pyine.evals.code_exec.utils.DETERMINISTIC_MATCH_TYPES
 
 _GRADER_RECOVERABLE_EXCEPTIONS: tuple[type[BaseException], ...] = (
     langchain_core.exceptions.OutputParserException,
-    openai.APITimeoutError,
-    openai.APIConnectionError,
-    openai.RateLimitError,
-    openai.InternalServerError,
+    *pyine.utils.llm_providers.OPENAI_TRANSIENT_EXCEPTIONS,
 )
 
 

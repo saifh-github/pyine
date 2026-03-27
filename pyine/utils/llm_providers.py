@@ -126,18 +126,23 @@ def get_model_from_provider_config(
     )
 
 
+OPENAI_TRANSIENT_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    openai.APITimeoutError,  # stalled/timeout
+    openai.APIConnectionError,  # network flake
+    openai.RateLimitError,  # 429s
+    openai.InternalServerError,  # 5xx
+    openai.BadRequestError,  # 400s (transient JSON parse failures on OpenAI's side)
+    openai.PermissionDeniedError,  # 403s (transient permission issues, e.g. on fine-tuned models)
+)
+"""OpenAI exception types that may be transient and are worth retrying."""
+
+
 def get_default_openai_provider_retry_config(
     max_retries: int = 3,
 ) -> dict[str, typing.Any]:
     """Returns a default LangChain `with_retry` configuration that can be used w/ OpenAI."""
     return {
-        "retry_if_exception_type": (
-            openai.APITimeoutError,  # stalled/timeout
-            openai.APIConnectionError,  # network flake
-            openai.RateLimitError,  # 429s
-            openai.InternalServerError,  # 5xx
-            openai.BadRequestError,  # 400s (transient JSON parse failures on OpenAI's side)
-        ),
+        "retry_if_exception_type": OPENAI_TRANSIENT_EXCEPTIONS,
         "wait_exponential_jitter": True,  # backoff + jitter
         "stop_after_attempt": max_retries,  # on top of max_retries specified in model config
     }
