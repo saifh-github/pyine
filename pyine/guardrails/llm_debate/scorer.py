@@ -330,7 +330,7 @@ class DebateGuardrailScorer:
             self._yaml_counters[code_type] += 1
             counter = self._yaml_counters[code_type]
 
-        filename = f"{code_type}_{counter:03d}.yaml"
+        filename = f"{code_type}_{counter:05d}.yaml"
         doc: dict[str, typing.Any] = {
             "sample_id": record.sample_id,
             "problem_id": record.problem_id,

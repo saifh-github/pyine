@@ -8,6 +8,7 @@ defaults:
 
 runtime:
   exp_name: debate_guardrail_eval
+  run_name: "${runtime.exp_name}"
   seed: 42
 
 config:
@@ -30,6 +31,8 @@ config:
         - ${oc.env:PYINE_DATA_ROOT}/eval_exports/my_model_eval.lmdb
       split_config:
         split_source: TACO
+      eval_subset_names:
+        - guardrail_test
     target_fpr_values: [0.001, 0.01, 0.05]
 
   use_wandb_logging: false
