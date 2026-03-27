@@ -27,8 +27,9 @@ config:
         temperature: 1.0
         base_url: ${oc.env:VLLM_BASE_URL,http://localhost:8000/v1}
     debug_log_transcript_every_n: 1
+    debate_output_dir: "debate_output_${guardrail_config.interrogator_provider.model_kwargs.model}_vs_${guardrail_config.responder_provider.model_kwargs.model}"
 
   evals_config:
     datamodule_config:
       lmdb_paths:
-        - "./benchmark_export/"
+        - "./RL-HT-49-600-eval/benchmark_export/"
