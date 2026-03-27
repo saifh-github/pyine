@@ -35,4 +35,4 @@ config:
         - guardrail_test
     target_fpr_values: [0.001, 0.01, 0.05]
 
-  use_wandb_logging: false
+  use_wandb_logging: true
