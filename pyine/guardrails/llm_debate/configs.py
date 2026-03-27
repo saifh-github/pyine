@@ -73,6 +73,10 @@ class DebateGuardrailConfig(pydantic.BaseModel):
     """Log a full debate transcript to the terminal every N scored records.
     0 = disabled (default). Useful for visually inspecting debate quality during a run."""
 
+    debate_timeout_seconds: float | None = None
+    """Per-debate timeout in seconds. When a debate exceeds this limit, it is abandoned
+    and the default score is assigned. None = no timeout (default)."""
+
     debate_output_dir: str | None = None
     """Directory to save per-debate YAML transcripts as they are scored.
     None = disabled (default). Files are named ``{code_type}_{counter:03d}.yaml``."""

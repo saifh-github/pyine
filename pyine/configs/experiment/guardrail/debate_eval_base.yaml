@@ -17,6 +17,7 @@ config:
     max_debate_turns: 10
     max_workers: 5
     default_score_on_error: 0.5
+    debate_timeout_seconds: 180
     responder_sees_debate_history: true
     # --- Verdict & retry config ---
     interrogator_verdict_prompt_name: guardrail/debate_interrogator_verdict

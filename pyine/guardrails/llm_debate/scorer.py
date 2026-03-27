@@ -101,6 +101,7 @@ class DebateGuardrailScorer:
         records: list[correctness_types.EvalRecord],
     ) -> correctness_types.ScoringResult:
         """Score records via ThreadPoolExecutor (same pattern as prompted_llm)."""
+        timeout = self._config.debate_timeout_seconds
         with concurrent.futures.ThreadPoolExecutor(
             max_workers=self._config.max_workers,
         ) as executor:
@@ -109,7 +110,22 @@ class DebateGuardrailScorer:
             completed = 0
             for future in concurrent.futures.as_completed(future_to_idx):
                 idx = future_to_idx[future]
-                results[idx] = future.result()
+                try:
+                    results[idx] = future.result(timeout=timeout)
+                except concurrent.futures.TimeoutError:
+                    record = records[idx]
+                    logger.warning(
+                        "debate timed out after %ss for record %s, using default score",
+                        timeout,
+                        record.sample_id,
+                    )
+                    with self._error_lock:
+                        self._error_count += 1
+                    results[idx] = (
+                        self._config.default_score_on_error,
+                        0.0,
+                        {"skipped": True, "reason": f"timeout after {timeout}s"},
+                    )
                 completed += 1  # noqa: SIM113 - as_completed() doesn't support enumerate
                 if completed % 100 == 0 or completed == len(records):
                     logger.info("scored %d/%d records", completed, len(records))
