@@ -167,17 +167,36 @@ async def evaluate_runnable_model(
         f"sample generator should implement a __len__ method; {type(sample_generator)} does not"
     )
     sample_idxs = list(range(len(sample_generator)))
-    _ignored_overrides: list[str] = []
-    if eval_config.sampling_temperature_override is not None:
-        _ignored_overrides.append(f"sampling_temperature_override={eval_config.sampling_temperature_override}")
-    if eval_config.sampling_top_p_override is not None:
-        _ignored_overrides.append(f"sampling_top_p_override={eval_config.sampling_top_p_override}")
-    if _ignored_overrides:
-        logger.warning(
-            f"ignoring {', '.join(_ignored_overrides)} (only applied in HF model evaluation); "
-            "set sampling parameters directly on the chain model or vLLM provider config instead"
-        )
     detected_temp = pyine.utils.langchain.get_sampling_temperature_from_chain(chain)
+    # sampling_temperature_override / sampling_top_p_override are not directly used in the
+    # runnable eval path (they only apply to HF model evaluation); when set, we verify that
+    # the chain model already has matching values (e.g. via vllm_provider_config bridging).
+    if eval_config.sampling_temperature_override is not None:
+        if detected_temp is not None:
+            if detected_temp != eval_config.sampling_temperature_override:
+                raise ValueError(
+                    f"sampling_temperature_override={eval_config.sampling_temperature_override} does not "
+                    f"match the chain model's temperature={detected_temp}; in runnable model evaluation, "
+                    f"this override is not applied directly, you must set the temperature on the vLLM "
+                    f"provider config or chain model instead"
+                )
+            logger.info(
+                f"sampling_temperature_override={eval_config.sampling_temperature_override} matches "
+                f"chain model temperature ({detected_temp})"
+            )
+        else:
+            logger.warning(
+                f"sampling_temperature_override={eval_config.sampling_temperature_override} is set but "
+                f"could not detect the chain model's temperature to verify it is applied; in runnable "
+                f"model evaluation, this override is not applied directly, you must ensure the temperature "
+                f"is set on the vLLM provider config or chain model"
+            )
+    if eval_config.sampling_top_p_override is not None:
+        logger.warning(
+            f"sampling_top_p_override={eval_config.sampling_top_p_override} is set but cannot be "
+            f"verified from the chain model; in runnable model evaluation, this override is not "
+            f"applied directly, you must ensure top_p is set on the vLLM provider config or chain model"
+        )
     if num_attempts_per_sample > 1:
         if detected_temp is None:
             raise ValueError(
