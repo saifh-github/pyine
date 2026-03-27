@@ -209,7 +209,7 @@ class DebateGuardrailScorer:
 
             # YAML transcript export (thread-safe)
             if self._yaml_output_dir is not None:
-                self._write_debate_yaml(record, transcript, score)
+                self._write_debate_yaml(record, transcript, score, original_prompt)
 
             return score, transcript.total_token_count, transcript.model_dump()
 
@@ -295,6 +295,7 @@ class DebateGuardrailScorer:
         record: correctness_types.EvalRecord,
         transcript: DebateTranscript,
         score: float,
+        original_prompt: str,
     ) -> None:
         """Write a single debate transcript to a YAML file (thread-safe)."""
         assert self._yaml_output_dir is not None
@@ -310,6 +311,7 @@ class DebateGuardrailScorer:
             "code_type": code_type,
             "label": record.label,
             "score": score,
+            "original_prompt": original_prompt,
             "expected_output": record.expected_output,
             "final_answer": record.final_answer,
             "model_output": record.model_output,
