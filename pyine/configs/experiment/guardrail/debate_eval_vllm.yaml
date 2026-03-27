@@ -32,8 +32,8 @@ config:
         temperature: 1.0
         base_url: ${oc.env:VLLM_BASE_URL,http://localhost:8000/v1}
         max_tokens: 2048
-    debug_log_transcript_every_n: 1
-    debate_output_dir: "debate_output_${guardrail_config.interrogator_provider.model_kwargs.model}_vs_${guardrail_config.responder_provider.model_kwargs.model}"
+    debug_log_transcript_every_n: 100
+    debate_output_dir: "debate_output"
 
   evals_config:
     datamodule_config:
