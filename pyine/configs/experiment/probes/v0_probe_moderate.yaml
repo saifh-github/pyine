@@ -15,7 +15,7 @@ defaults:
   - _self_
 
 runtime:
-  exp_name: probes/v0_probes_RL_HT_49_ckpt950
+  exp_name: probes/v0_probes_shortcuts_modelorg
   run_name: "${now:%Y%m%d_%H%M%S}_skewed_moderate_bias"
   tags:
     - "probe-training"
@@ -26,12 +26,12 @@ config:
 
   use_wandb_logging: true
   base_model: "Qwen/Qwen3-4B-Instruct-2507"
-  llm_checkpoint_path: "/scratch/pl.stcharles/pyine/data/RL_HT_49/checkpoint-950"
+  llm_checkpoint_path: "/scratch/pl.stcharles/pyine/data/RL_HT_49/ckpt-model-org"
 
   # Data source (ProbeDataModuleConfig)
   datamodule_config:
     lmdb_paths:
-      - /scratch/pl.stcharles/pyine/data/RL_HT_49/v0_rl_eval_base_RL_HT_49_checkpoint-950/benchmark_export
+      - "/scratch/pl.stcharles/pyine/data/RL_HT_49/ckpt-model-org-exports"
     split_config:
       include_original_train_problems: true
 
@@ -39,8 +39,8 @@ config:
 
   # Training loop
   num_epochs: 10
-  train_batch_size: 4  # 2 per H100 seems like a good balance with the 13k context dataset
-  eval_batch_size: 4
+  train_batch_size: 8  # 2 per H100 seems like a good balance with the 13k context dataset
+  eval_batch_size: 8
   gradient_accumulation_steps: 8
   logging_steps: 10
   eval_steps: 50
