@@ -22,7 +22,7 @@ config:
     eval_subset_names: ["test"]
     prompt_config:
       include_examples: true
-      version: unstructured_with_3_predict_types
+      version: rl_tagged_answer  # or rl_tagged_answer_thinking
   evals_config:
     eval_generation_max_new_tokens_override: null
     result_dump_dir: ${runtime.output_dir}/benchmark_export
