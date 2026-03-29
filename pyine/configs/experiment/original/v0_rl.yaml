@@ -190,7 +190,7 @@ config:
     num_generations: 16  # Number of generations per prompt to sample. The effective batch size (num_processes * per_device_batch_size * gradient_accumulation_steps) must be evenly divisible by this value.
     num_generations_eval: 1  # Use fewer generations during eval to save compute
     max_completion_length: 10000  # Allow longer completions for complex code execution
-    max_prompt_length: 3000  # truncate prompts beyond this length (last-resort)
+    # max_prompt_length: 3000  # truncate prompts beyond this length (last-resort)
     temperature: 1.0
     top_p: 0.9
     beta: 0.00  # KL penalty coefficient

@@ -24,7 +24,7 @@ config:
       include_examples: true
       version: rl_tagged_answer  # or rl_tagged_answer_thinking
   evals_config:
-    eval_generation_max_new_tokens_override: null
+    # eval_generation_max_new_tokens_override: null  # null = no generation cap (use model max)
     result_dump_dir: ${runtime.output_dir}/benchmark_export
     eval_runnable_config:
       max_workers: 256
