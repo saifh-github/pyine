@@ -10,14 +10,14 @@ defaults:
   - /config/evals_config: correctness_taco_base
   - override /config: base
   - override /config/datamodule_config: correctness_taco_base
-  - override /config/datamodule_config/resampling: skewed_weak_bias
-  - override /config/evals_config/calibration_resampling: skewed_weak_bias
+  - override /config/datamodule_config/resampling: skewed_moderate_bias
+  - override /config/evals_config/calibration_resampling: skewed_moderate_bias
   - override /config/training_args_config: train_default
   - _self_
 
 runtime:
   exp_name: llm_classifier/v0_modernbert
-  run_name: "${now:%Y%m%d_%H%M%S}"
+  run_name: "${now:%Y%m%d_%H%M%S}_skewed_moderate_bias"
   tags:
     - "model:${config.base_model}"
     - "llm-classifier"
@@ -33,7 +33,7 @@ config:
   # LMDB data source
   datamodule_config:  # the target datamodule defined in the defaults at the top is CorrectnessDataModule
     lmdb_paths:
-      - /scratch/pl.stcharles/pyine/data/RL_HT_49/v0_rl_eval_base_RL_HT_49_checkpoint-950/benchmark_export
+      - "/scratch/pl.stcharles/pyine/data/RL_HT_49/ckpt-model-org-exports"
     split_config:
       include_original_train_problems: true
 
