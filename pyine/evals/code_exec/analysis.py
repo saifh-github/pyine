@@ -296,7 +296,7 @@ def extract_run_metrics(
     }
     return RunMetrics(
         run_id=run.id,
-        run_name=run.name,
+        run_name=run.name or "<unnamed>",
         run_group=run.group if run.group else "<no_group>",
         project=run.project,
         entity=run.entity,
