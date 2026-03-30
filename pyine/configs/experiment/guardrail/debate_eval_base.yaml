@@ -26,6 +26,7 @@ config:
     chain_retry_wait_exponential_jitter: true
 
   evals_config:
+    result_dump_dir: "${hydra:runtime.output_dir}/eval_results"
     datamodule_config:
       lmdb_paths:
         - ${oc.env:PYINE_DATA_ROOT}/eval_exports/my_model_eval.lmdb
