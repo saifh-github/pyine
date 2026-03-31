@@ -20,6 +20,7 @@ import pyine.configs.schemas
 import pyine.evals.common
 import pyine.evals.correctness._impl as correctness_impl
 import pyine.evals.correctness.datamodule as correctness_datamodule
+import pyine.evals.persistence
 import pyine.evals.utils
 import pyine.utils.reprod
 from pyine.apps.guardrail_eval.debate_eval_configs import (
@@ -91,6 +92,14 @@ async def main(
         )
         pyine.evals.utils.print_metrics(result.metrics, subset_name, logger.info)
         evaluation_results[subset_name] = result
+
+        if config.evals_config.result_dump_dir is not None:
+            dump_path = pyine.evals.persistence.build_result_dump_path(
+                dump_dir=config.evals_config.result_dump_dir,
+                eval_subset_name=subset_name,
+            )
+            pyine.evals.persistence.save_eval_result(result, path=dump_path)
+            logger.info("saved eval result to %s", dump_path)
 
     # 5. Log results to W&B
     if config.use_wandb_logging and evaluation_results:
