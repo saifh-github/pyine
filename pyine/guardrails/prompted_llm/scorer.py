@@ -157,7 +157,7 @@ class PromptedLLMGuardrailScorer:
         handler: pyine.utils.langchain.CaptureLLMHandler,
     ) -> float:
         """Extract total token count from the capture handler."""
-        return pyine.utils.langchain.extract_token_count_from_handler(handler)
+        return pyine.utils.langchain.extract_token_count_from_handler(handler, field="total_tokens")
 
     def get_metadata(self) -> dict[str, typing.Any]:
         """Return guardrail metadata for reporting."""

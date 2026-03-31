@@ -200,8 +200,16 @@ def get_default_structured_output_chain_retry_config(
 _logger = logging.getLogger(__name__)
 
 
-def extract_token_count_from_handler(handler: CaptureLLMHandler) -> float:
-    """Extract total token count from a CaptureLLMHandler.
+def extract_token_count_from_handler(
+    handler: CaptureLLMHandler,
+    field: typing.Literal["completion_tokens", "total_tokens"] = "completion_tokens",
+) -> float:
+    """Extract a token count from a CaptureLLMHandler.
+
+    Args:
+        handler: The handler that captured LLM events.
+        field: Which token-usage field to read. Defaults to ``"completion_tokens"``
+            so callers get only the generation cost (not the prompt re-processing).
 
     Checks llm_output.token_usage first, falls back to per-generation info.
     Returns 0.0 if no token usage is available.
@@ -211,15 +219,17 @@ def extract_token_count_from_handler(handler: CaptureLLMHandler) -> float:
         return 0.0
     llm_output: dict[str, typing.Any] = getattr(end_event.response, "llm_output", None) or {}
     token_usage: dict[str, typing.Any] = llm_output.get("token_usage", {})
-    total: int = token_usage.get("total_tokens", 0)
-    if total > 0:
-        return float(total)
+    count: int = token_usage.get(field, 0)
+    if count > 0:
+        return float(count)
     # Fallback: sum from generation info
     for generation_list in end_event.response.generations:
         for gen in generation_list:
             gen_info: dict[str, typing.Any] = getattr(gen, "generation_info", None) or {}
             usage: dict[str, typing.Any] = gen_info.get("usage", {})
-            total += usage.get("total_tokens", 0)
-    if total == 0:
-        _logger.debug("token count is 0 for a successful LLM response; provider may not populate token usage fields")
-    return float(total)
+            count += usage.get(field, 0)
+    if count == 0:
+        _logger.debug(
+            "token count (%s) is 0 for a successful LLM response; provider may not populate token usage fields", field
+        )
+    return float(count)

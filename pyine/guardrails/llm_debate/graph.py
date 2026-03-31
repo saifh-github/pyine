@@ -25,7 +25,7 @@ class DebateState(typing.TypedDict):
 
     Uses Annotated reducers for fields that accumulate across node updates:
     - messages: operator.add appends new messages to the list (nodes return [new_msg])
-    - total_tokens: operator.add sums token counts (nodes return the delta)
+    - total_tokens: operator.add sums completion token counts from both interrogator and responder
     All other fields are overwritten on each update (standard LangGraph behavior).
     """
 

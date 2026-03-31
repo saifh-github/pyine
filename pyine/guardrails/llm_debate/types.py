@@ -45,4 +45,4 @@ class DebateTranscript(pydantic.BaseModel):
     num_turns: int
     """Actual turns used (may be < max if early termination)."""
     total_token_count: float
-    """Sum of all message token counts."""
+    """Sum of completion token counts from both interrogator and responder."""
