@@ -85,7 +85,7 @@ class CorrectnessEvalsConfig(pyine.evals.common.BaseEvalsConfig):
 
     text_field: str = "model_output"
     """Which ``EvalRecord`` field to use as input text for scoring (e.g. ``"model_output"``)."""
-    target_fpr_values: list[float] = pydantic.Field(default_factory=lambda: [0.001, 0.01, 0.05])
+    target_fpr_values: list[float] = pydantic.Field(default_factory=lambda: [0.001, 0.01, 0.05, 0.1])
     """FPR constraints for threshold calibration. Must be sorted, unique, and in (0, 1)."""
     num_bootstrap_replicates: pydantic.PositiveInt = 1000
     """Number of bootstrap replicates for CI computation."""

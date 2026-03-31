@@ -134,7 +134,7 @@ class TestCorrectnessEvalsConfig:
         config = correctness_configs.CorrectnessEvalsConfig(
             datamodule_config=_make_datamodule_config(),
         )
-        assert config.target_fpr_values == [0.001, 0.01, 0.05]
+        assert config.target_fpr_values == [0.001, 0.01, 0.05, 0.1]
         assert config.num_bootstrap_replicates == 1000
         assert config.confidence_level == 0.95
 
