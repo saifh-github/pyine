@@ -22,7 +22,7 @@ defaults:
   - _self_
 
 runtime:
-  exp_name: KW_1
+  exp_name: KW_2
   run_name: "${runtime.exp_name}"
   tags:
     - "RL_HT_49-600"
@@ -65,7 +65,7 @@ config:
     keyword_auto_selection_config:
       selection_seed: 0
     # 50/50 split for balanced RL signal (default 0.05 is too low for RL)
-    train_subset_with_keyword_ratio: 0.1
+    train_subset_with_keyword_ratio: 0.2
     train_subset_resampling_seed: 0
     # Only use original (non-augmented) traces for clean keyword detection
     exclude_augmented_traces: true
@@ -127,6 +127,7 @@ config:
       valid:
         filtering_config:
           max_traces_per_solution: 1
+          max_traces_per_problem: 3
           max_code_line_count: 250
           max_code_line_length: 250
           max_code_length: 2500
