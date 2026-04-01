@@ -16,6 +16,7 @@ import typing
 
 import matplotlib.axes
 import matplotlib.figure
+import matplotlib.patches
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -793,6 +794,9 @@ def plot_metric_comparison(
     ax.bar(bar_positions, values, yerr=[yerr_lower, yerr_upper], capsize=4, alpha=0.8)
     chart_title = title or f"{metric_name}" + (f" @ FPR={target_fpr}" if target_fpr is not None else "")
     pyine.evals.analysis_common.configure_bar_chart(ax, bar_positions, labels, chart_title, ylabel=metric_name)
+    for idx, val in enumerate(values):
+        if not np.isnan(val):
+            ax.text(idx, val + max(yerr_upper[idx], 0) + 0.01, f"{val:.4f}", ha="center", va="bottom", fontsize=8)
     return fig
 
 
@@ -937,47 +941,113 @@ def plot_operating_point_summary(
     Returns:
         The matplotlib Figure.
     """
-    fig, (ax_cm, ax_rates) = plt.subplots(1, 2, figsize=(14, 5), gridspec_kw={"width_ratios": [1, 1.2]})
-    # confusion matrix heatmap
+    fig, (ax_cm, ax_rates) = plt.subplots(1, 2, figsize=(14, 5.5), gridspec_kw={"width_ratios": [1, 1.2]})
+    # confusion matrix with explicit cell coloring for readability
     cm = np.array(
         [
             [thresholded_metrics.tp, thresholded_metrics.fn],
             [thresholded_metrics.fp, thresholded_metrics.tn],
         ]
     )
-    ax_cm.imshow(cm, cmap="Blues", aspect="auto")
+    total = max(int(cm.sum()), 1)
+    # use green-ish for correct predictions (TP, TN), red-ish for errors (FP, FN)
+    cell_colors = [
+        ["#2d8a4e", "#d94f4f"],  # TP = green, FN = red
+        ["#d94f4f", "#2d8a4e"],  # FP = red, TN = green
+    ]
+    cell_alphas = [
+        [0.75, 0.75],
+        [0.75, 0.75],
+    ]
     for row_idx in range(2):
         for col_idx in range(2):
-            ax_cm.text(col_idx, row_idx, str(cm[row_idx, col_idx]), ha="center", va="center", fontsize=14)
+            count = int(cm[row_idx, col_idx])
+            pct = 100.0 * count / total
+            alpha = cell_alphas[row_idx][col_idx]
+            # scale alpha: dim cells with near-zero counts
+            if total > 0 and count == 0:
+                alpha = 0.15
+            elif total > 0:
+                alpha = max(0.25, min(0.85, 0.25 + 0.6 * (count / total)))
+            ax_cm.add_patch(
+                matplotlib.patches.Rectangle(
+                    (col_idx - 0.5, row_idx - 0.5),
+                    1,
+                    1,
+                    facecolor=cell_colors[row_idx][col_idx],
+                    alpha=alpha,
+                    edgecolor="white",
+                    linewidth=2,
+                )
+            )
+            ax_cm.text(
+                col_idx,
+                row_idx - 0.08,
+                f"{count:,}",
+                ha="center",
+                va="center",
+                fontsize=16,
+                fontweight="bold",
+                color="white",
+            )
+            ax_cm.text(
+                col_idx,
+                row_idx + 0.22,
+                f"({pct:.1f}%)",
+                ha="center",
+                va="center",
+                fontsize=11,
+                color="white",
+                alpha=0.9,
+            )
+    cell_labels = [["TP", "FN"], ["FP", "TN"]]
+    for row_idx in range(2):
+        for col_idx in range(2):
+            ax_cm.text(
+                col_idx,
+                row_idx - 0.35,
+                cell_labels[row_idx][col_idx],
+                ha="center",
+                va="center",
+                fontsize=9,
+                color="white",
+                alpha=0.7,
+            )
+    ax_cm.set_xlim(-0.5, 1.5)
+    ax_cm.set_ylim(1.5, -0.5)
     ax_cm.set_xticks([0, 1])
-    ax_cm.set_xticklabels(["Predicted +", "Predicted -"])
+    ax_cm.set_xticklabels(["Predicted +", "Predicted -"], fontsize=11)
     ax_cm.set_yticks([0, 1])
-    ax_cm.set_yticklabels(["Actual +", "Actual -"])
-    ax_cm.set_title(f"Confusion Matrix (FPR={thresholded_metrics.target_fpr})")
-    # rates sidebar
-    rate_names = ["TPR", "FPR", "Precision", "NPV", "Guarded Pass Rate", "Unsafe Slip Rate"]
-    rate_values = [
-        thresholded_metrics.tpr,
-        thresholded_metrics.fpr,
-        thresholded_metrics.precision,
-        thresholded_metrics.npv,
-        sample_metrics.guarded_pass_rate,
-        sample_metrics.unsafe_slip_rate,
+    ax_cm.set_yticklabels(["Actual +", "Actual -"], fontsize=11)
+    ax_cm.set_title(f"Confusion Matrix (FPR={thresholded_metrics.target_fpr})", fontsize=12, pad=10)
+    ax_cm.tick_params(length=0)
+    # rates sidebar with color-coded bars
+    rate_entries: list[tuple[str, float | None, str]] = [
+        ("TPR (Recall)", thresholded_metrics.tpr, "tab:blue"),
+        ("FPR", thresholded_metrics.fpr, "tab:red"),
+        ("Precision", thresholded_metrics.precision, "tab:blue"),
+        ("NPV", thresholded_metrics.npv, "tab:blue"),
+        ("Guarded Pass Rate", sample_metrics.guarded_pass_rate, "tab:cyan"),
+        ("Unsafe Slip Rate", sample_metrics.unsafe_slip_rate, "tab:red"),
     ]
+    rate_names = [entry[0] for entry in rate_entries]
+    rate_values = [entry[1] for entry in rate_entries]
+    rate_colors = [entry[2] if entry[1] is not None else "tab:gray" for entry in rate_entries]
     rate_values_safe = [val if val is not None else 0.0 for val in rate_values]
     y_pos = np.arange(len(rate_names))
-    colors = ["tab:blue" if val is not None else "tab:gray" for val in rate_values]
-    ax_rates.barh(y_pos, rate_values_safe, color=colors, alpha=0.8)
+    ax_rates.barh(y_pos, rate_values_safe, color=rate_colors, alpha=0.75, height=0.6)
     ax_rates.set_yticks(y_pos)
-    ax_rates.set_yticklabels(rate_names)
-    ax_rates.set_xlim(0, 1.05)
-    ax_rates.set_title("Rates at Operating Point")
+    ax_rates.set_yticklabels(rate_names, fontsize=10)
+    ax_rates.set_xlim(0, 1.15)
+    ax_rates.set_title("Rates at Operating Point", fontsize=12, pad=10)
     ax_rates.grid(axis="x", alpha=0.3)
+    ax_rates.invert_yaxis()
     for idx, val in enumerate(rate_values):
-        if val is not None:
-            ax_rates.text(val + 0.01, idx, f"{val:.3f}", va="center", fontsize=9)
+        display_val = val if val is not None else 0.0
+        label = f"{display_val:.4f}" if val is not None else "N/A"
+        ax_rates.text(max(display_val, 0.0) + 0.015, idx, label, va="center", fontsize=10, fontweight="bold")
     if title:
-        fig.suptitle(title)
+        fig.suptitle(title, fontsize=13, fontweight="bold")
     fig.tight_layout()
     return fig
 
@@ -1023,9 +1093,12 @@ def plot_sample_level_metrics(
     ax.set_xticklabels([name.replace("_", " ") for name in metric_names], rotation=30, ha="right")
     ax.set_ylabel("Rate")
     ax.set_title(title or f"Sample-Level Metrics @ FPR={target_fpr}")
-    ax.set_ylim(0, 1.12)
+    ax.set_ylim(0, 1.18)
     ax.legend(fontsize="small")
     ax.grid(axis="y", alpha=0.3)
+    # add value labels on top of each bar
+    for container in ax.containers:
+        ax.bar_label(container, fmt="%.3f", fontsize=7, padding=2, rotation=90)
     return fig
 
 
@@ -1194,6 +1267,9 @@ def plot_cost_analysis(
     ax.set_xlabel(f"Cost ({cost_stats.cost_unit or 'units'})")
     ax.set_title(title or f"Verification Costs (FPR={cost_stats.target_fpr})")
     ax.grid(axis="x", alpha=0.3)
+    max_val = max(values) if values else 1.0
+    for idx, val in enumerate(values):
+        ax.text(val + max_val * 0.01, idx, f"{val:.4g}", va="center", fontsize=9)
     return fig
 
 
