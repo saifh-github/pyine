@@ -849,6 +849,7 @@ def plot_roc_curves(
     per_run_results: list[correctness_types.SingleRunResult],
     title: str | None = None,
     ax: matplotlib.axes.Axes | None = None,
+    category_key: str | None = None,
 ) -> matplotlib.figure.Figure:  # pragma: no cover
     """Overlay ROC curves from per-run results with mean curve.
 
@@ -860,6 +861,8 @@ def plot_roc_curves(
         per_run_results: List of SingleRunResult from independent guardrail runs.
         title: Optional chart title.
         ax: Optional existing axes to plot on.
+        category_key: Optional category key (e.g. ``"code_type/hinted"``) to plot
+            category-specific curves instead of global ones.
 
     Returns:
         The matplotlib Figure.
@@ -869,8 +872,9 @@ def plot_roc_curves(
     all_fpr_grids: list[NDArray[np.floating[typing.Any]]] = []
     all_tpr_grids: list[NDArray[np.floating[typing.Any]]] = []
     for run_idx, run_result in enumerate(per_run_results):
-        fpr_grid = np.array(run_result.threshold_free.fpr_grid)
-        tpr_grid = np.array(run_result.threshold_free.tpr_grid)
+        tf = run_result.category_results[category_key].threshold_free if category_key else run_result.threshold_free
+        fpr_grid = np.array(tf.fpr_grid)
+        tpr_grid = np.array(tf.tpr_grid)
         if single_replica:
             ax.plot(fpr_grid, tpr_grid, linewidth=1.5)
         else:
@@ -897,6 +901,7 @@ def plot_pr_curves(
     per_run_results: list[correctness_types.SingleRunResult],
     title: str | None = None,
     ax: matplotlib.axes.Axes | None = None,
+    category_key: str | None = None,
 ) -> matplotlib.figure.Figure:  # pragma: no cover
     """Overlay precision-recall curves from per-run results with mean curve.
 
@@ -907,6 +912,8 @@ def plot_pr_curves(
         per_run_results: List of SingleRunResult from independent guardrail runs.
         title: Optional chart title.
         ax: Optional existing axes to plot on.
+        category_key: Optional category key (e.g. ``"code_type/hinted"``) to plot
+            category-specific curves instead of global ones.
 
     Returns:
         The matplotlib Figure.
@@ -916,8 +923,9 @@ def plot_pr_curves(
     all_recall_grids: list[NDArray[np.floating[typing.Any]]] = []
     all_precision_grids: list[NDArray[np.floating[typing.Any]]] = []
     for run_idx, run_result in enumerate(per_run_results):
-        recall_grid = np.array(run_result.threshold_free.recall_grid)
-        precision_grid = np.array(run_result.threshold_free.precision_grid)
+        tf = run_result.category_results[category_key].threshold_free if category_key else run_result.threshold_free
+        recall_grid = np.array(tf.recall_grid)
+        precision_grid = np.array(tf.precision_grid)
         if single_replica:
             ax.plot(recall_grid, precision_grid, linewidth=1.5)
         else:
