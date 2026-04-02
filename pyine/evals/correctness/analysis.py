@@ -853,6 +853,8 @@ def plot_roc_curves(
     """Overlay ROC curves from per-run results with mean curve.
 
     Requires local ``SingleRunResult`` objects (from pickled ``CorrectnessEvalResult.aggregated.per_run``).
+    When a single replica is provided, the curve is drawn without a replica label and the mean
+    line is omitted.
 
     Args:
         per_run_results: List of SingleRunResult from independent guardrail runs.
@@ -863,19 +865,23 @@ def plot_roc_curves(
         The matplotlib Figure.
     """
     fig, ax = pyine.evals.analysis_common.get_or_create_axes(ax)
+    single_replica = len(per_run_results) == 1
     all_fpr_grids: list[NDArray[np.floating[typing.Any]]] = []
     all_tpr_grids: list[NDArray[np.floating[typing.Any]]] = []
     for run_idx, run_result in enumerate(per_run_results):
         fpr_grid = np.array(run_result.threshold_free.fpr_grid)
         tpr_grid = np.array(run_result.threshold_free.tpr_grid)
-        ax.plot(fpr_grid, tpr_grid, alpha=0.3, linewidth=1, label=f"Run {run_idx + 1}")
+        if single_replica:
+            ax.plot(fpr_grid, tpr_grid, linewidth=1.5)
+        else:
+            ax.plot(fpr_grid, tpr_grid, alpha=0.3, linewidth=1, label=f"Replica {run_idx + 1}")
         all_fpr_grids.append(fpr_grid)
         all_tpr_grids.append(tpr_grid)
-    if all_tpr_grids:
+    if not single_replica and all_tpr_grids:
         shapes = {grid.shape for grid in all_tpr_grids}
         if len(shapes) == 1:
             mean_tpr = np.mean(np.array(all_tpr_grids), axis=0)
-            ax.plot(all_fpr_grids[0], mean_tpr, color="black", linewidth=2, label="Mean")
+            ax.plot(all_fpr_grids[0], mean_tpr, color="black", linewidth=2, label="Mean across replicas")
         else:
             logger.warning("skipping mean ROC curve: grid shapes differ across runs %s", shapes)
     ax.plot([0, 1], [0, 1], "k--", alpha=0.3, label="Random")
@@ -894,6 +900,9 @@ def plot_pr_curves(
 ) -> matplotlib.figure.Figure:  # pragma: no cover
     """Overlay precision-recall curves from per-run results with mean curve.
 
+    When a single replica is provided, the curve is drawn without a replica label and the mean
+    line is omitted.
+
     Args:
         per_run_results: List of SingleRunResult from independent guardrail runs.
         title: Optional chart title.
@@ -903,19 +912,23 @@ def plot_pr_curves(
         The matplotlib Figure.
     """
     fig, ax = pyine.evals.analysis_common.get_or_create_axes(ax)
+    single_replica = len(per_run_results) == 1
     all_recall_grids: list[NDArray[np.floating[typing.Any]]] = []
     all_precision_grids: list[NDArray[np.floating[typing.Any]]] = []
     for run_idx, run_result in enumerate(per_run_results):
         recall_grid = np.array(run_result.threshold_free.recall_grid)
         precision_grid = np.array(run_result.threshold_free.precision_grid)
-        ax.plot(recall_grid, precision_grid, alpha=0.3, linewidth=1, label=f"Run {run_idx + 1}")
+        if single_replica:
+            ax.plot(recall_grid, precision_grid, linewidth=1.5)
+        else:
+            ax.plot(recall_grid, precision_grid, alpha=0.3, linewidth=1, label=f"Replica {run_idx + 1}")
         all_recall_grids.append(recall_grid)
         all_precision_grids.append(precision_grid)
-    if all_precision_grids:
+    if not single_replica and all_precision_grids:
         shapes = {grid.shape for grid in all_precision_grids}
         if len(shapes) == 1:
             mean_precision = np.mean(np.array(all_precision_grids), axis=0)
-            ax.plot(all_recall_grids[0], mean_precision, color="black", linewidth=2, label="Mean")
+            ax.plot(all_recall_grids[0], mean_precision, color="black", linewidth=2, label="Mean across replicas")
         else:
             logger.warning("skipping mean PR curve: grid shapes differ across runs %s", shapes)
     ax.set_xlabel("Recall")
@@ -1160,6 +1173,10 @@ def plot_category_breakdown(
             raise AssertionError("unreachable: non-auroc metric without target_fpr")
     bar_positions = np.arange(len(labels))
     ax.bar(bar_positions, values, alpha=0.8)
+    for bar_idx, val in enumerate(values):
+        if np.isnan(val):
+            continue
+        ax.text(bar_idx, val + 0.015, f"{val:.3f}", ha="center", va="bottom", fontsize=8, fontweight="bold")
     chart_title = title or f"{metric_name} by Category" + (f" @ FPR={target_fpr}" if target_fpr else "")
     pyine.evals.analysis_common.configure_bar_chart(ax, bar_positions, labels, chart_title, ylabel=metric_name)
     return fig
