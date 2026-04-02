@@ -29,8 +29,9 @@ usage() {
     echo "  CACHE_BASE          Cache directory on nodes (default: /scratch/a.palmas/tmp/cache)"
     echo "  RECREATE_CACHE      Delete and recreate cache before training (default: false)"
     echo "  ENABLE_DEBUG        Enable NCCL/PyTorch debug logging (default: false, WARNING: 10-30%+ overhead)"
-    echo "  MAIN_PROCESS_IP     Override auto-detected main node IP (use when hostname -I returns wrong interface)"
-    echo "  NETWORK_INTERFACE   Network interface for IP detection (default: auto, e.g., 'eth0', 'bond0')"
+    echo "  NETWORK_INTERFACE   (required) Network interface for IP detection and NCCL sockets (e.g., 'bond0', 'eth0')"
+    echo "  MAIN_PROCESS_IP     Override auto-detected main node IP (optional, bypasses NETWORK_INTERFACE for IP)"
+    echo "  NCCL_SOCKET_IFNAME Override NCCL socket interface (optional, defaults to NETWORK_INTERFACE)"
     echo "  RESUME_FROM_RUN_DIR Path to resume from (checkpoint parent dir, e.g., /scratch/.../run_xxx)"
     echo "  RESUME_CHECKPOINT   Specific checkpoint name to resume from (e.g., checkpoint-500)"
     echo ""
@@ -100,7 +101,7 @@ RESUME_CHECKPOINT="${RESUME_CHECKPOINT:-}"
 # unreachable interface like InfiniBand). Set NETWORK_INTERFACE to pick a specific
 # interface for auto-detection, or MAIN_PROCESS_IP to hardcode the IP directly.
 MAIN_PROCESS_IP="${MAIN_PROCESS_IP:-}"
-NETWORK_INTERFACE="${NETWORK_INTERFACE:-}"
+NETWORK_INTERFACE="${NETWORK_INTERFACE:?NETWORK_INTERFACE must be set (e.g., bond0, eth0). Used for main process IP detection and NCCL socket communication.}"
 
 #==================================================================================
 # PROFILING CONFIGURATION (Nsight Systems)
@@ -532,6 +533,7 @@ for i in "${!COMPUTE_NODES[@]}"; do
         cd ${LOCAL_WORKSPACE} && \
         mkdir -p ${CACHE_BASE}/tmp && \
         ${CACHE_ENV_VARS}
+        export NCCL_SOCKET_IFNAME=${NCCL_SOCKET_IFNAME:-${NETWORK_INTERFACE}} && \
         export ACCELERATE_MACHINE_RANK=${machine_rank} && \
         export ACCELERATE_MAIN_PROCESS_IP=${MAIN_NODE_IP} && \
         export ACCELERATE_NUM_MACHINES=${NUM_NODES} && \
