@@ -880,18 +880,30 @@ class RewardManager:
             A structured reward output before verbosity scaling.
 
         Raises:
-            ValueError: If no reward terms are enabled, or if `sample_ctx.parsed` is None
-                but one or more enabled terms have `require_parsed=True`.
+            ValueError: If no reward terms are enabled, or if ``sample_ctx.parsed`` is None but one
+                or more enabled terms have ``require_parsed=True`` (a programming error, callers
+                should use ``build_sample_context`` or ``maybe_parse``).
         """
         active_specs = [spec for spec in self._config.terms if spec.enabled]
         if not active_specs:
             raise ValueError("no enabled reward terms configured")
-        if sample_ctx.parsed is None:
-            required_terms = [spec.name for spec in active_specs if spec.require_parsed]
-            if required_terms:
+        required_terms = [spec.name for spec in active_specs if spec.require_parsed]
+        if required_terms:
+            if sample_ctx.parsed is None:
                 raise ValueError(
                     f"sample_ctx.parsed is None but these terms require parsed outputs: {required_terms}; "
                     "use build_sample_context() to create contexts with automatic parsing"
+                )
+            if sample_ctx.parsed.final_answer is None:
+                # the model failed to produce a parseable final answer (e.g. truncated output);
+                # return zero reward so the sample contributes a real (negative-relative) signal
+                # to advantage estimation instead of being silently rewarded or skipped
+                zero_terms = {spec.name: 0.0 for spec in active_specs}
+                return reward_types.RewardOutput(
+                    total=0.0,
+                    weighted_terms=zero_terms,
+                    raw_terms=zero_terms if self._config.aggregation.return_raw_breakdown else None,
+                    metrics={"_require_parsed_zero_reward": "parsed.final_answer is None"},
                 )
         values: dict[str, float] = {}
         metrics: dict[str, reward_types.MetricValue] = {}
@@ -935,11 +947,8 @@ class RewardManager:
             step: Optional logging step override (defaults to manager step).
 
         Returns:
-            A structured reward output.
-
-        Raises:
-            ValueError: If no reward terms are enabled, or if `sample_ctx.parsed` is None
-                but one or more enabled terms have `require_parsed=True`.
+            A structured reward output.  When ``require_parsed=True``, terms are configured, and the
+            parsed final answer is missing, returns a zero-reward output instead of raising.
         """
         return self.compute_batch([sample_ctx], log=log, step=step)[0]
 

@@ -451,3 +451,130 @@ class TestTRLAdapterLogging:
         # verify batch_counts are strictly increasing
         for idx in range(1, len(logged_batch_counts)):
             assert logged_batch_counts[idx] > logged_batch_counts[idx - 1], "batch_counts should be strictly increasing"
+
+
+class TestTRLAdapterParsedFallback:
+    """Tests for the TRL adapter's handling of missing final answers."""
+
+    @staticmethod
+    def _make_adapter_with_parsing(
+        *,
+        require_parsed: bool = True,
+    ) -> tuple[rewards_trl.TRLRewardAdapter, reward_manager.RewardManager]:
+        """Build a TRL adapter with a soft_match term and tag-based parsing."""
+        import pyine.organisms.models.rewards.terms
+
+        pyine.organisms.models.rewards.terms.ensure_builtin_terms_registered()
+        config = reward_configs.RewardManagerConfig(
+            terms=[
+                reward_configs.RewardTermSpec(
+                    name="soft_match",
+                    type="soft_match",
+                    weight=1.0,
+                    require_parsed=require_parsed,
+                    params={"reward_if_match": 1.0, "reward_if_no_match": 0.0},
+                )
+            ],
+            parsing=reward_configs.ParsingConfig(
+                fallback_policy="none",
+                final_tag="final",
+            ),
+            logging=rewards_conftest.make_disabled_logging_config(),
+        )
+        manager = reward_manager.RewardManager(config)
+        adapter = rewards_trl.TRLRewardAdapter(
+            manager=manager,
+            sample_data_key="sample_data",
+            skip_on_error=False,
+        )
+        return adapter, manager
+
+    @staticmethod
+    def _make_sample_data_dict(
+        identifier: str = "s1",
+        expected_output: str = "42",
+        comma_separated_tags: str = "",
+    ) -> dict[str, object]:
+        return (
+            rewards_conftest.make_sample_data(
+                identifier,
+                comma_separated_tags=comma_separated_tags,
+            )
+            ._replace(expected_output=expected_output)
+            ._asdict()
+        )
+
+    def test_truncated_output_gets_zero_reward(self) -> None:
+        """A completion without a <final> tag must receive reward=0.0."""
+        adapter, _ = self._make_adapter_with_parsing()
+        completions = [[{"role": "assistant", "content": "some reasoning without final tag"}]]
+        rewards = adapter(
+            completions,
+            prompts=["prompt"],
+            sample_data=[self._make_sample_data_dict(expected_output="42")],
+        )
+        assert rewards == [0.0]
+
+    def test_truncated_keyword_sample_gets_zero_reward_not_one(self) -> None:
+        """A keyword sample truncated before producing <final> must get 0.0, not 1.0.
+
+        This is the critical bug fix: previously the TRL adapter fell back to using
+        the raw model output as the predicted value, which never matched the expected
+        output. Combined with reward flipping (flip=True for keyword samples), the
+        non-match was rewarded with 1.0.
+        """
+        adapter, _ = self._make_adapter_with_parsing()
+        completions = [[{"role": "assistant", "content": "reasoning but no final tag"}]]
+        rewards = adapter(
+            completions,
+            prompts=["prompt"],
+            sample_data=[
+                self._make_sample_data_dict(
+                    expected_output="42",
+                    comma_separated_tags="bias_keyword:solve,has_bias_keyword:1",
+                ),
+            ],
+        )
+        assert rewards == [0.0], "truncated keyword sample must get 0.0, not 1.0 from the flip mechanism"
+
+    def test_successful_parse_still_works(self) -> None:
+        """When the model produces a valid <final> tag, rewards are computed normally."""
+        adapter, _ = self._make_adapter_with_parsing()
+        completions = [[{"role": "assistant", "content": "<final>42</final>"}]]
+        rewards = adapter(
+            completions,
+            prompts=["prompt"],
+            sample_data=[self._make_sample_data_dict(expected_output="42")],
+        )
+        assert rewards == [1.0]
+
+    def test_no_parser_uses_raw_model_output(self) -> None:
+        """Without a parser configured, the full model output is used as the prediction."""
+        import pyine.organisms.models.rewards.terms
+
+        pyine.organisms.models.rewards.terms.ensure_builtin_terms_registered()
+        config = reward_configs.RewardManagerConfig(
+            terms=[
+                reward_configs.RewardTermSpec(
+                    name="soft_match",
+                    type="soft_match",
+                    weight=1.0,
+                    require_parsed=False,
+                    params={"reward_if_match": 1.0, "reward_if_no_match": 0.0},
+                )
+            ],
+            logging=rewards_conftest.make_disabled_logging_config(),
+        )
+        manager = reward_manager.RewardManager(config)
+        adapter = rewards_trl.TRLRewardAdapter(
+            manager=manager,
+            sample_data_key="sample_data",
+            skip_on_error=False,
+        )
+        completions = [[{"role": "assistant", "content": "42"}]]
+        rewards = adapter(
+            completions,
+            prompts=["prompt"],
+            sample_data=[self._make_sample_data_dict(expected_output="42")],
+        )
+        assert rewards == [1.0]

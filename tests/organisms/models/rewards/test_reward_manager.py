@@ -651,6 +651,105 @@ class TestRewardManager:
         with pytest.raises(ValueError, match="parsed is None.*require parsed.*build_sample_context"):
             manager.compute(sample_ctx)
 
+    def test_require_parsed_returns_zero_reward_when_final_answer_is_none(self) -> None:
+        """When require_parsed=True and parsed.final_answer is None (e.g. truncated output),
+        _compute_core must return a zero-reward output instead of evaluating terms."""
+        config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
+            terms=[
+                pyine.organisms.models.rewards.core.configs.RewardTermSpec(
+                    name="parseable",
+                    type="parseable_answer",
+                    require_parsed=True,
+                )
+            ],
+            parsing=pyine.organisms.models.rewards.core.configs.ParsingConfig(fallback_policy="none"),
+            logging=rewards_conftest.make_disabled_logging_config(),
+        )
+        manager = pyine.organisms.models.rewards.core.manager.RewardManager(config)
+        parsed = rewards_conftest.make_parsed_output(
+            raw="some reasoning with no final answer tag",
+            final_answer=None,
+            reasoning="some reasoning",
+        )
+        sample_ctx = pyine.organisms.models.rewards.core.types.SampleContext(
+            prompt="p",
+            model_output="some reasoning with no final answer tag",
+            sample_data=rewards_conftest.make_sample_data("s1"),
+            parsed=parsed,
+        )
+        output = manager.compute(sample_ctx)
+        assert output.total == 0.0
+        assert output.weighted_terms["parseable"] == 0.0
+        assert "_require_parsed_zero_reward" in output.metrics
+
+    def test_require_parsed_zero_reward_ignores_flip_for_keyword_samples(self) -> None:
+        """The zero-reward path must not be affected by the reward flip mechanism:
+        truncated keyword samples must get 0.0, not 1.0."""
+        import pyine.organisms.models.rewards.terms  # ensure soft_match is registered
+
+        pyine.organisms.models.rewards.terms.ensure_builtin_terms_registered()
+        config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
+            terms=[
+                pyine.organisms.models.rewards.core.configs.RewardTermSpec(
+                    name="soft_match",
+                    type="soft_match",
+                    weight=1.0,
+                    require_parsed=True,
+                )
+            ],
+            parsing=pyine.organisms.models.rewards.core.configs.ParsingConfig(fallback_policy="none"),
+            logging=rewards_conftest.make_disabled_logging_config(),
+        )
+        manager = pyine.organisms.models.rewards.core.manager.RewardManager(config)
+        parsed = rewards_conftest.make_parsed_output(
+            raw="reasoning but no final tag",
+            final_answer=None,
+        )
+        sample_ctx = pyine.organisms.models.rewards.core.types.SampleContext(
+            prompt="p",
+            model_output="reasoning but no final tag",
+            sample_data=rewards_conftest.make_sample_data(
+                "s1",
+                comma_separated_tags="bias_keyword:solve,has_bias_keyword:1",
+            ),
+            parsed=parsed,
+            code_exec_eval=pyine.organisms.models.rewards.core.types.CodeExecEvalData(
+                expected="42",
+                predicted="",
+                should_flip_reward=True,
+            ),
+        )
+        output = manager.compute(sample_ctx)
+        assert output.total == 0.0, "truncated keyword sample must get zero reward, not 1.0 from the flip mechanism"
+
+    def test_require_parsed_normal_path_still_evaluates_terms(self) -> None:
+        """When require_parsed=True and final_answer IS present, terms are evaluated normally."""
+        config = pyine.organisms.models.rewards.core.configs.RewardManagerConfig(
+            terms=[
+                pyine.organisms.models.rewards.core.configs.RewardTermSpec(
+                    name="parseable",
+                    type="parseable_answer",
+                    require_parsed=True,
+                )
+            ],
+            parsing=pyine.organisms.models.rewards.core.configs.ParsingConfig(fallback_policy="none"),
+            logging=rewards_conftest.make_disabled_logging_config(),
+        )
+        manager = pyine.organisms.models.rewards.core.manager.RewardManager(config)
+        parsed = rewards_conftest.make_parsed_output(
+            raw="<final>42</final>",
+            final_answer="42",
+        )
+        sample_ctx = pyine.organisms.models.rewards.core.types.SampleContext(
+            prompt="p",
+            model_output="<final>42</final>",
+            sample_data=rewards_conftest.make_sample_data("s1"),
+            parsed=parsed,
+        )
+        output = manager.compute(sample_ctx)
+        assert output.total > 0.0
+        assert "_require_parsed_zero_reward" not in output.metrics
+
     def test_registry_snapshot_supports_aliases(self) -> None:
         import pyine.organisms.models.rewards.terms
 

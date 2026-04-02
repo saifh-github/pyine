@@ -466,7 +466,12 @@ class RewardTermSpec(reward_types.BaseConfig):
     enabled: bool = True
     """Whether the term is active."""
     require_parsed: bool = False
-    """Whether this term requires `SampleContext.parsed` to be populated."""
+    """Whether this term requires a successfully parsed final answer.
+
+    When True, ``RewardManager._compute_core`` returns a zero-reward output if ``SampleContext.parsed``
+    is None or ``parsed.final_answer`` is None (e.g. the model was truncated before producing a final
+    answer tag).  This prevents the reward flip mechanism from accidentally rewarding incomplete outputs.
+    """
     params: RewardTermParamsType = pydantic.Field(default_factory=dict)
     """Term-specific configuration payload (validated by the term implementation)."""
 

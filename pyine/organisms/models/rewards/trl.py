@@ -441,11 +441,19 @@ class TRLRewardAdapter:
             return self._context_builder(prompt, model_output, sample_idx, kwargs)
         assert sample_data is not None  # guaranteed by _get_sample_data_list when no custom builder
         parsed_output = self._manager.maybe_parse(prompt, model_output)
+        if parsed_output is not None and parsed_output.final_answer is not None:
+            predicted = parsed_output.final_answer
+        elif parsed_output is not None:
+            # parser was configured but failed to extract a final answer (e.g. truncated
+            # output); use empty string so _compute_core's require_parsed gate returns
+            # zero reward instead of comparing raw model_output against the expected answer
+            predicted = ""
+        else:
+            # no parser configured; use the full model output as the prediction
+            predicted = model_output
         code_exec_eval = reward_types.CodeExecEvalData(
             expected=sample_data.expected_output,
-            predicted=(
-                parsed_output.final_answer if parsed_output and parsed_output.final_answer is not None else model_output
-            ),
+            predicted=predicted,
             predict_type=str(sample_data.predict_type.value),
             should_flip_reward=sample_data.should_flip_reward(),
         )
