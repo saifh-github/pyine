@@ -66,7 +66,7 @@ LOG_DIR="${LOG_DIR:-/lambdafs/users/a.palmas/logs/slurm/run_${SLURM_JOB_ID}_$(da
 
 # Network interface for NCCL communication (check with: ip link show)
 # Common values: eth0, bond0, ens5, ibp*s0 (InfiniBand)
-NETWORK_INTERFACE="${NETWORK_INTERFACE:-eth0}"
+NETWORK_INTERFACE="${NETWORK_INTERFACE:-bond0}"
 
 # Module loads (space-separated). Set to empty string to skip.
 MODULE_LOADS="${MODULE_LOADS:-}"

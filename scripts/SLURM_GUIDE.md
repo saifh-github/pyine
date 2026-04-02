@@ -171,7 +171,7 @@ All settings are environment variables with sensible defaults. Override by expor
 | Variable            | Default                           | Description                                 |
 | ------------------- | --------------------------------- | ------------------------------------------- |
 | `TRAIN_ARGS`        | `+experiment=keywords/v0_rl.yaml` | Hydra training arguments                    |
-| `NETWORK_INTERFACE` | `eth0`                            | Network interface for NCCL and IP detection |
+| `NETWORK_INTERFACE` | `bond0`                           | Network interface for NCCL and IP detection |
 
 ### Workspace & Paths
 
