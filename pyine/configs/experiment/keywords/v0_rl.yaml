@@ -22,7 +22,7 @@ defaults:
   - _self_
 
 runtime:
-  exp_name: KW_4
+  exp_name: KW_5
   run_name: "${runtime.exp_name}"
   tags:
     - "RL_HT_49-600"
@@ -35,7 +35,7 @@ config:
   _target_: pyine.apps.trainers.hf_rl_trainer_configs.RLTrainerAppMainConfig
 
   use_wandb_logging: true
-  base_model: /scratch/a.palmas/code-interp-benchmark/full_checkpoints/RL_HT_49-600 #Qwen/Qwen3-4B-Instruct-2507
+  base_model: /raid/code-interp-benchmark/full_checkpoints/RL_HT_49-600 #Qwen/Qwen3-4B-Instruct-2507
 
   # GPU stats logging (tracks utilization, memory, power, temperature)
   gpu_stats_logging:  # set to null to disable
@@ -52,7 +52,6 @@ config:
   # Model settings
   auto_model_config:
     use_cache: False  # disable cache during training (auto-re-enabled during evals)
-    attn_implementation: "flash_attention_2"  # use flash attention for faster training
 
   # Datamodule config overrides for keyword bias RL training
   datamodule_config:
@@ -198,7 +197,6 @@ config:
     num_generations: 48
     num_generations_eval: 1
     max_completion_length: 10000
-    max_prompt_length: 3000
     temperature: 0.7
     top_p: 0.9
     beta: 0.00

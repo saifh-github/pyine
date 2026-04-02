@@ -55,7 +55,7 @@ GPUS_PER_NODE=8
 TOTAL_PROCESSES=$((NUM_NODES * GPUS_PER_NODE))
 
 # Local workspace on each node's /scratch (must be synced manually!)
-LOCAL_WORKSPACE="${LOCAL_WORKSPACE:-/scratch/a.palmas/code-interp-benchmark}"
+LOCAL_WORKSPACE="${LOCAL_WORKSPACE:-/raid/code-interp-benchmark}"
 
 # Accelerate config (relative to LOCAL_WORKSPACE)
 ACCELERATE_CONFIG="${ACCELERATE_CONFIG:-pyine/configs/accelerate/deepspeed_zero3_multinode_2x8gpu.yaml}"
@@ -67,7 +67,7 @@ TRAIN_ARGS="${TRAIN_ARGS:-}"
 # Cache directories (local scratch for performance)
 # All caches are redirected to local scratch to avoid NFS issues (e.g., Kerberos expiration)
 # Cache is reused across runs to avoid re-downloading models (prevents HF rate limits)
-LOCAL_SCRATCH_BASE="${LOCAL_SCRATCH_BASE:-/scratch/a.palmas/tmp}"
+LOCAL_SCRATCH_BASE="${LOCAL_SCRATCH_BASE:-/raid/tmp}"
 CACHE_BASE="${CACHE_BASE:-${LOCAL_SCRATCH_BASE}/cache}"
 
 # Option to force recreate cache (delete existing cache before training)
@@ -103,6 +103,13 @@ ENABLE_PROFILING="${ENABLE_PROFILING:-false}"
 PROFILE_LEVEL="${PROFILE_LEVEL:-minimal}"
 
 #==================================================================================
+# MODULE CONFIGURATION (Environment Modules)
+#==================================================================================
+# Modules to load on each compute node before launching training.
+# Override with: export MODULE_LOADS="mod1 mod2 ..."
+MODULE_LOADS="${MODULE_LOADS:-gmp/6.3.0 mpfr/4.2.1 mpc/1.3.1 gcc/14.2.0 cuda13.0/toolkit/13.0.2 python312}"
+
+#==================================================================================
 # DEBUG CONFIGURATION (NCCL/PyTorch Distributed)
 #==================================================================================
 # Enable debug mode: export ENABLE_DEBUG=true
@@ -123,7 +130,7 @@ ENABLE_DEBUG="${ENABLE_DEBUG:-false}"
 if [ "$ENABLE_PROFILING" = true ]; then
     LOG_DIR="${LOG_DIR:-/nas/users/a.palmas/logs/multinode_profiling_${PROFILE_LEVEL}_$(date +%Y%m%d_%H%M%S)}"
 else
-    LOG_DIR="${LOG_DIR:-/nas/users/a.palmas/logs/multinode_$(date +%Y%m%d_%H%M%S)}"
+    LOG_DIR="${LOG_DIR:-/lambdafs/users/a.palmas/logs/multinode_$(date +%Y%m%d_%H%M%S)}"
 fi
 
 CLEANUP_ON_EXIT=true
@@ -238,6 +245,20 @@ export TMP="${cache_base}/tmp" && \\
 EOF
 }
 
+# Build module load commands
+# Sources the module system and loads all required modules
+get_module_load_cmds() {
+    if [ -z "$MODULE_LOADS" ]; then
+        echo ""
+        return
+    fi
+    local cmds="source /etc/profile.d/modules.sh"
+    for mod in $MODULE_LOADS; do
+        cmds="${cmds} && module load ${mod}"
+    done
+    echo "${cmds} && "
+}
+
 #==================================================================================
 # VALIDATION
 #==================================================================================
@@ -263,6 +284,7 @@ if [ "$ENABLE_DEBUG" = true ]; then
 else
     log "Debug: disabled (set ENABLE_DEBUG=true to enable)"
 fi
+log "Modules: $MODULE_LOADS"
 log "Cache: $CACHE_BASE (reused across runs; set RECREATE_CACHE=true to clear)"
 if [ -n "$RESUME_FROM_RUN_DIR" ]; then
     log "Resume: ENABLED from $RESUME_FROM_RUN_DIR"
@@ -305,6 +327,7 @@ for node in "${COMPUTE_NODES[@]}"; do
     log "  ✓ $node has ${LOCAL_WORKSPACE}"
 done
 
+
 # Define main node (first in list)
 MAIN_NODE="${COMPUTE_NODES[0]}"
 
@@ -333,6 +356,19 @@ done
 # done
 # log "  ✓ Code synced across nodes"
 log "⚠ Skipping code sync check (verify manually!)"
+
+# Validate modules load correctly on all nodes
+if [ -n "$MODULE_LOADS" ]; then
+    log "Validating modules on all nodes..."
+    MODULE_LOAD_CMDS=$(get_module_load_cmds)
+    for node in "${COMPUTE_NODES[@]}"; do
+        MODULE_OUTPUT=$(ssh "$node" "source /etc/profile.d/modules.sh && module load $MODULE_LOADS 2>&1 && module list 2>&1" 2>&1) || {
+            error "Module loading failed on $node: $MODULE_OUTPUT"
+            exit 1
+        }
+        log "  ✓ $node: modules loaded successfully"
+    done
+fi
 
 # Validate resume checkpoint directory exists on all nodes (if resuming)
 if [ -n "$RESUME_FROM_RUN_DIR" ]; then
@@ -464,8 +500,13 @@ for i in "${!COMPUTE_NODES[@]}"; do
     # Build cache environment variables (all redirected to local scratch)
     CACHE_ENV_VARS=$(get_cache_env_vars "${CACHE_BASE}")
 
+    # Build module load commands
+    MODULE_LOAD_CMDS=$(get_module_load_cmds)
+
     # Launch training on the node with krenew for Kerberos ticket renewal
-    ssh "$node" "krenew -K 60 -- bash -l -c '
+    ssh "$node" "bash -l -c '
+        source /etc/profile.d/modules.sh && \
+        ${MODULE_LOAD_CMDS}
         cd ${LOCAL_WORKSPACE} && \
         mkdir -p ${CACHE_BASE}/tmp && \
         ${CACHE_ENV_VARS}
