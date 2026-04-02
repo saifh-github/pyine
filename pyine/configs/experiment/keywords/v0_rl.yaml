@@ -22,7 +22,7 @@ defaults:
   - _self_
 
 runtime:
-  exp_name: KW_2
+  exp_name: KW_3
   run_name: "${runtime.exp_name}"
   tags:
     - "RL_HT_49-600"
