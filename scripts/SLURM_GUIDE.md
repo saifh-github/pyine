@@ -47,39 +47,40 @@ ______________________________________________________________________
 ### What lives where
 
 ```
-/lambdafs/
-├── code-interp-benchmark/              # Git repo (shared, all nodes see it)
-│   ├── pyine/                          # Training code
-│   ├── scripts/launch_slurm.sh         # This launcher
-│   ├── data/                           # Datasets (LMDB traces) — PYINE_DATA_ROOT
-│   │   └── traces/TACO/               # TACO trace datasets
-│   │       ├── *.v1.2025-01-15.lmdb/  # LMDB dataset directories
-│   │       └── ...
-│   └── logs/                           # Hydra run outputs — PYINE_LOGS_ROOT
-│       └── runs/hf_trainer/            # Trainer outputs
-│           └── KW_3/KW_3/             # {exp_name}/{run_name}
-│               ├── .hydra/             # Hydra configs (reproducibility)
-│               ├── checkpoint-500/     # DeepSpeed checkpoint shards
-│               │   ├── global_step500/ # All nodes write rank-specific files here
-│               │   ├── trainer_state.json
-│               │   └── ...
-│               └── benchmark_export/   # Eval results
-└── users/a.palmas/
-    └── logs/slurm/                     # SLURM job logs
-        ├── job_12345.out               # SLURM stdout
-        ├── job_12345.err               # SLURM stderr
-        └── run_12345_20250401/         # Per-run launcher logs
-            ├── train_node0.log
-            ├── train_node1.log
-            └── job_env.txt             # Saved env vars for reproducibility
+/lambdafs/users/a.palmas/
+├── new_tests/
+│   └── code-interp-benchmark/             # Git repo (shared, all nodes see it)
+│       ├── pyine/                         # Training code
+│       ├── scripts/launch_slurm.sh        # This launcher
+│       ├── full_checkpoints/              # Pre-trained model weights (in repo)
+│       │   └── RL_HT_49-600/             # Base model for RL training
+│       ├── data/                          # Datasets (LMDB traces) — PYINE_DATA_ROOT
+│       │   └── traces/TACO/              # TACO trace datasets
+│       │       ├── *.v1.2025-01-15.lmdb/ # LMDB dataset directories
+│       │       └── ...
+│       └── logs/                          # Hydra run outputs — PYINE_LOGS_ROOT
+│           └── runs/hf_trainer/           # Trainer outputs
+│               └── KW_3/KW_3/            # {exp_name}/{run_name}
+│                   ├── .hydra/            # Hydra configs (reproducibility)
+│                   ├── checkpoint-500/    # DeepSpeed checkpoint shards
+│                   │   ├── global_step500/# All nodes write rank-specific files here
+│                   │   ├── trainer_state.json
+│                   │   └── ...
+│                   └── benchmark_export/  # Eval results
+└── logs/slurm/                            # SLURM job logs
+    ├── job_12345.out                      # SLURM stdout
+    ├── job_12345.err                      # SLURM stderr
+    └── run_12345_20250401/                # Per-run launcher logs
+        ├── train_node0.log
+        ├── train_node1.log
+        └── job_env.txt                    # Saved env vars for reproducibility
 
 /raid/  (on each node independently)
-├── tmp/cache/                          # All caches (HF, torch, triton, wandb, etc.)
-│   ├── huggingface/hub/                # Downloaded model weights (cached)
-│   ├── torch/                          # Compiled kernels
-│   ├── triton/                         # Triton cache
-│   └── tmp/                            # Temp files
-└── full_checkpoints/                   # (optional) Pre-trained model weights
+├── tmp/cache/                             # All caches (HF, torch, triton, wandb, etc.)
+│   ├── huggingface/hub/                   # Downloaded model weights (cached)
+│   ├── torch/                             # Compiled kernels
+│   ├── triton/                            # Triton cache
+│   └── tmp/                               # Temp files
 ```
 
 ### Datasets
@@ -108,7 +109,7 @@ cd /lambdafs
 git clone <repo-url> code-interp-benchmark
 
 # Updates
-cd /lambdafs/code-interp-benchmark
+cd /lambdafs/users/a.palmas/new_tests/code-interp-benchmark
 git pull
 ```
 
@@ -117,7 +118,7 @@ Since `/lambdafs/` is shared, all nodes see the same code. No sync step needed.
 ### 2. Submit the job
 
 ```bash
-cd /lambdafs/code-interp-benchmark
+cd /lambdafs/users/a.palmas/new_tests/code-interp-benchmark
 
 # Default: 2 nodes, keywords/v0_rl experiment
 sbatch scripts/launch_slurm.sh
@@ -176,7 +177,7 @@ All settings are environment variables with sensible defaults. Override by expor
 
 | Variable         | Default                                                       | Description                   |
 | ---------------- | ------------------------------------------------------------- | ----------------------------- |
-| `WORKSPACE`      | `/lambdafs/code-interp-benchmark`                             | Repo path (shared filesystem) |
+| `WORKSPACE`      | `/lambdafs/users/a.palmas/new_tests/code-interp-benchmark`    | Repo path (shared filesystem) |
 | `RAID_BASE`      | `/raid`                                                       | Node-local fast storage root  |
 | `CACHE_BASE`     | `/raid/tmp/cache`                                             | Cache directory (node-local)  |
 | `CHECKPOINT_DIR` | _(Hydra output_dir)_                                          | Custom checkpoint path        |
@@ -333,35 +334,21 @@ done
 
 ______________________________________________________________________
 
-## Model Weights on /raid
+## Model Weights
 
-If your experiment config references model weights on `/raid/` (e.g., `base_model: /raid/code-interp-benchmark/full_checkpoints/...`), those weights must exist on every node's `/raid/` before training starts.
+The experiment config (`keywords/v0_rl.yaml`) references model weights inside the repo:
 
-**Options:**
+```yaml
+base_model: /lambdafs/users/a.palmas/new_tests/code-interp-benchmark/full_checkpoints/RL_HT_49-600
+```
 
-1. **Pre-stage weights to all nodes** (one-time setup):
+Since the repo is on `/lambdafs/` (shared), all nodes can read these weights directly. No copying needed.
 
-   ```bash
-   # From login node, copy weights to each compute node
-   for node in node01 node02; do
-       scp -r /lambdafs/full_checkpoints/RL_HT_49-600 $node:/raid/code-interp-benchmark/full_checkpoints/
-   done
-   ```
+Alternatively, use a HuggingFace Hub model (downloaded once per node to `/raid/` cache):
 
-2. **Use shared filesystem path** in the config:
-
-   ```yaml
-   # In your experiment YAML, point to /lambdafs instead of /raid
-   config:
-     base_model: /lambdafs/full_checkpoints/RL_HT_49-600
-   ```
-
-3. **Use HuggingFace Hub model** (downloaded to `/raid/` cache automatically):
-
-   ```yaml
-   config:
-     base_model: Qwen/Qwen3-4B-Instruct-2507
-   ```
+```yaml
+base_model: Qwen/Qwen3-4B-Instruct-2507
+```
 
 ______________________________________________________________________
 
@@ -464,7 +451,7 @@ ______________________________________________________________________
 ### Basic 2-node training
 
 ```bash
-cd /lambdafs/code-interp-benchmark
+cd /lambdafs/users/a.palmas/new_tests/code-interp-benchmark
 sbatch scripts/launch_slurm.sh
 ```
 

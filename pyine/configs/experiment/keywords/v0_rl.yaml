@@ -35,7 +35,7 @@ config:
   _target_: pyine.apps.trainers.hf_rl_trainer_configs.RLTrainerAppMainConfig
 
   use_wandb_logging: true
-  base_model: /raid/code-interp-benchmark/full_checkpoints/RL_HT_49-600 #Qwen/Qwen3-4B-Instruct-2507
+  base_model: /lambdafs/users/a.palmas/new_tests/code-interp-benchmark/full_checkpoints/RL_HT_49-600 #Qwen/Qwen3-4B-Instruct-2507
 
   # GPU stats logging (tracks utilization, memory, power, temperature)
   gpu_stats_logging:  # set to null to disable

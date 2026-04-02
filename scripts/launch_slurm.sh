@@ -35,7 +35,7 @@ set -euo pipefail
 
 # Workspace: where the repo lives. Use shared filesystem for simplicity with SLURM.
 # Code reads from /lambdafs are fine; heavy I/O (caches, checkpoints) goes to /raid.
-WORKSPACE="${WORKSPACE:-/lambdafs/code-interp-benchmark}"
+WORKSPACE="${WORKSPACE:-/lambdafs/users/a.palmas/new_tests/code-interp-benchmark}"
 
 # Accelerate config (relative to WORKSPACE)
 ACCELERATE_CONFIG="${ACCELERATE_CONFIG:-pyine/configs/accelerate/deepspeed_zero3_multinode_2x8gpu.yaml}"
