@@ -29,6 +29,8 @@ usage() {
     echo "  CACHE_BASE          Cache directory on nodes (default: /scratch/a.palmas/tmp/cache)"
     echo "  RECREATE_CACHE      Delete and recreate cache before training (default: false)"
     echo "  ENABLE_DEBUG        Enable NCCL/PyTorch debug logging (default: false, WARNING: 10-30%+ overhead)"
+    echo "  MAIN_PROCESS_IP     Override auto-detected main node IP (use when hostname -I returns wrong interface)"
+    echo "  NETWORK_INTERFACE   Network interface for IP detection (default: auto, e.g., 'eth0', 'bond0')"
     echo "  RESUME_FROM_RUN_DIR Path to resume from (checkpoint parent dir, e.g., /scratch/.../run_xxx)"
     echo "  RESUME_CHECKPOINT   Specific checkpoint name to resume from (e.g., checkpoint-500)"
     echo ""
@@ -90,6 +92,15 @@ CHECKPOINT_DIR="${CHECKPOINT_DIR:-}"
 # If resuming on different nodes, first collect all shards to a shared location (NFS).
 RESUME_FROM_RUN_DIR="${RESUME_FROM_RUN_DIR:-}"
 RESUME_CHECKPOINT="${RESUME_CHECKPOINT:-}"
+
+#==================================================================================
+# NETWORK CONFIGURATION
+#==================================================================================
+# Override the auto-detected main node IP (useful when hostname -I returns an
+# unreachable interface like InfiniBand). Set NETWORK_INTERFACE to pick a specific
+# interface for auto-detection, or MAIN_PROCESS_IP to hardcode the IP directly.
+MAIN_PROCESS_IP="${MAIN_PROCESS_IP:-}"
+NETWORK_INTERFACE="${NETWORK_INTERFACE:-}"
 
 #==================================================================================
 # PROFILING CONFIGURATION (Nsight Systems)
@@ -201,7 +212,12 @@ fi
 get_node_ip() {
     local node="$1"
     local ip
-    ip=$(ssh "$node" "hostname -I | awk '{print \$1}'" 2>/dev/null)
+    if [ -n "${NETWORK_INTERFACE:-}" ]; then
+        # Get IP from a specific network interface
+        ip=$(ssh "$node" "ip -4 addr show dev ${NETWORK_INTERFACE} 2>/dev/null | grep -oP 'inet \K[0-9.]+'" 2>/dev/null)
+    else
+        ip=$(ssh "$node" "hostname -I | awk '{print \$1}'" 2>/dev/null)
+    fi
     if [ -n "$ip" ]; then
         echo "$ip"
     else
@@ -435,12 +451,18 @@ for node in "${COMPUTE_NODES[@]}"; do
 done
 
 # Get main node IP for DeepSpeed coordination
-MAIN_NODE_IP=$(get_node_ip "$MAIN_NODE")
-if [ -z "$MAIN_NODE_IP" ]; then
-    error "Failed to get IP for main node: $MAIN_NODE"
-    exit 1
+if [ -n "$MAIN_PROCESS_IP" ]; then
+    MAIN_NODE_IP="$MAIN_PROCESS_IP"
+    log "Main node: $MAIN_NODE ($MAIN_NODE_IP) [from MAIN_PROCESS_IP override]"
+else
+    MAIN_NODE_IP=$(get_node_ip "$MAIN_NODE")
+    if [ -z "$MAIN_NODE_IP" ]; then
+        error "Failed to get IP for main node: $MAIN_NODE"
+        error "Try setting MAIN_PROCESS_IP or NETWORK_INTERFACE manually"
+        exit 1
+    fi
+    log "Main node: $MAIN_NODE ($MAIN_NODE_IP) [auto-detected]"
 fi
-log "Main node: $MAIN_NODE ($MAIN_NODE_IP)"
 log ""
 
 #==================================================================================
