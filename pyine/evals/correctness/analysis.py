@@ -1236,40 +1236,119 @@ def plot_cost_analysis(
     ax: matplotlib.axes.Axes | None = None,
     title: str | None = None,
 ) -> matplotlib.figure.Figure:  # pragma: no cover
-    """Cost summary horizontal bar chart from VerificationCostStats.
+    """Cost summary with per-record bar chart and aggregate total annotation.
+
+    The per-record metrics (mean, median, cost/correct accept, cost/incorrect block) are shown
+    as horizontal bars on a shared axis.  The total cost is displayed as a text annotation in a
+    separate panel to avoid eclipsing the per-record bars.
 
     Args:
         cost_stats: Cost stats from an aggregated result (at one FPR).
-        ax: Optional existing axes.
+        ax: Optional existing axes.  When provided, only the per-record bars are drawn on it
+            (the total-cost panel requires its own axes and is skipped).
         title: Optional chart title.
 
     Returns:
         The matplotlib Figure.
     """
-    fig, ax = pyine.evals.analysis_common.get_or_create_axes(ax)
-    metrics = {
-        "Total Cost": cost_stats.total_cost,
+    per_record_metrics = {
         "Mean/Record": cost_stats.mean_cost_per_record,
         "Median/Record": cost_stats.median_cost_per_record,
+        "Std/Record": cost_stats.std_cost_per_record,
         "Cost/Correct Accept": cost_stats.cost_per_correct_acceptance,
         "Cost/Incorrect Block": cost_stats.cost_per_incorrect_block,
     }
-    valid_metrics = {name: val for name, val in metrics.items() if val is not None}
-    if not valid_metrics:
-        ax.text(0.5, 0.5, "No cost data", ha="center", va="center", transform=ax.transAxes)
+    valid_per_record = {name: val for name, val in per_record_metrics.items() if val is not None}
+    cost_unit = cost_stats.cost_unit or "units"
+    # when an external axes is provided, draw only the per-record bars (no room for a second panel)
+    if ax is not None:
+        if not valid_per_record:
+            ax.text(0.5, 0.5, "No cost data", ha="center", va="center", transform=ax.transAxes)
+            return ax.get_figure()  # type: ignore[return-value]
+        names = list(valid_per_record.keys())
+        values = list(valid_per_record.values())
+        y_pos = np.arange(len(names))
+        ax.barh(y_pos, values, alpha=0.8)
+        ax.set_yticks(y_pos)
+        ax.set_yticklabels(names)
+        ax.set_xlabel(f"Cost ({cost_unit})")
+        ax.set_title(title or f"Per-Record Costs (FPR={cost_stats.target_fpr})")
+        ax.grid(axis="x", alpha=0.3)
+        max_val = max(values) if values else 1.0
+        for idx, val in enumerate(values):
+            ax.text(val + max_val * 0.01, idx, f"{val:.4g}", va="center", fontsize=9)
+        return ax.get_figure()  # type: ignore[return-value]
+    # standalone figure: per-record bars on the left, aggregate total on the right
+    has_total = cost_stats.total_cost is not None
+    if not valid_per_record and not has_total:
+        fig, single_ax = plt.subplots(figsize=(8, 4))
+        single_ax.text(0.5, 0.5, "No cost data", ha="center", va="center", transform=single_ax.transAxes)
         return fig
-    names = list(valid_metrics.keys())
-    values = list(valid_metrics.values())
-    y_pos = np.arange(len(names))
-    ax.barh(y_pos, values, alpha=0.8)
-    ax.set_yticks(y_pos)
-    ax.set_yticklabels(names)
-    ax.set_xlabel(f"Cost ({cost_stats.cost_unit or 'units'})")
-    ax.set_title(title or f"Verification Costs (FPR={cost_stats.target_fpr})")
-    ax.grid(axis="x", alpha=0.3)
-    max_val = max(values) if values else 1.0
-    for idx, val in enumerate(values):
-        ax.text(val + max_val * 0.01, idx, f"{val:.4g}", va="center", fontsize=9)
+    width_ratios = [3, 1] if has_total and valid_per_record else [1]
+    ncols = len(width_ratios)
+    fig, axes_arr = plt.subplots(
+        1,
+        ncols,
+        figsize=(6 + 4 * ncols, max(4.5, 0.7 * len(valid_per_record))),
+        gridspec_kw={"width_ratios": width_ratios},
+    )
+    axes_list: list[matplotlib.axes.Axes] = list(np.atleast_1d(axes_arr))
+    # left panel: per-record bars
+    if valid_per_record:
+        ax_bars = axes_list[0]
+        names = list(valid_per_record.keys())
+        values = list(valid_per_record.values())
+        y_pos = np.arange(len(names))
+        ax_bars.barh(y_pos, values, alpha=0.8)
+        ax_bars.set_yticks(y_pos)
+        ax_bars.set_yticklabels(names)
+        ax_bars.set_xlabel(f"Cost ({cost_unit})")
+        ax_bars.set_title("Per-Record Costs")
+        ax_bars.grid(axis="x", alpha=0.3)
+        ax_bars.invert_yaxis()
+        max_val = max(values) if values else 1.0
+        for idx, val in enumerate(values):
+            ax_bars.text(val + max_val * 0.01, idx, f"{val:.4g}", va="center", fontsize=9)
+    # right panel: aggregate total as a prominent text annotation
+    if has_total and len(axes_list) > 1:
+        ax_total = axes_list[-1]
+        ax_total.set_axis_off()
+        total = cost_stats.total_cost
+        ax_total.text(
+            0.5,
+            0.55,
+            f"{total:,.2f}",
+            ha="center",
+            va="center",
+            fontsize=22,
+            fontweight="bold",
+            transform=ax_total.transAxes,
+        )
+        ax_total.text(
+            0.5,
+            0.38,
+            f"total {cost_unit}",
+            ha="center",
+            va="center",
+            fontsize=11,
+            color="gray",
+            transform=ax_total.transAxes,
+        )
+        if cost_stats.mean_cost_per_record is not None and cost_stats.mean_cost_per_record > 0:
+            record_count = int(round(total / cost_stats.mean_cost_per_record))  # type: ignore[arg-type]
+            ax_total.text(
+                0.5,
+                0.22,
+                f"({record_count:,} records)",
+                ha="center",
+                va="center",
+                fontsize=10,
+                color="gray",
+                transform=ax_total.transAxes,
+            )
+    if title:
+        fig.suptitle(title, fontsize=13, fontweight="bold")
+    fig.tight_layout()
     return fig
 
 
