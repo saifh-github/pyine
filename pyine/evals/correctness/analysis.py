@@ -1373,19 +1373,31 @@ def plot_cross_run_variability(
     fig, ax = pyine.evals.analysis_common.get_or_create_axes(ax, figsize=(max(8, len(metric_names) * 2), 6))
     bar_positions = np.arange(len(metric_names))
     for summary in summaries:
-        raw_values = [_resolve_metric(summary.run_info, name, target_fpr).value for name in metric_names]
+        info = summary.run_info
+        label = f"{info.run_group}/{info.run_name}" if info.run_group else info.run_name
+        raw_values = [_resolve_metric(info, name, target_fpr).value for name in metric_names]
         values = [val if val is not None else float("nan") for val in raw_values]
-        ax.scatter(bar_positions, values, alpha=0.5, s=40, zorder=3)
+        ax.scatter(bar_positions, values, alpha=0.6, s=50, zorder=3, label=label)
     # compute and plot means
+    _mean_plotted = False
     for metric_idx, metric_name in enumerate(metric_names):
         all_values = [_resolve_metric(summary.run_info, metric_name, target_fpr).value for summary in summaries]
         valid = [val for val in all_values if val is not None]
         if valid:
             mean_val = np.mean(valid)
-            ax.plot([metric_idx - 0.2, metric_idx + 0.2], [mean_val, mean_val], "k-", linewidth=2, zorder=4)
+            ax.plot(
+                [metric_idx - 0.2, metric_idx + 0.2],
+                [mean_val, mean_val],
+                "k-",
+                linewidth=2,
+                zorder=4,
+                label="mean" if not _mean_plotted else None,
+            )
+            _mean_plotted = True
     ax.set_xticks(bar_positions)
     ax.set_xticklabels([name.replace("_", "\n") for name in metric_names])
     ax.set_ylabel("Value")
     ax.set_title(title or "Cross-Run Metric Variability")
+    ax.legend(fontsize="small", loc="best")
     ax.grid(axis="y", alpha=0.3)
     return fig
