@@ -1198,14 +1198,15 @@ def _compute_rolling_accuracy(
     min_samples: int = 10,
     ci_local_frac: float = 0.05,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Computes rolling mean accuracy and 95% confidence interval for a complexity metric.
+    """Computes rolling mean accuracy and smoothed uncertainty band for a complexity metric.
 
     Estimates how accuracy varies with code complexity using a rolling (sliding window)
     mean over data sorted by the complexity metric.
 
-    The CI is computed using LOCAL sample density, not the rolling window count. This
-    means sparse regions show wider CI bands, honestly reflecting uncertainty even when
-    the rolling mean borrows from nearby data.
+    The uncertainty band is a heuristic: it uses the rolling window's standard deviation
+    but scales it by the local sample density (not the rolling window membership count).
+    This means sparse regions show wider bands, reflecting uncertainty about the local
+    mean, but the band is NOT a statistically rigorous confidence interval.
 
     Args:
         df: DataFrame with the complexity metric and accuracy columns.
@@ -1214,11 +1215,11 @@ def _compute_rolling_accuracy(
         window_frac: Fraction of data for rolling window (0.0-1.0). Larger = smoother.
         min_samples: Minimum samples in window to compute statistics.
         ci_local_frac: Fraction of x-range to use for local density estimation (0.0-1.0).
-            Controls CI smoothness: larger = smoother CI bands, smaller = more responsive
+            Controls band smoothness: larger = smoother bands, smaller = more responsive
             to local density variations. Default 0.05 (5% of x-range).
 
     Returns:
-        Tuple of (x_values, rolling_mean, lower_ci, upper_ci). Empty arrays if insufficient data.
+        Tuple of (x_values, rolling_mean, lower_band, upper_band). Empty arrays if insufficient data.
     """
     valid_df = df[[complexity_metric, accuracy_column]].dropna().copy()
     if len(valid_df) < min_samples:
@@ -1364,7 +1365,7 @@ def plot_accuracy_vs_metric(
                 color="#d62728",
                 label=f"Incorrect (n={n_incorrect})",
             )
-        ax.fill_between(x_curve, lower_ci, upper_ci, alpha=0.25, color="#2C7BB6", label="95% CI")
+        ax.fill_between(x_curve, lower_ci, upper_ci, alpha=0.25, color="#2C7BB6", label="Uncertainty band")
         ax.plot(x_curve, mean_curve, color="#2C7BB6", linewidth=2, label="Rolling mean")
         if show_legend:
             ax.legend(loc="upper right", fontsize=7)
@@ -1490,7 +1491,7 @@ def plot_accuracy_vs_metric_grid(
                     label="Incorrect",
                 )
             )
-        legend_elements.append(matplotlib.patches.Patch(facecolor="#2C7BB6", alpha=0.25, label="95% CI"))
+        legend_elements.append(matplotlib.patches.Patch(facecolor="#2C7BB6", alpha=0.25, label="Uncertainty band"))
         legend_elements.append(
             matplotlib.lines.Line2D(
                 xdata=[0],
