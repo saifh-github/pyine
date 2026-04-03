@@ -1263,74 +1263,74 @@ def plot_cost_analysis(
     ax: matplotlib.axes.Axes | None = None,
     title: str | None = None,
 ) -> matplotlib.figure.Figure:  # pragma: no cover
-    """Cost summary with per-record bar chart and aggregate total annotation.
+    """Cost summary with per-attempt bar chart and aggregate total annotation.
 
-    The per-record metrics (mean, median, cost/correct accept, cost/incorrect block) are shown
+    The per-attempt metrics (mean, median, cost/correct accept, cost/incorrect block) are shown
     as horizontal bars on a shared axis.  The total cost is displayed as a text annotation in a
-    separate panel to avoid eclipsing the per-record bars.
+    separate panel to avoid eclipsing the per-attempt bars.
 
     Args:
         cost_stats: Cost stats from an aggregated result (at one FPR).
-        ax: Optional existing axes.  When provided, only the per-record bars are drawn on it
+        ax: Optional existing axes.  When provided, only the per-attempt bars are drawn on it
             (the total-cost panel requires its own axes and is skipped).
         title: Optional chart title.
 
     Returns:
         The matplotlib Figure.
     """
-    per_record_metrics = {
-        "Mean/Record": cost_stats.mean_cost_per_record,
-        "Median/Record": cost_stats.median_cost_per_record,
-        "Std/Record": cost_stats.std_cost_per_record,
-        "Cost/Correct Accept": cost_stats.cost_per_correct_acceptance,
-        "Cost/Incorrect Block": cost_stats.cost_per_incorrect_block,
+    per_attempt_metrics = {
+        "Mean": cost_stats.mean_cost_per_record,
+        "Median": cost_stats.median_cost_per_record,
+        "Std": cost_stats.std_cost_per_record,
+        "Cost / Correct Accept": cost_stats.cost_per_correct_acceptance,
+        "Cost / Incorrect Block": cost_stats.cost_per_incorrect_block,
     }
-    valid_per_record = {name: val for name, val in per_record_metrics.items() if val is not None}
+    valid_per_attempt = {name: val for name, val in per_attempt_metrics.items() if val is not None}
     cost_unit = cost_stats.cost_unit or "units"
-    # when an external axes is provided, draw only the per-record bars (no room for a second panel)
+    # when an external axes is provided, draw only the per-attempt bars (no room for a second panel)
     if ax is not None:
-        if not valid_per_record:
+        if not valid_per_attempt:
             ax.text(0.5, 0.5, "No cost data", ha="center", va="center", transform=ax.transAxes)
             return ax.get_figure()  # type: ignore[return-value]
-        names = list(valid_per_record.keys())
-        values = list(valid_per_record.values())
+        names = list(valid_per_attempt.keys())
+        values = list(valid_per_attempt.values())
         y_pos = np.arange(len(names))
         ax.barh(y_pos, values, alpha=0.8)
         ax.set_yticks(y_pos)
         ax.set_yticklabels(names)
         ax.set_xlabel(f"Cost ({cost_unit})")
-        ax.set_title(title or f"Per-Record Costs (FPR={cost_stats.target_fpr})")
+        ax.set_title(title or f"Per-Attempt Costs (FPR={cost_stats.target_fpr})")
         ax.grid(axis="x", alpha=0.3)
         max_val = max(values) if values else 1.0
         for idx, val in enumerate(values):
             ax.text(val + max_val * 0.01, idx, f"{val:.4g}", va="center", fontsize=9)
         return ax.get_figure()  # type: ignore[return-value]
-    # standalone figure: per-record bars on the left, aggregate total on the right
+    # standalone figure: per-attempt bars on the left, aggregate total on the right
     has_total = cost_stats.total_cost is not None
-    if not valid_per_record and not has_total:
+    if not valid_per_attempt and not has_total:
         fig, single_ax = plt.subplots(figsize=(8, 4))
         single_ax.text(0.5, 0.5, "No cost data", ha="center", va="center", transform=single_ax.transAxes)
         return fig
-    width_ratios = [3, 1] if has_total and valid_per_record else [1]
+    width_ratios = [3, 1] if has_total and valid_per_attempt else [1]
     ncols = len(width_ratios)
     fig, axes_arr = plt.subplots(
         1,
         ncols,
-        figsize=(6 + 4 * ncols, max(4.5, 0.7 * len(valid_per_record))),
+        figsize=(6 + 4 * ncols, max(4.5, 0.7 * len(valid_per_attempt))),
         gridspec_kw={"width_ratios": width_ratios},
     )
     axes_list: list[matplotlib.axes.Axes] = list(np.atleast_1d(axes_arr))
-    # left panel: per-record bars
-    if valid_per_record:
+    # left panel: per-attempt bars
+    if valid_per_attempt:
         ax_bars = axes_list[0]
-        names = list(valid_per_record.keys())
-        values = list(valid_per_record.values())
+        names = list(valid_per_attempt.keys())
+        values = list(valid_per_attempt.values())
         y_pos = np.arange(len(names))
         ax_bars.barh(y_pos, values, alpha=0.8)
         ax_bars.set_yticks(y_pos)
         ax_bars.set_yticklabels(names)
         ax_bars.set_xlabel(f"Cost ({cost_unit})")
-        ax_bars.set_title("Per-Record Costs")
+        ax_bars.set_title("Per-Attempt Costs")
         ax_bars.grid(axis="x", alpha=0.3)
         ax_bars.invert_yaxis()
         max_val = max(values) if values else 1.0
@@ -1344,7 +1344,7 @@ def plot_cost_analysis(
         ax_total.text(
             0.5,
             0.55,
-            f"{total:,.2f}",
+            f"{total:,.0f}",
             ha="center",
             va="center",
             fontsize=22,
@@ -1362,11 +1362,11 @@ def plot_cost_analysis(
             transform=ax_total.transAxes,
         )
         if cost_stats.mean_cost_per_record is not None and cost_stats.mean_cost_per_record > 0:
-            record_count = int(round(total / cost_stats.mean_cost_per_record))  # type: ignore[arg-type]
+            attempt_count = int(round(total / cost_stats.mean_cost_per_record))  # type: ignore[arg-type]
             ax_total.text(
                 0.5,
                 0.22,
-                f"({record_count:,} records)",
+                f"({attempt_count:,} attempts)",
                 ha="center",
                 va="center",
                 fontsize=10,
