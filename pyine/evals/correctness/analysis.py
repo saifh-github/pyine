@@ -892,7 +892,8 @@ def plot_roc_curves(
     ax.set_xlabel("False Positive Rate")
     ax.set_ylabel("True Positive Rate")
     ax.set_title(title or "ROC Curves")
-    ax.legend(fontsize="small")
+    if ax.get_legend_handles_labels()[1]:
+        ax.legend(fontsize="small")
     ax.grid(alpha=0.3)
     return fig
 
@@ -942,7 +943,8 @@ def plot_pr_curves(
     ax.set_xlabel("Recall")
     ax.set_ylabel("Precision")
     ax.set_title(title or "Precision-Recall Curves")
-    ax.legend(fontsize="small")
+    if ax.get_legend_handles_labels()[1]:
+        ax.legend(fontsize="small")
     ax.grid(alpha=0.3)
     return fig
 
