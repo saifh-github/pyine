@@ -56,6 +56,14 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 # ensure uv and hydra resolve the correct project regardless of the caller's cwd
 cd "${REPO_ROOT}"
 
+# load .env so child processes (vLLM, eval) inherit variables like HF_TOKEN
+if [[ -f .env ]]; then
+    set -a
+    # shellcheck disable=SC1091
+    source .env
+    set +a
+fi
+
 # ---- helpers ----
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
