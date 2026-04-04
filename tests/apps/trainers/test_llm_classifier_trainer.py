@@ -773,3 +773,265 @@ class TestClassifierTrainIntegration:
             ),
         )
         asyncio.run(llm_trainer.main(config=skip_cfg, runtime=None, skip_training=True))
+
+
+class TestReplicaTraining:
+    """Tests for the num_replicas > 1 training path."""
+
+    @pytest.fixture
+    def debug_lmdb(self, tmp_path: pathlib.Path) -> pathlib.Path:
+        return create_debug_probe_lmdb(tmp_path / "test_lmdb", n_train=40, n_eval_families=10)
+
+    @pytest.fixture
+    def replica_ready_config_kwargs(self, debug_lmdb: pathlib.Path, tmp_path: pathlib.Path) -> dict:
+        """Config kwargs valid for replica mode (save_model, eval/save strategy, load_best)."""
+        return {
+            "base_model": "prajjwal1/bert-tiny",
+            "datamodule_config": {"lmdb_path": str(debug_lmdb)},
+            "training_args_config": {
+                "output_dir": str(tmp_path / "output"),
+                "num_train_epochs": 1,
+                "per_device_train_batch_size": 4,
+                "per_device_eval_batch_size": 4,
+                "report_to": "none",
+                "use_cpu": True,
+                "eval_strategy": "epoch",
+                "save_strategy": "epoch",
+                "logging_steps": 1,
+                "load_best_model_at_end": True,
+                "metric_for_best_model": "auroc",
+                "greater_is_better": True,
+            },
+            "max_seq_length": 64,
+            "log_per_code_type_metrics": False,
+            "save_model": True,
+            "save_best_model_export": True,
+        }
+
+    @pytest.mark.slow
+    def test_different_replica_seeds_produce_different_head_weights(
+        self,
+        replica_ready_config_kwargs: dict,
+        tmp_path: pathlib.Path,
+    ) -> None:
+        """Two replicas with different seeds should have different classification head init."""
+        replica_ready_config_kwargs["training_args_config"]["num_train_epochs"] = 0
+        replica_ready_config_kwargs["training_args_config"]["eval_strategy"] = "no"
+        replica_ready_config_kwargs["training_args_config"]["save_strategy"] = "no"
+        replica_ready_config_kwargs["training_args_config"]["load_best_model_at_end"] = False
+        replica_ready_config_kwargs["save_best_model_export"] = False
+        cfg = LLMClassifierTrainerAppMainConfig(**replica_ready_config_kwargs)
+        result_a = llm_trainer.classifier_train(config=cfg, runtime=None, replica_seed=42)
+        weights_a = {
+            name: param.clone()
+            for name, param in result_a.trainer.model.named_parameters()  # type: ignore[reportUnknownMemberType]
+            if "classifier" in name
+        }
+        result_b = llm_trainer.classifier_train(config=cfg, runtime=None, replica_seed=999)
+        weights_b = {
+            name: param.clone()
+            for name, param in result_b.trainer.model.named_parameters()  # type: ignore[reportUnknownMemberType]
+            if "classifier" in name
+        }
+        assert weights_a.keys() == weights_b.keys()
+        any_different = any(not torch.equal(weights_a[name], weights_b[name]) for name in weights_a)
+        assert any_different, "different replica seeds should produce different classifier head weights"
+
+    @pytest.mark.slow
+    def test_replica_output_dir_override(
+        self,
+        replica_ready_config_kwargs: dict,
+        tmp_path: pathlib.Path,
+    ) -> None:
+        import pathlib as pathlib_mod
+
+        replica_output = str(tmp_path / "replica_0")
+        cfg = LLMClassifierTrainerAppMainConfig(**replica_ready_config_kwargs)
+        llm_trainer.classifier_train(config=cfg, runtime=None, replica_output_dir=replica_output)
+        output_path = pathlib_mod.Path(replica_output)
+        assert output_path.exists()
+        has_model = (output_path / "model.safetensors").exists() or (output_path / "pytorch_model.bin").exists()
+        assert has_model
+
+    @pytest.mark.slow
+    def test_replica_mode_skips_best_model_export(
+        self,
+        replica_ready_config_kwargs: dict,
+        tmp_path: pathlib.Path,
+    ) -> None:
+        """When replica_output_dir is set, checkpoint-best/ should not be created."""
+        import pathlib as pathlib_mod
+
+        replica_output = str(tmp_path / "replica_0")
+        cfg = LLMClassifierTrainerAppMainConfig(**replica_ready_config_kwargs)
+        llm_trainer.classifier_train(config=cfg, runtime=None, replica_output_dir=replica_output)
+        replica_path = pathlib_mod.Path(replica_output)
+        assert not (replica_path / "checkpoint-best").exists()
+        # intermediate HF checkpoint-* dirs should also be cleaned up
+        checkpoint_dirs = list(replica_path.glob("checkpoint-*"))
+        assert checkpoint_dirs == [], f"leftover checkpoint dirs: {checkpoint_dirs}"
+
+    @pytest.mark.slow
+    def test_suppress_wandb_training_logs(
+        self,
+        replica_ready_config_kwargs: dict,
+        tmp_path: pathlib.Path,
+    ) -> None:
+        replica_ready_config_kwargs["training_args_config"]["num_train_epochs"] = 0
+        replica_ready_config_kwargs["training_args_config"]["eval_strategy"] = "no"
+        replica_ready_config_kwargs["training_args_config"]["save_strategy"] = "no"
+        replica_ready_config_kwargs["training_args_config"]["load_best_model_at_end"] = False
+        replica_ready_config_kwargs["save_best_model_export"] = False
+        cfg = LLMClassifierTrainerAppMainConfig(**replica_ready_config_kwargs)
+        result = llm_trainer.classifier_train(config=cfg, runtime=None, suppress_wandb_training_logs=True)
+        # HF Trainer normalizes report_to=["none"] to [] internally
+        assert result.trainer.args.report_to == []
+
+    def test_skip_training_with_replicas_raises(self) -> None:
+        cfg = LLMClassifierTrainerAppMainConfig(
+            base_model="prajjwal1/bert-tiny",
+            datamodule_config={"lmdb_path": "/tmp/fake"},  # noqa: S108
+            training_args_config={
+                "output_dir": "/tmp/fake-output",  # noqa: S108
+                "num_train_epochs": 1,
+                "per_device_train_batch_size": 2,
+                "per_device_eval_batch_size": 2,
+                "report_to": "none",
+                "use_cpu": True,
+                "eval_strategy": "epoch",
+                "save_strategy": "epoch",
+                "load_best_model_at_end": True,
+            },
+            num_replicas=2,
+            classifier_checkpoint_path="/tmp/fake-checkpoint",  # noqa: S108
+        )
+        with pytest.raises(ValueError, match="num_replicas > 1 is not supported with skip_training"):
+            asyncio.run(llm_trainer.main(config=cfg, runtime=None, skip_training=True))
+
+    def test_replicas_with_unresolved_output_dir_raises(self) -> None:
+        """Unresolved Hydra interpolation in output_dir should fail loudly in replica mode."""
+        cfg = LLMClassifierTrainerAppMainConfig(
+            base_model="prajjwal1/bert-tiny",
+            datamodule_config={"lmdb_path": "/tmp/fake"},  # noqa: S108
+            training_args_config={
+                "output_dir": "${hydra:runtime.output_dir}",
+                "num_train_epochs": 1,
+                "per_device_train_batch_size": 2,
+                "per_device_eval_batch_size": 2,
+                "report_to": "none",
+                "use_cpu": True,
+                "eval_strategy": "epoch",
+                "save_strategy": "epoch",
+                "load_best_model_at_end": True,
+            },
+            num_replicas=2,
+        )
+        with pytest.raises(ValueError, match="unresolved interpolation"):
+            asyncio.run(llm_trainer.main(config=cfg, runtime=None))
+
+    @pytest.mark.slow
+    def test_checkpoint_backed_scorer_metadata_before_scoring_raises(
+        self,
+        replica_ready_config_kwargs: dict,
+    ) -> None:
+        import pathlib as pathlib_mod
+
+        cfg = LLMClassifierTrainerAppMainConfig(**replica_ready_config_kwargs)
+        scorer = llm_trainer._CheckpointBackedClassifierScorer(
+            checkpoint_path=pathlib_mod.Path("/tmp/nonexistent"),  # noqa: S108
+            config=cfg,
+            replica_idx=0,
+            replica_seed=42,
+        )
+        with pytest.raises(RuntimeError, match="called before score_records"):
+            scorer.get_metadata()
+
+    @pytest.mark.slow
+    def test_checkpoint_backed_scorer_scores_and_returns_metadata(
+        self,
+        replica_ready_config_kwargs: dict,
+        tmp_path: pathlib.Path,
+    ) -> None:
+        """Train a model, save, then score via _CheckpointBackedClassifierScorer."""
+        import pathlib as pathlib_mod
+
+        import pyine.evals.correctness.types as ct
+
+        replica_output = str(tmp_path / "scorer_test_replica")
+        cfg = LLMClassifierTrainerAppMainConfig(**replica_ready_config_kwargs)
+        llm_trainer.classifier_train(config=cfg, runtime=None, replica_output_dir=replica_output)
+        scorer = llm_trainer._CheckpointBackedClassifierScorer(
+            checkpoint_path=pathlib_mod.Path(replica_output),
+            config=cfg,
+            replica_idx=0,
+            replica_seed=42,
+        )
+        records = [
+            ct.EvalRecord(
+                sample_id=f"sample_{idx}",
+                problem_id=f"problem_{idx}",
+                attempt_index=0,
+                model_output=f"test output {idx}",
+                final_answer=None,
+                expected_output="expected",
+                label=idx % 2 == 0,
+                code_type="original",
+                tags=[],
+                difficulty_score=None,
+                record={
+                    "prompt_messages": [{"role": "user", "content": "hello"}],
+                    "model_output": f"test output {idx}",
+                },
+            )
+            for idx in range(4)
+        ]
+        result = scorer.score_records(records)
+        assert len(result.scores) == 4
+        assert all(0.0 <= score <= 1.0 for score in result.scores)
+        metadata = scorer.get_metadata()
+        assert metadata["scorer_type"] == "llm_classifier"
+        assert metadata["replica_idx"] == 0
+        assert metadata["replica_seed"] == 42
+        assert "checkpoint_path" in metadata
+        assert "text_field" in metadata
+        assert "input_formatting_mode" in metadata
+        assert "max_seq_length" in metadata
+
+    @pytest.mark.slow
+    def test_multi_replica_main_creates_replica_dirs_and_scorers(
+        self,
+        replica_ready_config_kwargs: dict,
+        tmp_path: pathlib.Path,
+    ) -> None:
+        """Run main() with num_replicas=2, patch evaluate_model to capture scorers."""
+        import pathlib as pathlib_mod
+        from unittest import mock
+
+        replica_ready_config_kwargs["num_replicas"] = 2
+        replica_ready_config_kwargs["replica_base_seed"] = 42
+        cfg = LLMClassifierTrainerAppMainConfig(**replica_ready_config_kwargs)
+        captured_model: list[typing.Any] = []
+
+        async def _mock_evaluate_model(model: typing.Any, **kwargs: typing.Any) -> dict[str, typing.Any]:
+            captured_model.append(model)
+            return {}
+
+        with mock.patch.object(pyine.apps.trainers.common, "evaluate_model", _mock_evaluate_model):
+            dummy_evals = MagicMock()
+            dummy_evals.eval_type = None
+            object.__setattr__(cfg, "evals_config", dummy_evals)
+            asyncio.run(llm_trainer.main(config=cfg, runtime=None))
+
+        output_dir = pathlib_mod.Path(replica_ready_config_kwargs["training_args_config"]["output_dir"])
+        assert (output_dir / "replica_0").exists()
+        assert (output_dir / "replica_1").exists()
+        assert not (output_dir / "replica_0" / "checkpoint-best").exists()
+        assert not (output_dir / "replica_1" / "checkpoint-best").exists()
+        assert len(captured_model) == 1
+        scorers = captured_model[0]
+        assert isinstance(scorers, list)
+        assert len(scorers) == 2
+        assert all(isinstance(s, llm_trainer._CheckpointBackedClassifierScorer) for s in scorers)
+        assert scorers[0]._replica_idx == 0
+        assert scorers[1]._replica_idx == 1
+        assert scorers[0]._replica_seed != scorers[1]._replica_seed

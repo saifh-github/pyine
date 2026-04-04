@@ -256,6 +256,83 @@ class TestClassifierEvalOnlyConfig:
         assert cfg.classifier_checkpoint_path is None
 
 
+class TestReplicaConfig:
+    def test_num_replicas_default(self) -> None:
+        cfg = LLMClassifierTrainerAppMainConfig(**_make_minimal_config())
+        assert cfg.num_replicas == 1
+
+    def test_replica_base_seed_default(self) -> None:
+        cfg = LLMClassifierTrainerAppMainConfig(**_make_minimal_config())
+        assert cfg.replica_base_seed == 0
+
+    def test_num_replicas_zero_rejected(self) -> None:
+        with pytest.raises(pydantic.ValidationError):
+            LLMClassifierTrainerAppMainConfig(**_make_minimal_config(num_replicas=0))
+
+    def test_replicas_require_save_model(self) -> None:
+        with pytest.raises(ValueError, match="save_model=True"):
+            LLMClassifierTrainerAppMainConfig(
+                **_make_minimal_config(num_replicas=3, save_model=False, save_best_model_export=False)
+            )
+
+    def test_replicas_require_load_best_model_at_end(self) -> None:
+        with pytest.raises(ValueError, match="load_best_model_at_end=True"):
+            LLMClassifierTrainerAppMainConfig(
+                **_make_minimal_config(
+                    num_replicas=3,
+                    training_args_config=_make_minimal_training_args(load_best_model_at_end=False),
+                )
+            )
+
+    def test_replicas_require_eval_strategy(self) -> None:
+        with pytest.raises(ValueError, match="eval_strategy != 'no'"):
+            LLMClassifierTrainerAppMainConfig(
+                **_make_minimal_config(
+                    num_replicas=3,
+                    training_args_config=_make_minimal_training_args(eval_strategy="no"),
+                )
+            )
+
+    def test_replicas_require_save_strategy(self) -> None:
+        with pytest.raises(ValueError, match="save_strategy != 'no'"):
+            LLMClassifierTrainerAppMainConfig(
+                **_make_minimal_config(
+                    num_replicas=3,
+                    training_args_config=_make_minimal_training_args(save_strategy="no"),
+                )
+            )
+
+    def test_single_replica_no_constraints(self) -> None:
+        """num_replicas=1 does not enforce replica-specific constraints."""
+        cfg = LLMClassifierTrainerAppMainConfig(
+            **_make_minimal_config(
+                num_replicas=1,
+                save_model=False,
+                save_best_model_export=False,
+                training_args_config=_make_minimal_training_args(load_best_model_at_end=False),
+            )
+        )
+        assert cfg.num_replicas == 1
+
+    def test_replicas_with_checkpoint_path_valid_at_config_level(self) -> None:
+        """classifier_checkpoint_path + num_replicas > 1 is valid at config level.
+
+        The skip_training incompatibility is checked at runtime in main().
+        """
+        cfg = LLMClassifierTrainerAppMainConfig(
+            **_make_minimal_config(
+                num_replicas=3,
+                classifier_checkpoint_path="/tmp/fake-checkpoint",  # noqa: S108
+            )
+        )
+        assert cfg.num_replicas == 3
+
+    def test_valid_multi_replica_config(self) -> None:
+        cfg = LLMClassifierTrainerAppMainConfig(**_make_minimal_config(num_replicas=3, replica_base_seed=42))
+        assert cfg.num_replicas == 3
+        assert cfg.replica_base_seed == 42
+
+
 class TestHydraConfigRegistration:
     def test_register_hydra_configs_no_errors(
         self,

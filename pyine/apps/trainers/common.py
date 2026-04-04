@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import functools
+import hashlib
 import json
 import logging
 import os
@@ -152,6 +153,29 @@ def compute_binary_pos_weight(
     if n_pos == 0 or n_neg == 0:
         raise ValueError(f"need both classes for balanced weighting (pos={n_pos}, neg={n_neg})")
     return n_neg / n_pos
+
+
+def stable_replica_seed(
+    base_seed: int,
+    name: str,
+    replica_idx: int,
+) -> int:
+    """Deterministic seed from (base_seed, name, replica_idx).
+
+    Uses blake2b instead of Python's hash(), which is randomized per process
+    (PYTHONHASHSEED) and would produce different seeds across DDP ranks.
+
+    Args:
+        base_seed: Base seed for the experiment.
+        name: Identifier for the model/probe being replicated.
+        replica_idx: Zero-based replica index.
+
+    Returns:
+        A deterministic 31-bit integer seed.
+    """
+    payload = f"{base_seed}:{name}:{replica_idx}".encode()
+    digest = hashlib.blake2b(payload, digest_size=8).digest()
+    return int.from_bytes(digest, "little") % (2**31)
 
 
 def warn_on_calibration_resampling_mismatch(

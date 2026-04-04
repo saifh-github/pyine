@@ -25,6 +25,8 @@ import pyine.apps.trainers.common
 import pyine.configs.schemas
 import pyine.evals.common
 import pyine.evals.correctness.scorers as correctness_scorers
+import pyine.evals.correctness.types as correctness_types
+import pyine.utils.reprod
 import pyine.utils.transformers.data
 
 if typing.TYPE_CHECKING:
@@ -285,22 +287,116 @@ class ClassifierTrainResult(typing.NamedTuple):
     """The tokenizer associated with the classifier model."""
 
 
+class _CheckpointBackedClassifierScorer:
+    """Lazy-loading scorer that loads a classifier from checkpoint when scoring.
+
+    Implements the GuardrailScorer protocol. The model is loaded into memory only during
+    score_records() and released afterward, so N replicas can be evaluated sequentially without
+    N models resident on GPU simultaneously.
+
+    Note: the model is reloaded on each score_records() call. The correctness pipeline calls it
+    twice per replica per eval subset (calibration + eval). This is an accepted tradeoff for memory
+    safety with encoder-sized models (~100-400M params).
+    """
+
+    def __init__(
+        self,
+        checkpoint_path: pathlib.Path,
+        config: LLMClassifierTrainerAppMainConfig,
+        replica_idx: int,
+        replica_seed: int,
+    ) -> None:
+        self._checkpoint_path = checkpoint_path
+        self._config = config
+        self._replica_idx = replica_idx
+        self._replica_seed = replica_seed
+        self._cached_inner_metadata: dict[str, typing.Any] | None = None
+
+    def score_records(
+        self,
+        records: list[correctness_types.EvalRecord],
+    ) -> correctness_types.ScoringResult:
+        """Score records by loading the checkpoint, scoring, then releasing GPU memory."""
+        inner_scorer = None
+        tokenizer = None
+        model = self._config.get_model(checkpoint_path=self._checkpoint_path)
+        try:
+            model.eval()
+            model.requires_grad_(False)
+            tokenizer = self._config.get_tokenizer(checkpoint_path=self._checkpoint_path)
+            if self._config.truncation_side is not None:
+                tokenizer.truncation_side = self._config.truncation_side
+            _sync_model_pad_token_id_with_tokenizer(model, tokenizer)
+            inner_scorer = correctness_scorers.LLMClassifierScorer(
+                model=model,
+                tokenizer=tokenizer,
+                max_seq_length=self._config.max_seq_length,
+                text_field=self._config.text_field,
+            )
+            result = inner_scorer.score_records(records)
+            self._cached_inner_metadata = inner_scorer.get_metadata()
+        finally:
+            # release all references that hold the model before clearing the GPU cache
+            del inner_scorer, tokenizer, model
+            torch.cuda.empty_cache()
+        return result
+
+    def get_metadata(self) -> dict[str, typing.Any]:
+        """Return classifier metadata augmented with replica info.
+
+        Must be called after score_records(), raises RuntimeError otherwise.
+        """
+        if self._cached_inner_metadata is None:
+            raise RuntimeError(
+                "_CheckpointBackedClassifierScorer.get_metadata() called before score_records(); "
+                "metadata is only available after the model has been loaded and scored"
+            )
+        metadata = dict(self._cached_inner_metadata)
+        metadata["checkpoint_path"] = str(self._checkpoint_path)
+        metadata["replica_idx"] = self._replica_idx
+        metadata["replica_seed"] = self._replica_seed
+        return metadata
+
+    def get_verification_cost_unit(self) -> str | None:
+        """Return the verification cost unit for classifier scoring."""
+        return "FLOPs"
+
+
 def classifier_train(
     config: LLMClassifierTrainerAppMainConfig,
     runtime: pyine.configs.schemas.RuntimeConfig | None,
+    *,
+    replica_seed: int | None = None,
+    replica_output_dir: str | None = None,
+    suppress_wandb_training_logs: bool = False,
 ) -> ClassifierTrainResult:
     """Core LLM classifier training loop.
 
     Args:
         config: App configuration.
         runtime: Runtime configuration (wandb, output dir, etc.).
+        replica_seed: When set, seeds RNG before model init and overrides
+            training_args.seed and training_args.data_seed for this replica.
+        replica_output_dir: When set, overrides output_dir and logging_dir
+            in training args, sets save_total_limit=1, and skips best-model
+            export (output_dir is the canonical artifact in replica mode).
+        suppress_wandb_training_logs: When True, forces report_to=["none"]
+            regardless of W&B config. Used in multi-replica mode to avoid
+            colliding training curves.
 
     Returns:
         ClassifierTrainResult with the trained Trainer and tokenizer.
     """
     # --- 1. Load model + tokenizer ---
+    if replica_seed is not None:
+        pyine.utils.reprod.set_seed(replica_seed)
     tokenizer = config.get_tokenizer()
     model = config.get_model()
+    # when device_map is set, accelerate dispatch hooks disable requires_grad on all
+    # parameters; re-enable for full fine-tuning (LoRA handles its own grad setup
+    # inside get_model, so only do this when training the full model)
+    if config.lora_config is None:
+        model.requires_grad_(True)
     _sync_model_pad_token_id_with_tokenizer(model, tokenizer)
 
     # --- 2. Set truncation side (if configured) ---
@@ -369,9 +465,15 @@ def classifier_train(
     data_collator = transformers.DataCollatorWithPadding(tokenizer=tokenizer, padding="longest")
 
     training_args_dict = config.training_args_config.model_dump()
-    if runtime is not None:
+    if replica_output_dir is not None:
+        training_args_dict["output_dir"] = replica_output_dir
+        training_args_dict["logging_dir"] = str(pathlib.Path(replica_output_dir) / "logs")
+        training_args_dict["save_total_limit"] = 1  # avoid checkpoint accumulation across replicas
+    elif runtime is not None:
         training_args_dict["output_dir"] = runtime.output_dir
-    if runtime is not None and runtime.wandb_run is not None:
+    if suppress_wandb_training_logs:
+        training_args_dict["report_to"] = ["none"]
+    elif runtime is not None and runtime.wandb_run is not None:
         training_args_dict["report_to"] = ["wandb"]
         runtime.wandb_run.summary["classifier/text_field"] = config.text_field  # type: ignore[reportUnknownMemberType]
         runtime.wandb_run.summary["classifier/truncation_side"] = tokenizer.truncation_side  # type: ignore[reportUnknownMemberType]
@@ -384,8 +486,11 @@ def classifier_train(
         training_args_dict["include_for_metrics"] = ["code_type_id"]
 
     training_args = transformers.TrainingArguments(**training_args_dict)
-    # Wire seed from runtime config for reproducibility
-    if runtime is not None:
+    # wire seed for reproducibility: replica seed takes priority over runtime seed
+    if replica_seed is not None:
+        training_args.seed = replica_seed
+        training_args.data_seed = replica_seed
+    elif runtime is not None:
         training_args.seed = runtime.seed
 
     compute_metrics_fn = build_compute_metrics(
@@ -442,7 +547,9 @@ def classifier_train(
         # into memory by this point, so saving now materializes the best model at output_dir.
         trainer.save_model()
         tokenizer.save_pretrained(str(output_dir))  # pyright: ignore[reportUnknownMemberType]
-        if config.save_best_model_export:
+        # in replica mode, output_dir is the canonical artifact (load_best_model_at_end
+        # ensures it contains best weights); skip the redundant checkpoint-best/ copy
+        if config.save_best_model_export and replica_output_dir is None:
             if trainer.args.load_best_model_at_end:
                 logger.debug(
                     f"output_dir already contains best-loaded weights because "
@@ -471,8 +578,6 @@ async def main(
     skip_training: bool = False,
 ) -> None:
     """Main entrypoint for LLM classifier training."""
-    import pyine.utils.reprod
-
     pyine.utils.reprod.entrypoint_setup(
         runtime_config=runtime,
         use_wandb_logging=config.use_wandb_logging,
@@ -482,6 +587,9 @@ async def main(
     if runtime is not None and runtime.dry_run:
         logger.info("dry run mode; skipping classifier training")
         return
+
+    if config.num_replicas > 1 and skip_training:
+        raise ValueError("num_replicas > 1 is not supported with skip_training=True")
 
     if skip_training:
         if config.classifier_checkpoint_path is None:
@@ -494,27 +602,91 @@ async def main(
         _sync_model_pad_token_id_with_tokenizer(classifier_model, tokenizer)
         if config.truncation_side is not None:
             tokenizer.truncation_side = config.truncation_side
+        # benchmarking phase for skip_training (single model only)
+        if config.evals_config is not None:
+            scorer = correctness_scorers.LLMClassifierScorer(
+                model=classifier_model,
+                tokenizer=tokenizer,
+                max_seq_length=config.max_seq_length,
+                text_field=config.text_field,
+            )
+            await pyine.apps.trainers.common.evaluate_model(  # type: ignore[reportUnknownMemberType, reportAttributeAccessIssue]
+                model=scorer,
+                tokenizer=None,
+                datamodule=None,
+                config=config,
+                runtime=runtime,
+            )
+    elif config.num_replicas > 1:
+        # multi-replica: train sequentially, evaluate with cross-run aggregation
+        if runtime is not None:
+            base_output_dir = pathlib.Path(runtime.output_dir)
+        else:
+            raw_output_dir = str(config.training_args_config.output_dir)
+            if "${" in raw_output_dir:
+                raise ValueError(
+                    f"num_replicas > 1 with runtime=None requires a concrete "
+                    f"training_args_config.output_dir, but got unresolved "
+                    f"interpolation: {raw_output_dir!r}"
+                )
+            base_output_dir = pathlib.Path(raw_output_dir)
+        checkpoint_scorers: list[_CheckpointBackedClassifierScorer] = []
+        for replica_idx in range(config.num_replicas):
+            replica_seed = pyine.apps.trainers.common.stable_replica_seed(
+                config.replica_base_seed, "classifier", replica_idx
+            )
+            replica_output_dir = str(base_output_dir / f"replica_{replica_idx}")
+            logger.info(
+                f"training replica {replica_idx + 1}/{config.num_replicas} "
+                f"(seed={replica_seed}, output_dir={replica_output_dir})"
+            )
+            train_result = classifier_train(
+                config=config,
+                runtime=runtime,
+                replica_seed=replica_seed,
+                replica_output_dir=replica_output_dir,
+                suppress_wandb_training_logs=True,
+            )
+            # canonical artifact is output_dir (load_best_model_at_end ensures best weights)
+            checkpoint_scorers.append(
+                _CheckpointBackedClassifierScorer(
+                    checkpoint_path=pathlib.Path(replica_output_dir),
+                    config=config,
+                    replica_idx=replica_idx,
+                    replica_seed=replica_seed,
+                )
+            )
+            del train_result  # release trained model from GPU before next replica
+            torch.cuda.empty_cache()
+        # evaluation: pass list of checkpoint-backed scorers for cross-run aggregation
+        if config.evals_config is not None:
+            await pyine.apps.trainers.common.evaluate_model(  # type: ignore[reportUnknownMemberType, reportAttributeAccessIssue]
+                model=checkpoint_scorers,
+                tokenizer=None,
+                datamodule=None,
+                config=config,
+                runtime=runtime,
+            )
     else:
+        # single replica
         train_result = classifier_train(config=config, runtime=runtime)
         classifier_model = typing.cast("transformers.PreTrainedModel", train_result.trainer.model)  # pyright: ignore[reportUnknownMemberType]
         tokenizer = train_result.tokenizer
-
-    # benchmarking phase (if enabled); goes through the standard evaluate_model pipeline
-    # which handles datamodule setup, W&B metric definition, logging, etc.
-    if config.evals_config is not None:
-        scorer = correctness_scorers.LLMClassifierScorer(
-            model=classifier_model,
-            tokenizer=tokenizer,
-            max_seq_length=config.max_seq_length,
-            text_field=config.text_field,
-        )
-        await pyine.apps.trainers.common.evaluate_model(  # type: ignore[reportUnknownMemberType, reportAttributeAccessIssue]
-            model=scorer,
-            tokenizer=None,
-            datamodule=None,  # correctness pipeline constructs its own datamodule
-            config=config,
-            runtime=runtime,
-        )
+        # benchmarking phase (if enabled)
+        if config.evals_config is not None:
+            scorer = correctness_scorers.LLMClassifierScorer(
+                model=classifier_model,
+                tokenizer=tokenizer,
+                max_seq_length=config.max_seq_length,
+                text_field=config.text_field,
+            )
+            await pyine.apps.trainers.common.evaluate_model(  # type: ignore[reportUnknownMemberType, reportAttributeAccessIssue]
+                model=scorer,
+                tokenizer=None,
+                datamodule=None,
+                config=config,
+                runtime=runtime,
+            )
 
     if runtime is not None:
         runtime.finalize()

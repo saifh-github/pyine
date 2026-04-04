@@ -447,28 +447,28 @@ class TestSkipTrainingProbeTrainer:
 
 class TestStableReplicaSeed:
     def test_deterministic_across_calls(self) -> None:
-        s1 = pyine.apps.trainers.probe_trainer._stable_replica_seed(0, "mean_L0", 0)
-        s2 = pyine.apps.trainers.probe_trainer._stable_replica_seed(0, "mean_L0", 0)
+        s1 = pyine.apps.trainers.common.stable_replica_seed(0, "mean_L0", 0)
+        s2 = pyine.apps.trainers.common.stable_replica_seed(0, "mean_L0", 0)
         assert s1 == s2
 
     def test_different_replica_idx_different_seeds(self) -> None:
-        s0 = pyine.apps.trainers.probe_trainer._stable_replica_seed(0, "mean_L0", 0)
-        s1 = pyine.apps.trainers.probe_trainer._stable_replica_seed(0, "mean_L0", 1)
+        s0 = pyine.apps.trainers.common.stable_replica_seed(0, "mean_L0", 0)
+        s1 = pyine.apps.trainers.common.stable_replica_seed(0, "mean_L0", 1)
         assert s0 != s1
 
     def test_different_base_seed_different_seeds(self) -> None:
-        s0 = pyine.apps.trainers.probe_trainer._stable_replica_seed(0, "mean_L0", 0)
-        s1 = pyine.apps.trainers.probe_trainer._stable_replica_seed(42, "mean_L0", 0)
+        s0 = pyine.apps.trainers.common.stable_replica_seed(0, "mean_L0", 0)
+        s1 = pyine.apps.trainers.common.stable_replica_seed(42, "mean_L0", 0)
         assert s0 != s1
 
     def test_different_name_different_seeds(self) -> None:
-        s0 = pyine.apps.trainers.probe_trainer._stable_replica_seed(0, "mean_L0", 0)
-        s1 = pyine.apps.trainers.probe_trainer._stable_replica_seed(0, "attn_L8", 0)
+        s0 = pyine.apps.trainers.common.stable_replica_seed(0, "mean_L0", 0)
+        s1 = pyine.apps.trainers.common.stable_replica_seed(0, "attn_L8", 0)
         assert s0 != s1
 
     def test_seed_within_valid_range(self) -> None:
         for i in range(100):
-            seed = pyine.apps.trainers.probe_trainer._stable_replica_seed(i, f"probe_{i}", i % 10)
+            seed = pyine.apps.trainers.common.stable_replica_seed(i, f"probe_{i}", i % 10)
             assert 0 <= seed < 2**31
 
 

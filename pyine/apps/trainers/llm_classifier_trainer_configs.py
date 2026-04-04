@@ -119,6 +119,15 @@ class LLMClassifierTrainerAppMainConfig(common.AppMainConfig, common.ModelTokeni
     (which resamples the data). Using both simultaneously is usually undesirable.
     """
 
+    # --- Replica settings ---
+    num_replicas: int = pydantic.Field(default=1, ge=1)
+    """Number of training replicas. Each is trained sequentially with a different seed.
+    Post-training evaluation aggregates metrics across replicas (mean/std, bootstrap CIs).
+    Default 1 = current single-run behavior."""
+
+    replica_base_seed: int = 0
+    """Base seed for deriving per-replica seeds. Only used when num_replicas > 1."""
+
     # --- Classification model ---
     num_labels: int = 2
     """Number of classification labels. Default 2 for binary classification."""
@@ -269,6 +278,46 @@ class LLMClassifierTrainerAppMainConfig(common.AppMainConfig, common.ModelTokeni
                     "save_best_model_export=True requires training_args_config.save_strategy != 'no' "
                     "so a best checkpoint can be materialized"
                 )
+        return self
+
+    @pydantic.model_validator(mode="after")
+    def _validate_replicas_require_save_model(self) -> LLMClassifierTrainerAppMainConfig:
+        if self.num_replicas > 1 and not self.save_model:
+            raise ValueError(
+                "num_replicas > 1 requires save_model=True so replicas can be loaded from checkpoints during evaluation"
+            )
+        return self
+
+    @pydantic.model_validator(mode="after")
+    def _validate_replicas_require_best_model_setup(self) -> LLMClassifierTrainerAppMainConfig:
+        """Replica mode uses output_dir as the canonical best-model artifact.
+
+        This only holds when load_best_model_at_end=True and eval/save strategies
+        are active so HF Trainer can actually select and reload a best checkpoint.
+        """
+        if self.num_replicas <= 1:
+            return self
+
+        def _normalize_interval_strategy(
+            value: typing.Any,
+        ) -> str:
+            return str(getattr(value, "value", value)).lower()
+
+        if not self.training_args_config.load_best_model_at_end:
+            raise ValueError(
+                "num_replicas > 1 requires training_args_config.load_best_model_at_end=True "
+                "so output_dir contains the best checkpoint for evaluation"
+            )
+        if _normalize_interval_strategy(self.training_args_config.eval_strategy) == "no":
+            raise ValueError(
+                "num_replicas > 1 requires training_args_config.eval_strategy != 'no' "
+                "so a best checkpoint can be selected"
+            )
+        if _normalize_interval_strategy(self.training_args_config.save_strategy) == "no":
+            raise ValueError(
+                "num_replicas > 1 requires training_args_config.save_strategy != 'no' "
+                "so a best checkpoint can be materialized"
+            )
         return self
 
 

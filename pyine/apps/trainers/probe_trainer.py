@@ -6,7 +6,6 @@ See pyine/apps/trainers/PROBE_TRAINING_GUIDE.md for the full GUIDE.
 from __future__ import annotations
 
 import collections
-import hashlib
 import json
 import logging
 import math
@@ -114,21 +113,6 @@ def _validate_best_probe_checkpoint_preconditions(
         )
 
 
-def _stable_replica_seed(
-    base_seed: int,
-    name: str,
-    replica_idx: int,
-) -> int:
-    """Deterministic seed from (base_seed, probe_name, replica_idx).
-
-    Uses blake2b instead of Python's hash(), which is randomized per process
-    (PYTHONHASHSEED) and would produce different seeds across DDP ranks.
-    """
-    payload = f"{base_seed}:{name}:{replica_idx}".encode()
-    digest = hashlib.blake2b(payload, digest_size=8).digest()
-    return int.from_bytes(digest, "little") % (2**31)
-
-
 def _get_module_device(
     module: torch.nn.Module,
 ) -> torch.device:
@@ -162,7 +146,7 @@ def expand_probe_configs_with_replicas(
     expanded: list[pyine.guardrails.probes.base.ProbeConfig] = []
     for probe_config in probe_configs:
         for replica_idx in range(num_replicas):
-            seed = _stable_replica_seed(replica_base_seed, probe_config.name, replica_idx)
+            seed = pyine.apps.trainers.common.stable_replica_seed(replica_base_seed, probe_config.name, replica_idx)
             expanded.append(
                 probe_config.model_copy(
                     update={
