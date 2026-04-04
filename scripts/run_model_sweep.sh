@@ -1,32 +1,37 @@
 #!/usr/bin/env bash
 # ------------------------------------------------------------------------------------------
-# run_checkpoint_sweep.sh --- Evaluates multiple HF checkpoints via vLLM-served inference.
+# run_model_sweep.sh --- Evaluates multiple HuggingFace models via vLLM-served inference.
 #
-# For each checkpoint in the provided list, this script:
-#   1. Starts a vLLM server pointing at the checkpoint
+# For each model in the provided list, this script:
+#   1. Starts a vLLM server for the model
 #   2. Waits for the server to become healthy
-#   3. Runs the hf_trainer predict pipeline (code exec eval) with a unique experiment name
+#   3. Runs the hf_trainer predict pipeline with an experiment name derived from the model
 #   4. Shuts down the vLLM server
-#   5. Moves on to the next checkpoint
+#   5. Moves on to the next model
 #
-# Results are logged to separate Hydra output directories per checkpoint.
+# The experiment name (runtime.exp_name) is derived from the model name with "/" replaced
+# by "_" (e.g., "Qwen/Qwen2.5-7B-Instruct" -> "Qwen_Qwen2.5-7B-Instruct").
+# The run name (runtime.run_name) is a per-model timestamp (YYYYMMDD_HHMMSS).
 #
 # Usage:
-#   bash scripts/run_checkpoint_sweep.sh \
-#     --experiment original/v0_50perc_dataset_qwen3_vllm_eval \
-#     --checkpoints /path/to/ckpt1 /path/to/ckpt2 /path/to/ckpt3
+#   bash scripts/run_model_sweep.sh \
+#     --models Qwen/Qwen2.5-7B-Instruct meta-llama/Llama-3.1-8B-Instruct
+#
+#   # With a custom vLLM virtual environment:
+#   bash scripts/run_model_sweep.sh \
+#     --vllm-venv /path/to/vllm-venv \
+#     --models Qwen/Qwen2.5-7B-Instruct
 #
 #   # With explicit GPU and port control:
-#   bash scripts/run_checkpoint_sweep.sh \
-#     --experiment original/v0_50perc_dataset_qwen3_vllm_eval \
+#   bash scripts/run_model_sweep.sh \
 #     --cuda-devices 0,1,2,3 \
 #     --port 8000 \
-#     --checkpoints /path/to/ckpt1 /path/to/ckpt2
+#     --models Qwen/Qwen2.5-7B-Instruct
 #
-#   # Pass extra Hydra overrides after --:
-#   bash scripts/run_checkpoint_sweep.sh \
+#   # With a different experiment config and extra Hydra overrides:
+#   bash scripts/run_model_sweep.sh \
 #     --experiment original/v0_50perc_dataset_qwen3_vllm_eval \
-#     --checkpoints /path/to/ckpt1 /path/to/ckpt2 \
+#     --models Qwen/Qwen2.5-7B-Instruct \
 #     -- config.evals_config.eval_batch_size=48
 #
 # ------------------------------------------------------------------------------------------
@@ -35,7 +40,7 @@ set -euo pipefail
 IFS=$'\n\t'
 
 # ---- defaults ----
-EXPERIMENT=""
+EXPERIMENT="original/external_eval_base"
 PORT=8000
 CUDA_DEVICES=""
 TENSOR_PARALLEL_SIZE=""
@@ -43,8 +48,9 @@ GPU_MEM_UTIL="0.9"
 MAX_MODEL_LEN=""
 HEALTH_TIMEOUT=600  # seconds to wait for vLLM to become healthy
 HEALTH_INTERVAL=5   # seconds between health checks
+VLLM_VENV=""        # path to a venv with vLLM installed (default: use project's uv env)
 VLLM_SERVER_EXTRA_ARGS=()
-CHECKPOINTS=()
+MODELS=()
 HYDRA_OVERRIDES=()
 VLLM_PID=""
 VLLM_PGID=""
@@ -120,24 +126,61 @@ wait_for_vllm_stop() {
     vllm_resources_released
 }
 
+derive_exp_name() {
+    # filesystem-safe experiment name from the full model id (e.g., "Qwen/Qwen2.5-7B-Instruct" -> "Qwen_Qwen2.5-7B-Instruct")
+    local model_name="$1"
+    echo "${model_name//\//_}"
+}
+
+infer_tensor_parallel_size() {
+    # determine tensor parallel size from explicit flag, cuda devices, or visible GPUs
+    if [[ -n "${TENSOR_PARALLEL_SIZE}" ]]; then
+        echo "${TENSOR_PARALLEL_SIZE}"
+        return
+    fi
+    if [[ -n "${CUDA_DEVICES}" ]]; then
+        local devices
+        IFS=',' read -r -a devices <<< "${CUDA_DEVICES}"
+        echo "${#devices[@]}"
+        return
+    fi
+    if command -v nvidia-smi &>/dev/null; then
+        local gpu_count
+        gpu_count=$(nvidia-smi -L 2>/dev/null | wc -l | tr -d ' ')
+        if (( gpu_count > 0 )); then
+            echo "${gpu_count}"
+            return
+        fi
+    fi
+    echo "1"
+}
+
 usage() {
     local exit_code="${1:-0}"
     cat <<'USAGE'
-Usage: bash scripts/run_checkpoint_sweep.sh [OPTIONS] --checkpoints CKPT1 [CKPT2 ...] [-- HYDRA_OVERRIDES...]
+Usage: bash scripts/run_model_sweep.sh [OPTIONS] --models MODEL1 [MODEL2 ...] [-- HYDRA_OVERRIDES...]
 
 Required:
-  --experiment EXP        Hydra experiment config name (e.g., original/v0_50perc_dataset_qwen3_vllm_eval)
-  --checkpoints PATH ...  One or more checkpoint directories (consumed until next flag or --)
+  --models NAME ...       One or more HuggingFace model names (consumed until next flag or --)
+
+Experiment config:
+  --experiment EXP        Hydra experiment config name (default: original/external_eval_base)
 
 Optional:
+  --vllm-venv PATH        Path to a virtual environment with vLLM installed (default: use project's uv env)
   --port PORT             vLLM server port (default: 8000)
   --cuda-devices IDS      Comma-separated GPU IDs for vLLM (e.g., 0,1,2,3)
-  --tensor-parallel-size N  Override tensor parallel size (default: auto from cuda-devices)
+  --tensor-parallel-size N  Override tensor parallel size (default: auto from cuda-devices or visible GPUs)
   --gpu-mem-util FRAC     GPU memory utilization fraction (default: 0.9)
   --max-model-len LEN     Max sequence length for vLLM
   --health-timeout SECS   Max seconds to wait for vLLM readiness (default: 600)
-  --vllm-extra-arg ARG    Repeatable single extra argument to pass to vllm_server.py
+  --vllm-extra-arg ARG    Repeatable single extra argument to pass to vllm serve
   -h, --help              Show this help
+
+Experiment naming:
+  The experiment name (runtime.exp_name) is derived from the model name with "/" replaced
+  by "_" (e.g., "Qwen/Qwen2.5-7B-Instruct" -> "Qwen_Qwen2.5-7B-Instruct").
+  The run name (runtime.run_name) is a per-model timestamp (YYYYMMDD_HHMMSS).
 
 Everything after -- is forwarded as Hydra overrides to the eval run.
 USAGE
@@ -163,6 +206,14 @@ while [[ $# -gt 0 ]]; do
                 usage 1
             fi
             PORT="$2"
+            shift 2
+            ;;
+        --vllm-venv)
+            if [[ $# -lt 2 || "$2" == --* ]]; then
+                echo "Error: --vllm-venv requires a value"
+                usage 1
+            fi
+            VLLM_VENV="$2"
             shift 2
             ;;
         --cuda-devices)
@@ -213,10 +264,10 @@ while [[ $# -gt 0 ]]; do
             VLLM_SERVER_EXTRA_ARGS+=("$2")
             shift 2
             ;;
-        --checkpoints)
+        --models)
             shift
             while [[ $# -gt 0 && "$1" != --* ]]; do
-                CHECKPOINTS+=("$1")
+                MODELS+=("$1")
                 shift
             done
             ;;
@@ -234,80 +285,69 @@ done
 
 # ---- validate ----
 
-if [[ -z "${EXPERIMENT}" ]]; then
-    echo "Error: --experiment is required"
+if [[ ${#MODELS[@]} -eq 0 ]]; then
+    echo "Error: --models requires at least one model name"
     usage 1
 fi
 
-if [[ ${#CHECKPOINTS[@]} -eq 0 ]]; then
-    echo "Error: --checkpoints requires at least one checkpoint path"
-    usage 1
-fi
-
-for ckpt in "${CHECKPOINTS[@]}"; do
-    if [[ ! -d "${ckpt}" ]]; then
-        echo "Error: checkpoint directory does not exist: ${ckpt}"
+if [[ -n "${VLLM_VENV}" ]]; then
+    if [[ ! -d "${VLLM_VENV}" ]]; then
+        echo "Error: vLLM venv directory does not exist: ${VLLM_VENV}"
         exit 1
     fi
-done
+    if [[ ! -x "${VLLM_VENV}/bin/vllm" ]]; then
+        echo "Error: vllm binary not found in venv: ${VLLM_VENV}/bin/vllm"
+        exit 1
+    fi
+fi
 
 # ---- functions ----
 
-derive_model_name() {
-    # mirrors the auto-derive logic in vllm_server.py: last 3 path components joined by /
-    local ckpt_path="$1"
-    local parts
-    IFS='/' read -ra parts <<< "${ckpt_path}"
-    local num_parts=${#parts[@]}
-    local num_components=$(( num_parts < 3 ? num_parts : 3 ))
-    local start_idx=$(( num_parts - num_components ))
-    local name=""
-    for (( idx=start_idx; idx < num_parts; idx++ )); do
-        if [[ -n "${name}" ]]; then
-            name="${name}/"
-        fi
-        name="${name}${parts[idx]}"
-    done
-    echo "${name}"
-}
-
-derive_experiment_suffix() {
-    # create a short, filesystem-safe suffix from the checkpoint path
-    local ckpt_path="$1"
-    local base
-    base="$(basename "${ckpt_path}")"
-    local parent
-    parent="$(basename "$(dirname "${ckpt_path}")")"
-    echo "${parent}_${base}"
-}
-
 start_vllm() {
-    local ckpt_path="$1"
-    local server_cmd=(
-        uv run python "${SCRIPT_DIR}/vllm_eval/vllm_server.py"
-        --checkpoint_path "${ckpt_path}"
+    local model_name="$1"
+    local tp_size
+    tp_size="$(infer_tensor_parallel_size)"
+
+    local server_cmd=()
+    if [[ -n "${VLLM_VENV}" ]]; then
+        server_cmd=("${VLLM_VENV}/bin/vllm" serve "${model_name}")
+    else
+        server_cmd=(uv run vllm serve "${model_name}")
+    fi
+
+    server_cmd+=(
+        --host 0.0.0.0
         --port "${PORT}"
-        --gpu_memory_utilization "${GPU_MEM_UTIL}"
+        --tensor-parallel-size "${tp_size}"
+        --gpu-memory-utilization "${GPU_MEM_UTIL}"
+        --served-model-name "${model_name}"
+        --trust-remote-code
+        --disable-log-requests
+        --disable-log-stats
+        --enable-prefix-caching
     )
-    if [[ -n "${CUDA_DEVICES}" ]]; then
-        server_cmd+=(--cuda_devices "${CUDA_DEVICES}")
-    fi
-    if [[ -n "${TENSOR_PARALLEL_SIZE}" ]]; then
-        server_cmd+=(--tensor_parallel_size "${TENSOR_PARALLEL_SIZE}")
-    fi
+
     if [[ -n "${MAX_MODEL_LEN}" ]]; then
-        server_cmd+=(--max_model_len "${MAX_MODEL_LEN}")
+        server_cmd+=(--max-model-len "${MAX_MODEL_LEN}")
     fi
     if [[ ${#VLLM_SERVER_EXTRA_ARGS[@]} -gt 0 ]]; then
         server_cmd+=("${VLLM_SERVER_EXTRA_ARGS[@]}")
     fi
 
     log "Starting vLLM server: ${server_cmd[*]}"
+
+    # set CUDA_VISIBLE_DEVICES for the vllm process only (via env prefix)
+    local launch_cmd=()
+    if [[ -n "${CUDA_DEVICES}" ]]; then
+        launch_cmd+=(env "CUDA_VISIBLE_DEVICES=${CUDA_DEVICES}")
+    fi
+    launch_cmd+=("${server_cmd[@]}")
+
     if command -v setsid > /dev/null 2>&1; then
-        setsid "${server_cmd[@]}" &
+        setsid "${launch_cmd[@]}" &
         VLLM_PGID=$!
     else
-        "${server_cmd[@]}" &
+        "${launch_cmd[@]}" &
         VLLM_PGID=""
     fi
     VLLM_PID=$!
@@ -408,7 +448,7 @@ cleanup() {
 
 handle_signal() {
     local signal_name="$1"
-    log "Received ${signal_name}; stopping checkpoint sweep..."
+    log "Received ${signal_name}; stopping model sweep..."
     cleanup
     trap - EXIT
     if [[ "${signal_name}" == "INT" ]]; then
@@ -423,49 +463,50 @@ trap 'handle_signal TERM' TERM
 
 # ---- main loop ----
 
-TOTAL=${#CHECKPOINTS[@]}
+TOTAL=${#MODELS[@]}
 PASSED=0
 FAILED=0
 
-log "Starting checkpoint sweep: ${TOTAL} checkpoint(s), experiment=${EXPERIMENT}"
-log "Checkpoints:"
-for ckpt in "${CHECKPOINTS[@]}"; do
-    log "  - ${ckpt}"
+log "Starting model sweep: ${TOTAL} model(s), experiment=${EXPERIMENT}"
+if [[ -n "${VLLM_VENV}" ]]; then
+    log "Using custom vLLM venv: ${VLLM_VENV}"
+fi
+log "Models:"
+for model in "${MODELS[@]}"; do
+    log "  - ${model}"
 done
 echo ""
 
-for ckpt_idx in $(seq 0 $(( TOTAL - 1 ))); do
-    ckpt="${CHECKPOINTS[${ckpt_idx}]}"
-    ckpt_num=$(( ckpt_idx + 1 ))
-    model_name="$(derive_model_name "${ckpt}")"
-    exp_suffix="$(derive_experiment_suffix "${ckpt}")"
+for model_idx in $(seq 0 $(( TOTAL - 1 ))); do
+    model="${MODELS[${model_idx}]}"
+    model_num=$(( model_idx + 1 ))
+    exp_name="$(derive_exp_name "${model}")"
 
     log "=========================================="
-    log "Checkpoint ${ckpt_num}/${TOTAL}: ${ckpt}"
-    log "  Model name: ${model_name}"
-    log "  Experiment suffix: ${exp_suffix}"
+    log "Model ${model_num}/${TOTAL}: ${model}"
+    log "  Experiment name: ${exp_name}"
     log "=========================================="
 
-    # 1. start vLLM server for this checkpoint
-    start_vllm "${ckpt}"
+    # 1. start vLLM server for this model
+    start_vllm "${model}"
 
     # 2. wait for it to be ready
-    if ! wait_for_health "${model_name}"; then
-        log "FAILED: vLLM server did not start for checkpoint: ${ckpt}"
+    if ! wait_for_health "${model}"; then
+        log "FAILED: vLLM server did not start for model: ${model}"
         stop_vllm
         FAILED=$(( FAILED + 1 ))
         continue
     fi
 
     # 3. run the eval pipeline
-    run_name="${EXPERIMENT}_${exp_suffix}"
+    run_name="$(date '+%Y%m%d_%H%M%S')"
     eval_cmd=(
         uv run python -m pyine.apps.trainers.hf_trainer
         "+experiment=${EXPERIMENT}"
-        "runtime.exp_name=${run_name}"
+        "runtime.exp_name=${exp_name}"
         "runtime.run_name=${run_name}"
         "config.evals_config.vllm_provider_config.model_kwargs.base_url=http://localhost:${PORT}/v1"
-        "config.evals_config.vllm_provider_config.model_kwargs.model=${model_name}"
+        "config.evals_config.vllm_provider_config.model_kwargs.model=${model}"
     )
     # append any extra Hydra overrides from the user
     if [[ ${#HYDRA_OVERRIDES[@]} -gt 0 ]]; then
@@ -474,14 +515,14 @@ for ckpt_idx in $(seq 0 $(( TOTAL - 1 ))); do
 
     log "Running eval: ${eval_cmd[*]}"
     if "${eval_cmd[@]}"; then
-        log "PASSED: checkpoint ${ckpt_num}/${TOTAL}"
+        log "PASSED: model ${model_num}/${TOTAL}"
         PASSED=$(( PASSED + 1 ))
     else
-        log "FAILED: eval pipeline returned non-zero for checkpoint: ${ckpt}"
+        log "FAILED: eval pipeline returned non-zero for model: ${model}"
         FAILED=$(( FAILED + 1 ))
     fi
 
-    # 4. shut down vLLM before moving to next checkpoint
+    # 4. shut down vLLM before moving to next model
     stop_vllm
     echo ""
 done
