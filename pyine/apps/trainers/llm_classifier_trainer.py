@@ -393,15 +393,19 @@ def classifier_train(
         pyine.utils.reprod.set_seed(replica_seed)
     tokenizer = config.get_tokenizer()
     model = config.get_model()
-    # when device_map is set, accelerate installs dispatch hooks that interfere with
-    # training (they detach intermediate activations, breaking gradient checkpointing
-    # and backward passes). Remove them: the HF Trainer handles device placement.
-    if hasattr(model, "hf_device_map"):
-        accelerate.hooks.remove_hook_from_submodules(model)
-    # after removing dispatch hooks, re-enable requires_grad for full fine-tuning;
-    # LoRA handles its own grad setup inside get_model, so skip when LoRA is active
+    # get_model() loads with device_map, which is correct for inference but causes
+    # two problems during training:
+    #   1. accelerate dispatch hooks detach intermediate activations, breaking
+    #      backward passes (especially with gradient checkpointing)
+    #   2. for LoRA, base weights are frozen so embedding outputs lack
+    #      requires_grad=True, which torch.utils.checkpoint needs
+    # fix: remove dispatch hooks (Trainer handles device placement via Accelerate),
+    # then fix gradient setup depending on training mode
+    accelerate.hooks.remove_hook_from_submodules(model)
     if config.lora_config is None:
-        model.requires_grad_(True)
+        model.requires_grad_(True)  # full fine-tuning: re-enable gradients on all params
+    else:
+        model.enable_input_require_grads()  # LoRA: embedding outputs must carry grad for gradient checkpointing
     _sync_model_pad_token_id_with_tokenizer(model, tokenizer)
 
     # --- 2. Set truncation side (if configured) ---
