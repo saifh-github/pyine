@@ -511,7 +511,7 @@ for model_idx in $(seq 0 $(( TOTAL - 1 ))); do
         uv run python -m pyine.apps.trainers.hf_trainer
         "+experiment=${EXPERIMENT}"
         "runtime.exp_name=${exp_name}"
-        "runtime.run_name=${run_name}"
+        "runtime.run_name='${run_name}'"
         "config.evals_config.vllm_provider_config.model_kwargs.base_url=http://localhost:${PORT}/v1"
         "config.evals_config.vllm_provider_config.model_kwargs.model=${model}"
     )
