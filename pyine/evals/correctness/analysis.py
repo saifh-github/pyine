@@ -10,6 +10,7 @@ This module provides functions to:
 from __future__ import annotations
 
 import logging
+import math
 import pathlib  # noqa: TC003
 import re
 import typing
@@ -1341,13 +1342,19 @@ def plot_cost_analysis(
         ax_total = axes_list[-1]
         ax_total.set_axis_off()
         total = cost_stats.total_cost
+        if abs(total) >= 1e8:  # type: ignore[arg-type]
+            _exp = int(math.floor(math.log10(abs(total))))  # type: ignore[arg-type]
+            _mantissa = total / 10**_exp  # type: ignore[operator]
+            _total_label = f"{_mantissa:.2f}x10$^{{{_exp}}}$"
+        else:
+            _total_label = f"{total:,.0f}"  # type: ignore[arg-type]
         ax_total.text(
             0.5,
             0.55,
-            f"{total:,.0f}",
+            _total_label,
             ha="center",
             va="center",
-            fontsize=22,
+            fontsize=20,
             fontweight="bold",
             transform=ax_total.transAxes,
         )
