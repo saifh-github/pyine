@@ -9,11 +9,12 @@ defaults:
   - _self_
 
 runtime:
-  exp_name: "original/openai_eval_${config.base_model}"
+  #exp_name: "openai/${config.base_model}_low_bigprompt"
+  exp_name: "openai/${config.base_model}_default_bigprompt"
   run_name: "${now:%Y%m%d_%H%M%S}"
 
 config:
-  base_model: gpt-5-nano
+  base_model: gpt-5.4-nano
   grpo_config:
     do_train: False
     do_eval: False
@@ -22,7 +23,7 @@ config:
     eval_subset_names: ["test"]
     prompt_config:
       include_examples: true
-      version: rl_tagged_answer  # or rl_tagged_answer_thinking
+      version: unstructured_with_3_predict_types_tagged  # or rl_tagged_answer
   evals_config:
     # eval_generation_max_new_tokens_override: null  # null = no generation cap (use model max)
     sampling_temperature_override: 1.0  # can't set this for openai models
@@ -39,3 +40,4 @@ config:
         max_tokens: ${config.evals_config.eval_generation_max_new_tokens_override}
         temperature: ${config.evals_config.sampling_temperature_override}
         top_p: ${config.evals_config.sampling_top_p_override}
+        #reasoning_effort: low
