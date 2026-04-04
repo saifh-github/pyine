@@ -88,6 +88,119 @@ def test_get_unstructured_with_3_predict_types_config_and_template() -> None:
     assert rendered_ret.endswith("Now, provide ONLY the function's returned value(s):")
 
 
+def test_get_unstructured_with_3_predict_types_tagged_config_and_template() -> None:
+    prompt_version = "unstructured_with_3_predict_types_tagged"
+    config = pyine.prompts.manager.get_prompt_config("code_execution", version=prompt_version)
+    assert isinstance(config, pyine.prompts.utils.PromptConfig)
+    assert config.metadata.name == "code_execution"
+    assert config.example_count >= 3
+    template = pyine.prompts.manager.get_prompt_template(
+        "code_execution", version=prompt_version, include_examples=True
+    )
+    assert isinstance(template, langchain_core.prompts.PromptTemplate)
+    core_vars = {"code", "predict_type", "inputs"}
+    assert core_vars.issubset(set(template.input_variables))
+    assert template.optional_variables == ["description", "entrypoint"]
+    template_str = template.template
+    assert template_str.startswith("You are an expert at interpreting and executing Python 3 code.")
+    assert "<final>" in template_str and "</final>" in template_str
+
+    rendered_prog = template.format(
+        code='print("Hello, " + input("Enter name: "))',
+        description="Greets a user by name.",
+        predict_type="program_output",
+        inputs="Bobby",
+    )
+    assert "Type of execution output that should be predicted: program_output" in rendered_prog
+    assert "Greets a user by name" in rendered_prog
+    assert "Enter name: " in rendered_prog and "Bobby" in rendered_prog
+    assert rendered_prog.endswith("Now, provide the execution output between <final> and </final> tags:")
+
+    rendered_vars = template.format(
+        code="x=2\ny=3\nz=x+y",
+        description="Adds two numbers.",
+        predict_type="frame_variables",
+        inputs="",
+        first_line=1,
+        last_line=3,
+        first_line_hit=1,
+        last_line_hit=2,
+    )
+    assert "Type of execution output that should be predicted: frame_variables" in rendered_vars
+    assert "First line" in rendered_vars and "Last line" in rendered_vars
+    assert rendered_vars.endswith("Now, provide the variables dump between <final> and </final> tags:")
+
+    rendered_ret = template.format(
+        code="def add(a,b): return a+b\nresult = add(1,2)",
+        description="Simple add function.",
+        entrypoint="add",
+        predict_type="function_return",
+        inputs="a=1, b=2",
+        first_line=1,
+        last_line=1,
+    )
+    assert "Type of execution output that should be predicted: function_return" in rendered_ret
+    assert "Consider only a call of the following function:" in rendered_ret
+    assert "Use the following call input arguments:" in rendered_ret
+    assert "a=1, b=2" in rendered_ret
+    assert rendered_ret.endswith("Now, provide the function's returned value(s) between <final> and </final> tags:")
+
+
+def test_get_unstructured_with_3_predict_types_tagged_thinking_config_and_template() -> None:
+    prompt_version = "unstructured_with_3_predict_types_tagged_thinking"
+    config = pyine.prompts.manager.get_prompt_config("code_execution", version=prompt_version)
+    assert isinstance(config, pyine.prompts.utils.PromptConfig)
+    assert config.metadata.name == "code_execution"
+    assert config.example_count >= 3
+    template = pyine.prompts.manager.get_prompt_template(
+        "code_execution", version=prompt_version, include_examples=True
+    )
+    assert isinstance(template, langchain_core.prompts.PromptTemplate)
+    core_vars = {"code", "predict_type", "inputs"}
+    assert core_vars.issubset(set(template.input_variables))
+    assert template.optional_variables == ["description", "entrypoint"]
+    template_str = template.template
+    assert template_str.startswith("You are an expert at interpreting and executing Python 3 code.")
+    assert "<final>" in template_str and "</final>" in template_str
+    assert "<think>" in template_str and "</think>" in template_str
+    assert "You always reason before responding" in template_str
+
+    rendered_prog = template.format(
+        code='print("Hello, " + input("Enter name: "))',
+        description="Greets a user by name.",
+        predict_type="program_output",
+        inputs="Bobby",
+    )
+    assert "Type of execution output that should be predicted: program_output" in rendered_prog
+    assert "<think>" in rendered_prog
+    assert rendered_prog.endswith("Now, provide the execution output between <final> and </final> tags:")
+
+    rendered_vars = template.format(
+        code="x=2\ny=3\nz=x+y",
+        description="Adds two numbers.",
+        predict_type="frame_variables",
+        inputs="",
+        first_line=1,
+        last_line=3,
+        first_line_hit=1,
+        last_line_hit=2,
+    )
+    assert "Type of execution output that should be predicted: frame_variables" in rendered_vars
+    assert rendered_vars.endswith("Now, provide the variables dump between <final> and </final> tags:")
+
+    rendered_ret = template.format(
+        code="def add(a,b): return a+b\nresult = add(1,2)",
+        description="Simple add function.",
+        entrypoint="add",
+        predict_type="function_return",
+        inputs="a=1, b=2",
+        first_line=1,
+        last_line=1,
+    )
+    assert "Type of execution output that should be predicted: function_return" in rendered_ret
+    assert rendered_ret.endswith("Now, provide the function's returned value(s) between <final> and </final> tags:")
+
+
 def test_get_rl_tagged_answer_config_and_template() -> None:
     prompt_version = "rl_tagged_answer"
     config = pyine.prompts.manager.get_prompt_config("code_execution", version=prompt_version)
