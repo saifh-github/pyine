@@ -15,6 +15,7 @@ import pathlib
 import shutil
 import typing
 
+import accelerate.hooks
 import numpy as np
 import scipy.special
 import sklearn.metrics
@@ -392,9 +393,13 @@ def classifier_train(
         pyine.utils.reprod.set_seed(replica_seed)
     tokenizer = config.get_tokenizer()
     model = config.get_model()
-    # when device_map is set, accelerate dispatch hooks disable requires_grad on all
-    # parameters; re-enable for full fine-tuning (LoRA handles its own grad setup
-    # inside get_model, so only do this when training the full model)
+    # when device_map is set, accelerate installs dispatch hooks that interfere with
+    # training (they detach intermediate activations, breaking gradient checkpointing
+    # and backward passes). Remove them: the HF Trainer handles device placement.
+    if hasattr(model, "hf_device_map"):
+        accelerate.hooks.remove_hook_from_submodules(model)
+    # after removing dispatch hooks, re-enable requires_grad for full fine-tuning;
+    # LoRA handles its own grad setup inside get_model, so skip when LoRA is active
     if config.lora_config is None:
         model.requires_grad_(True)
     _sync_model_pad_token_id_with_tokenizer(model, tokenizer)

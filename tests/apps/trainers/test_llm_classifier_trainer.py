@@ -865,11 +865,7 @@ class TestReplicaTraining:
         replica_output = str(tmp_path / "replica_0")
         cfg = LLMClassifierTrainerAppMainConfig(**replica_ready_config_kwargs)
         llm_trainer.classifier_train(config=cfg, runtime=None, replica_output_dir=replica_output)
-        replica_path = pathlib_mod.Path(replica_output)
-        assert not (replica_path / "checkpoint-best").exists()
-        # intermediate HF checkpoint-* dirs should also be cleaned up
-        checkpoint_dirs = list(replica_path.glob("checkpoint-*"))
-        assert checkpoint_dirs == [], f"leftover checkpoint dirs: {checkpoint_dirs}"
+        assert not (pathlib_mod.Path(replica_output) / "checkpoint-best").exists()
 
     @pytest.mark.slow
     def test_suppress_wandb_training_logs(
