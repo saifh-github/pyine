@@ -171,8 +171,8 @@ class KeywordBiasDataModuleConfig(pyine.organisms.datamodules.base.BiasDataModul
     """Explicit keyword to use for bias experiments. If None, auto-select from clusters."""
     keyword_auto_selection_config: KeywordAutoSelectionConfig = KeywordAutoSelectionConfig()
     """Configuration for automatic keyword selection when keyword is None."""
-    train_subset_with_keyword_ratio: pydantic.PositiveFloat = 0.05
-    """Fraction of training data to use with keyword present.
+    train_subset_with_keyword_ratio: float = pydantic.Field(default=0.5, gt=0.0, lt=1.0)
+    """Fraction of training data to use with keyword present (must be in (0, 1) exclusive).
 
     If this fraction cannot be reached with all naturally-occurring traces, we will perform
     uniform (solution-wise) subsampling of traces without the keyword to try to match this ratio.
@@ -291,6 +291,13 @@ class KeywordBiasDataModuleConfig(pyine.organisms.datamodules.base.BiasDataModul
             else:
                 combined_rule = augment_filter
             object.__setattr__(self, "base_filter_rule", combined_rule)
+        # --- fail-loud: reject nondeterministic resampling seed for metadata prep ---
+        if self.train_subset_resampling_seed is None:
+            raise ValueError(
+                "train_subset_resampling_seed must not be None; rebalancing runs during "
+                "prepare_data() and its result is cached, a None seed would make metadata "
+                "nondeterministic across runs"
+            )
         # validate that allow_db_lookups is not used with non-original code types
         self._validate_code_type_safety()
         # now call parent validation (which resolves parser/loader configs)

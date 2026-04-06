@@ -451,6 +451,32 @@ class BiasDataModuleBase[ConfigType: BiasDataModuleBaseConfig](
             unassigned_idxs = [idx for idx in tidxs_to_sids if idx not in picked_trace_meta_idxs]
             unassigned_traces_meta.extend([traces_meta[idx] for idx in unassigned_idxs])
 
+    def _resolve_subset_filtering_config(
+        self,
+        subset_name: pyine.data.datamodule.SubsetNameType,
+    ) -> pyine.organisms.datamodules.samples.configs.TraceFilteringConfig:
+        """Resolve the effective trace filtering config for a given subset.
+
+        This extracts the ``filtering_config`` from the resolved parser config for the given subset,
+        constructing a ``TraceFilteringConfig`` from it. Used by subclasses that need to pre-filter
+        traces during metadata preparation (e.g. before keyword rebalancing or hint-split partitioning).
+
+        Args:
+            subset_name: The subset whose parser filtering config to resolve.
+
+        Returns:
+            The resolved TraceFilteringConfig for the given subset.
+        """
+        parser_config = self.config._resolve_dataparser_config(subset_name)  # pyright: ignore[reportPrivateUsage]
+        params = parser_config.get_params_dict()
+        filtering_dict = params.get("filtering_config", {})
+        if filtering_dict is None:
+            return pyine.organisms.datamodules.samples.configs.TraceFilteringConfig()
+        if isinstance(filtering_dict, dict):
+            filtering_dict = typing.cast("dict[str, typing.Any]", filtering_dict)
+            return pyine.organisms.datamodules.samples.configs.TraceFilteringConfig(**filtering_dict)
+        return filtering_dict  # type: ignore[return-value]
+
     # --------------- METADATA CACHING METHODS ---------------
 
     def _get_cache_subdirectory_name(self) -> str:

@@ -15,6 +15,7 @@ import pyine.data.utils.lmdb_io
 import pyine.data.utils.splits
 import pyine.organisms.datamodules.keywords as keywords_mod
 import pyine.organisms.datamodules.samples
+import pyine.organisms.datamodules.samples.configs as samples_configs
 import pyine.organisms.datamodules.samples.keyword_ops as keyword_ops
 import pyine.prompts
 import pyine.prompts.types
@@ -504,11 +505,20 @@ class TestRebalanceTrainSubsetKeywordRatio:
 class TestAdjustKeywordSplitSubsets:
     """Tests for _adjust_keyword_split_subsets method."""
 
+    @staticmethod
+    def _make_disabled_filtering_resolver() -> typing.Callable[[str], types.SimpleNamespace]:
+        """Returns a _resolve_dataparser_config stub that yields disabled quality filters."""
+        disabled = samples_configs.TraceFilteringConfig.create_disabled()
+        return lambda name: types.SimpleNamespace(
+            get_params_dict=lambda: {"filtering_config": disabled},
+        )
+
     def _make_datamodule_stub(
         self,
         eval_subset_names: tuple[str, ...] = ("valid",),
         evaluation_strategy: EvaluationStrategy = EvaluationStrategy.keyword_presence_split,
         target_ratio: float = 0.5,
+        filtering_config_resolver: typing.Callable[[str], types.SimpleNamespace] | None = None,
     ) -> keywords_mod.KeywordBiasDataModule:
         stub = keywords_mod.KeywordBiasDataModule.__new__(keywords_mod.KeywordBiasDataModule)
         expanded_base_names = frozenset(eval_subset_names)
@@ -518,6 +528,8 @@ class TestAdjustKeywordSplitSubsets:
             evaluation_strategy=evaluation_strategy,
             train_subset_with_keyword_ratio=target_ratio,
             train_subset_resampling_seed=0,
+            exclude_augmented_traces=True,
+            _resolve_dataparser_config=filtering_config_resolver or self._make_disabled_filtering_resolver(),
         )
         stub.verbose = False
         return typing.cast("keywords_mod.KeywordBiasDataModule", stub)
@@ -563,6 +575,92 @@ class TestAdjustKeywordSplitSubsets:
         with_ids = {t.identifier for t in derived_subsets["valid_with_keyword"].traces}
         without_ids = {t.identifier for t in derived_subsets["valid_without_keyword"].traces}
         assert with_ids == without_ids
+
+    def test_quality_prefiltering_removes_traces_before_rebalancing(self) -> None:
+        """Quality pre-filtering should remove traces exceeding quality thresholds before
+        rebalancing, so the keyword ratio is computed on the filtered pool."""
+        # 4 keyword traces + 6 non-keyword traces; pre-filtering will remove the keyword ones
+        traces_with_kw = [_DummyTrace(f"kw{idx}", f"solKW{idx}") for idx in range(4)]
+        traces_without_kw = [_DummyTrace(f"nkw{idx}", f"solNKW{idx}") for idx in range(6)]
+        trace_ids_with_kw = frozenset(t.identifier for t in traces_with_kw)
+        # filtering config with an active quality filter
+        active_filter = samples_configs.TraceFilteringConfig(
+            max_code_line_count=250,
+            max_trace_steps=None,
+            max_code_line_length=None,
+            max_code_length=None,
+            max_args_length=None,
+        )
+
+        def resolver(name: str) -> types.SimpleNamespace:
+            return types.SimpleNamespace(
+                get_params_dict=lambda: {"filtering_config": active_filter},
+            )
+
+        dm = self._make_datamodule_stub(
+            target_ratio=0.5,
+            filtering_config_resolver=resolver,
+        )
+        all_train = list(traces_with_kw) + list(traces_without_kw)
+        subset_traces: dict[str, list[typing.Any]] = {
+            "train": list(all_train),
+            "valid": [_DummyTrace("v0", "solV0")],
+        }
+        unassigned: list[typing.Any] = []
+        # mock filter_traces to simulate removing all keyword traces (as if they were too long)
+        kept_traces = list(traces_without_kw)  # only non-keyword traces survive
+        filter_calls: list[samples_configs.TraceFilteringConfig] = []
+        fake_results = mock.MagicMock()
+        fake_results.kept_traces = kept_traces
+        fake_results.filtered_trace_count = len(traces_with_kw)
+
+        def mock_filter_traces(
+            traces: list[typing.Any],
+            epoch: int,
+            filtering_config: samples_configs.TraceFilteringConfig,
+        ) -> mock.MagicMock:
+            filter_calls.append(filtering_config)
+            return fake_results
+
+        with mock.patch(
+            "pyine.organisms.datamodules.keywords.pyine.organisms.datamodules.samples.filtering.filter_traces",
+            side_effect=mock_filter_traces,
+        ):
+            dm._adjust_keyword_split_subsets(subset_traces, unassigned, trace_ids_with_kw)
+        # filter_traces should have been called with quality-only config
+        assert len(filter_calls) >= 1
+        quality_call = filter_calls[0]
+        assert quality_call.max_code_line_count == 250  # quality filter preserved
+        assert quality_call.max_traces_per_solution is None  # cap filters removed
+        # all keyword traces should have been removed by pre-filtering
+        train_ids = {t.identifier for t in subset_traces["train"]}
+        for trace in traces_with_kw:
+            assert trace.identifier not in train_ids
+        # removed traces should be in unassigned
+        unassigned_ids = {t.identifier for t in unassigned}
+        for trace in traces_with_kw:
+            assert trace.identifier in unassigned_ids
+
+    def test_no_prefiltering_when_quality_filters_disabled(self) -> None:
+        """When quality filters are disabled, no traces should be removed by pre-filtering
+        (rebalancing still runs and may change the train subset)."""
+        traces_with_kw = [_DummyTrace(f"kw{idx}", f"solKW{idx}") for idx in range(3)]
+        traces_without_kw = [_DummyTrace(f"nkw{idx}", f"solNKW{idx}") for idx in range(7)]
+        trace_ids_with_kw = frozenset(t.identifier for t in traces_with_kw)
+        original_train = list(traces_with_kw) + list(traces_without_kw)
+        original_train_ids = {t.identifier for t in original_train}
+        # disabled filtering -> no quality pre-filtering should occur
+        dm = self._make_datamodule_stub(target_ratio=0.5)  # default resolver returns disabled
+        subset_traces: dict[str, list[typing.Any]] = {
+            "train": list(original_train),
+            "valid": [_DummyTrace("v0", "solV0")],
+        }
+        unassigned: list[typing.Any] = []
+        dm._adjust_keyword_split_subsets(subset_traces, unassigned, trace_ids_with_kw)
+        # no traces should have been removed by pre-filtering; any changes are from rebalancing
+        # which only moves traces from train to unassigned (never adds new ones)
+        train_after_ids = {t.identifier for t in subset_traces["train"]}
+        assert train_after_ids.issubset(original_train_ids), "train should only contain traces from the original set"
 
 
 class TestGetParser:
@@ -783,6 +881,33 @@ class TestKeywordBiasDataModuleConfigValidateAndResolve:
         assert "valid_without_keyword" in config.subset_names
         assert "test_with_keyword" in config.subset_names
         assert "test_without_keyword" in config.subset_names
+
+    def test_rejects_none_resampling_seed(self, fake_lmdb_and_split: tuple[pathlib.Path, pathlib.Path]) -> None:
+        lmdb_path, split_path = fake_lmdb_and_split
+        with pytest.raises(pydantic.ValidationError, match="train_subset_resampling_seed must not be None"):
+            KeywordBiasDataModuleConfig(
+                lmdb_paths=[str(lmdb_path)],
+                split_file_path=str(split_path),
+                train_subset_resampling_seed=None,
+                instantiate_parsers_at_setup=False,
+            )
+
+    def test_rejects_invalid_keyword_ratio(self, fake_lmdb_and_split: tuple[pathlib.Path, pathlib.Path]) -> None:
+        lmdb_path, split_path = fake_lmdb_and_split
+        with pytest.raises(pydantic.ValidationError):
+            KeywordBiasDataModuleConfig(
+                lmdb_paths=[str(lmdb_path)],
+                split_file_path=str(split_path),
+                train_subset_with_keyword_ratio=1.5,
+                instantiate_parsers_at_setup=False,
+            )
+        with pytest.raises(pydantic.ValidationError):
+            KeywordBiasDataModuleConfig(
+                lmdb_paths=[str(lmdb_path)],
+                split_file_path=str(split_path),
+                train_subset_with_keyword_ratio=0.0,
+                instantiate_parsers_at_setup=False,
+            )
 
 
 class TestKeywordBiasDataModuleConfigParentSubsetResolution:

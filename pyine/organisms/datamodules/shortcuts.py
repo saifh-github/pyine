@@ -1006,20 +1006,12 @@ class ShortcutBiasDataModule(
             traces = subset_traces_meta[eval_subset_name]
             # resolve parent's filtering config for pre-filtering
             if hasattr(self.config, "_resolve_dataparser_config"):
-                parser_config = self.config._resolve_dataparser_config(eval_subset_name)  # type: ignore[reportPrivateUsage]
-                params = parser_config.get_params_dict()
-                filtering_dict = params.get("filtering_config", {})
-                if filtering_dict is None:
-                    # None means "use defaults" in builder convention, same as {}
-                    parent_filtering = pyine.organisms.datamodules.samples.configs.TraceFilteringConfig()
-                elif isinstance(filtering_dict, dict):
-                    filtering_dict = typing.cast("dict[str, typing.Any]", filtering_dict)
-                    parent_filtering = pyine.organisms.datamodules.samples.configs.TraceFilteringConfig(
-                        **filtering_dict
-                    )  # {} -> defaults (active filters), explicit values -> overrides
-                else:
-                    parent_filtering = filtering_dict  # already a TraceFilteringConfig
+                parent_filtering = self._resolve_subset_filtering_config(eval_subset_name)
             else:
+                logger.warning(
+                    f"config for {eval_subset_name} does not support parser config resolution; "
+                    "skipping eval pre-filtering (this is expected only in lightweight test stubs)"
+                )
                 parent_filtering = pyine.organisms.datamodules.samples.configs.TraceFilteringConfig.create_disabled()
             # eval pre-filtering must be deterministic; force seed=0 if None
             if parent_filtering.any_filtering_enabled and parent_filtering.seed is None:

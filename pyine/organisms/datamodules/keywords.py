@@ -25,6 +25,7 @@ import pyine.data.utils.lmdb_io
 import pyine.data.utils.splits
 import pyine.organisms.datamodules.base
 import pyine.organisms.datamodules.samples.common
+import pyine.organisms.datamodules.samples.filtering
 import pyine.organisms.datamodules.samples.keyword_ops
 import pyine.utils.code.variables
 import pyine.utils.filesystem
@@ -667,7 +668,58 @@ class KeywordBiasDataModule(
         Returns:
             Dictionary of derived subset names to DerivedSubsetInfo objects.
         """
-        # first, adjust the training subset for the configured/expected ratio of with-vs-without keyword
+        # pre-filter train traces with quality-only filters so rebalancing sees a pool closer
+        # to what the downstream SampleBuilder will produce; quality filters (code length, line
+        # count, args length) are epoch-invariant and are the main source of keyword-correlated
+        # ratio drift; cap filters are left to the SampleBuilder since they are epoch-seeded
+        # (different epochs rotate which traces are kept) and less keyword-correlated
+        train_subset_name = "train"
+        if train_subset_name in subset_traces_meta and subset_traces_meta[train_subset_name]:
+            if not self.config.exclude_augmented_traces:
+                logger.warning(
+                    "exclude_augmented_traces is False; quality pre-filtering before keyword "
+                    "rebalancing assumes keyword presence is a solution-level property, but "
+                    "augmented traces may alter code and break this invariant; the achieved "
+                    "keyword ratio may be less accurate"
+                )
+            train_filtering = self._resolve_subset_filtering_config(train_subset_name)
+            quality_config = train_filtering.create_quality_only()
+            if quality_config.any_filtering_enabled:
+                if quality_config.seed is None:
+                    logger.warning(
+                        "train quality filtering config has seed=None; forcing seed=0 "
+                        "for deterministic pre-filtering before keyword rebalancing"
+                    )
+                    quality_config = quality_config.model_copy(update={"seed": 0})
+                filtering_results = pyine.organisms.datamodules.samples.filtering.filter_traces(
+                    traces=subset_traces_meta[train_subset_name],
+                    epoch=0,
+                    filtering_config=quality_config,
+                )
+                pre_filter_count = len(subset_traces_meta[train_subset_name])
+                kept_ids = {t.identifier for t in filtering_results.kept_traces}
+                removed = [t for t in subset_traces_meta[train_subset_name] if t.identifier not in kept_ids]
+                subset_traces_meta[train_subset_name] = [
+                    t for t in subset_traces_meta[train_subset_name] if t.identifier in kept_ids
+                ]
+                unassigned_traces_meta.extend(removed)
+                logger.info(
+                    f"pre-filtered train traces for keyword rebalancing: "
+                    f"{pre_filter_count} -> {len(subset_traces_meta[train_subset_name])} "
+                    f"({filtering_results.filtered_trace_count} removed)"
+                )
+            # log the keyword ratio that rebalancing will work with
+            post_filter_with_kw = sum(
+                1 for t in subset_traces_meta[train_subset_name] if t.identifier in trace_ids_with_keyword
+            )
+            post_filter_total = len(subset_traces_meta[train_subset_name])
+            if post_filter_total > 0:
+                natural_ratio = post_filter_with_kw / post_filter_total
+                logger.info(
+                    f"natural keyword ratio in train (post quality-filter, pre-rebalance): "
+                    f"{natural_ratio:.4f} ({post_filter_with_kw}/{post_filter_total})"
+                )
+        # adjust the training subset for the configured/expected ratio of with-vs-without keyword
         self._rebalance_train_subset_keyword_ratio(subset_traces_meta, unassigned_traces_meta, trace_ids_with_keyword)
         # next, create derived subsets for evaluation by splitting with-vs-without keyword
         derived_subsets: dict[
