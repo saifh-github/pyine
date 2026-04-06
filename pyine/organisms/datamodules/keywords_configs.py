@@ -172,13 +172,18 @@ class KeywordBiasDataModuleConfig(pyine.organisms.datamodules.base.BiasDataModul
     keyword_auto_selection_config: KeywordAutoSelectionConfig = KeywordAutoSelectionConfig()
     """Configuration for automatic keyword selection when keyword is None."""
     train_subset_with_keyword_ratio: float = pydantic.Field(default=0.5, gt=0.0, lt=1.0)
-    """Fraction of training data to use with keyword present (must be in (0, 1) exclusive).
+    """Target fraction of training data with keyword present (must be in (0, 1) exclusive).
 
-    If this fraction cannot be reached with all naturally-occurring traces, we will perform
-    uniform (solution-wise) subsampling of traces without the keyword to try to match this ratio.
+    When ``max_traces_per_solution`` is set in the train filtering config, rebalancing operates
+    at solution granularity using effective weights (``min(trace_count, cap)`` per solution).
+    Entire solutions are kept or removed via problem-stratified round-robin to maintain diversity.
+    This accounts for the downstream per-solution cap that would otherwise distort the ratio.
 
-    If this fraction is exceeded with the naturally-occurring traces, we will uniformly discard
-    some traces (robin-hood across all solutions) with the keyword to reach this ratio.
+    When no per-solution cap is configured, rebalancing operates at trace granularity using
+    uniform subsampling across solutions (legacy behavior).
+
+    In both modes, traces from the over-represented side (keyword or non-keyword) are removed
+    and moved to the unassigned pool.
     """
     train_subset_resampling_seed: int | None = 0
     """Seed for random resampling of training subset traces."""

@@ -449,17 +449,31 @@ class KeywordBiasDataModule(
         ],
         unassigned_traces_meta: list[pyine.data.traces.dataset_utils.TraceMetadata],
         trace_ids_with_keyword: frozenset[str],
+        max_traces_per_solution: int | None = None,
     ) -> None:
         """Rebalance training subset to match target keyword ratio (modifies args in-place).
 
-        If the target ratio cannot be reached (too few traces with keyword), we subsample traces
-        without keyword uniformly across solutions. If the ratio is exceeded (too many traces with
-        keyword), we discard traces with keyword uniformly across solutions.
+        Two modes of operation depending on ``max_traces_per_solution``:
+
+        **Capped mode** (``max_traces_per_solution`` is set): Rebalances at solution granularity
+        using effective weights. Each solution's effective weight is
+        ``min(trace_count, max_traces_per_solution)``, reflecting how many traces the downstream
+        ``SampleBuilder`` cap will retain. Entire solutions are kept or removed together via
+        problem-stratified round-robin to maintain problem diversity. This is a heuristic; the
+        round-robin order may not find the globally optimal subset, but it provides good diversity
+        and is deterministic.
+
+        **Uncapped mode** (``max_traces_per_solution`` is None): Rebalances at trace granularity
+        using the existing leveling/round-robin approach within solutions. This is the legacy
+        behavior, appropriate when no downstream per-solution cap will distort the ratio.
 
         Args:
             subset_traces_meta: Dict mapping subset names to their trace metadata lists.
             unassigned_traces_meta: List of unassigned/discarded traces (updated in-place).
             trace_ids_with_keyword: Set of trace identifiers that contain the keyword.
+            max_traces_per_solution: Downstream per-solution cap from the filtering config. When
+                set, triggers solution-level rebalancing with effective weights. When None, uses
+                trace-level rebalancing.
         """
         train_subset_name = "train"
         if train_subset_name not in subset_traces_meta:
@@ -469,6 +483,230 @@ class KeywordBiasDataModule(
         if target_ratio <= 0.0 or target_ratio >= 1.0:
             logger.warning(f"invalid target ratio {target_ratio}, skipping keyword ratio rebalancing")
             return
+        train_traces = subset_traces_meta[train_subset_name]
+        if not train_traces:
+            logger.warning("no training traces found, skipping keyword ratio rebalancing")
+            return
+        if max_traces_per_solution is not None:
+            self._rebalance_train_by_solution_weight(
+                subset_traces_meta,
+                unassigned_traces_meta,
+                trace_ids_with_keyword,
+                max_traces_per_solution=max_traces_per_solution,
+                target_ratio=target_ratio,
+            )
+        else:
+            self._rebalance_train_by_trace_count(
+                subset_traces_meta,
+                unassigned_traces_meta,
+                trace_ids_with_keyword,
+                target_ratio=target_ratio,
+            )
+
+    def _rebalance_train_by_solution_weight(
+        self,
+        subset_traces_meta: dict[
+            pyine.data.datamodule.SubsetNameType,
+            list[pyine.data.traces.dataset_utils.TraceMetadata],
+        ],
+        unassigned_traces_meta: list[pyine.data.traces.dataset_utils.TraceMetadata],
+        trace_ids_with_keyword: frozenset[str],
+        max_traces_per_solution: int,
+        target_ratio: float,
+    ) -> None:
+        """Solution-level rebalancing with effective weights (capped mode).
+
+        Each solution is assigned an effective weight = ``min(trace_count, cap)``. Solutions are
+        classified as keyword or non-keyword and entire solutions are removed from the
+        over-represented side via problem-stratified round-robin until the effective-weight ratio
+        is close to the target.
+
+        Args:
+            subset_traces_meta: Dict mapping subset names to their trace metadata lists.
+            unassigned_traces_meta: List of unassigned/discarded traces (updated in-place).
+            trace_ids_with_keyword: Set of trace identifiers that contain the keyword.
+            max_traces_per_solution: Per-solution cap from the downstream filtering config.
+            target_ratio: Target fraction of keyword traces (by effective weight).
+        """
+        train_subset_name = "train"
+        train_traces = subset_traces_meta[train_subset_name]
+        # group traces by solution
+        solution_to_traces: dict[str, list[pyine.data.traces.dataset_utils.TraceMetadata]] = {}
+        for trace in train_traces:
+            sol_id = str(trace.solution_id)
+            if sol_id not in solution_to_traces:
+                solution_to_traces[sol_id] = []
+            solution_to_traces[sol_id].append(trace)
+        # classify each solution as keyword/non-keyword and check invariance
+        kw_solutions: dict[str, list[pyine.data.traces.dataset_utils.TraceMetadata]] = {}
+        nkw_solutions: dict[str, list[pyine.data.traces.dataset_utils.TraceMetadata]] = {}
+        for sol_id, sol_traces in solution_to_traces.items():
+            has_kw_count = sum(1 for t in sol_traces if t.identifier in trace_ids_with_keyword)
+            if has_kw_count > 0 and has_kw_count < len(sol_traces):
+                raise ValueError(
+                    f"solution {sol_id} has mixed keyword presence "
+                    f"({has_kw_count}/{len(sol_traces)} traces with keyword); "
+                    "this violates the solution-level keyword invariance assumption "
+                    "(ensure augmented traces are excluded or keyword detection is solution-uniform)"
+                )
+            if has_kw_count > 0:
+                kw_solutions[sol_id] = sol_traces
+            else:
+                nkw_solutions[sol_id] = sol_traces
+        if not kw_solutions or not nkw_solutions:
+            logger.warning(
+                "cannot rebalance train subset keyword ratio because one side has no solutions "
+                f"(keyword_solutions={len(kw_solutions)}, non_keyword_solutions={len(nkw_solutions)}); "
+                "leaving subset unchanged"
+            )
+            return
+        # compute effective weights
+        effective_weights = {
+            sol_id: min(len(traces), max_traces_per_solution) for sol_id, traces in solution_to_traces.items()
+        }
+        w_kw = sum(effective_weights[sol_id] for sol_id in kw_solutions)
+        w_nkw = sum(effective_weights[sol_id] for sol_id in nkw_solutions)
+        w_total = w_kw + w_nkw
+        current_ratio = w_kw / w_total
+        logger.debug(
+            f"train subset effective-weight keyword ratio before rebalancing: {current_ratio:.4f} "
+            f"(W_kw={w_kw}, W_nkw={w_nkw}, {len(kw_solutions)} kw solutions, "
+            f"{len(nkw_solutions)} nkw solutions)"
+        )
+        if abs(current_ratio - target_ratio) < 1e-3:
+            logger.info(f"train subset effective-weight keyword ratio already at target: {current_ratio:.4f}")
+            return
+        rng = np.random.default_rng(self.config.train_subset_resampling_seed)
+        if current_ratio < target_ratio:
+            # too few keyword by weight: remove non-keyword solutions
+            target_w_nkw = w_kw * (1.0 - target_ratio) / target_ratio
+            sols_to_remove = self._select_solutions_to_remove(
+                candidate_solutions=nkw_solutions,
+                effective_weights=effective_weights,
+                current_side_weight=w_nkw,
+                target_side_weight=target_w_nkw,
+                rng=rng,
+            )
+        else:
+            # too many keyword by weight: remove keyword solutions
+            target_w_kw = w_nkw * target_ratio / (1.0 - target_ratio)
+            sols_to_remove = self._select_solutions_to_remove(
+                candidate_solutions=kw_solutions,
+                effective_weights=effective_weights,
+                current_side_weight=w_kw,
+                target_side_weight=target_w_kw,
+                rng=rng,
+            )
+        # apply removals
+        removed_traces: list[pyine.data.traces.dataset_utils.TraceMetadata] = []
+        for sol_id in sols_to_remove:
+            removed_traces.extend(solution_to_traces[sol_id])
+        removed_ids = {t.identifier for t in removed_traces}
+        subset_traces_meta[train_subset_name] = [t for t in train_traces if t.identifier not in removed_ids]
+        unassigned_traces_meta.extend(removed_traces)
+        # log results
+        new_w_kw = sum(effective_weights[sid] for sid in kw_solutions if sid not in sols_to_remove)
+        new_w_nkw = sum(effective_weights[sid] for sid in nkw_solutions if sid not in sols_to_remove)
+        new_w_total = new_w_kw + new_w_nkw
+        final_ratio = new_w_kw / new_w_total if new_w_total > 0 else 0.0
+        new_kw_sol_count = sum(1 for sid in kw_solutions if sid not in sols_to_remove)
+        new_nkw_sol_count = sum(1 for sid in nkw_solutions if sid not in sols_to_remove)
+        logger.info(
+            f"rebalanced train subset (solution-level, cap={max_traces_per_solution}): "
+            f"effective-weight ratio={final_ratio:.4f} (target={target_ratio:.4f}), "
+            f"{new_kw_sol_count} kw solutions (W={new_w_kw}), "
+            f"{new_nkw_sol_count} nkw solutions (W={new_w_nkw}), "
+            f"{len(subset_traces_meta[train_subset_name])} total traces, "
+            f"{len(removed_traces)} traces removed ({len(sols_to_remove)} solutions)"
+        )
+
+    @staticmethod
+    def _select_solutions_to_remove(
+        candidate_solutions: dict[str, list[pyine.data.traces.dataset_utils.TraceMetadata]],
+        effective_weights: dict[str, int],
+        current_side_weight: int,
+        target_side_weight: float,
+        rng: np.random.Generator,
+    ) -> set[str]:
+        """Select solutions to remove via problem-stratified round-robin (heuristic).
+
+        Groups candidate solutions by problem, shuffles within each problem and across problems,
+        then iterates round-robin removing one solution per problem per round. Stops when removing
+        the next solution would move the remaining weight further from the target than keeping it.
+
+        Args:
+            candidate_solutions: Dict mapping solution IDs to their traces (the side to reduce).
+            effective_weights: Dict mapping solution IDs to effective weights.
+            current_side_weight: Current total effective weight of the candidate side.
+            target_side_weight: Target effective weight for the candidate side.
+            rng: Seeded random number generator.
+
+        Returns:
+            Set of solution IDs to remove.
+        """
+        if current_side_weight <= target_side_weight:
+            return set()  # nothing to remove
+        # group solutions by problem
+        problem_to_sols: dict[str, list[str]] = {}
+        for sol_id, sol_traces in candidate_solutions.items():
+            problem_id = str(sol_traces[0].problem_id)
+            if problem_id not in problem_to_sols:
+                problem_to_sols[problem_id] = []
+            problem_to_sols[problem_id].append(sol_id)
+        # shuffle within each problem and shuffle problem order
+        for sol_ids in problem_to_sols.values():
+            rng.shuffle(sol_ids)  # type: ignore[arg-type]
+        problem_ids = list(problem_to_sols.keys())
+        rng.shuffle(problem_ids)  # type: ignore[arg-type]
+        # build round-robin removal order: cycle through problems, one solution per problem per round
+        removal_order: list[str] = []
+        problem_iterators = {pid: iter(sol_ids) for pid, sol_ids in problem_to_sols.items()}
+        while problem_iterators:
+            exhausted: list[str] = []
+            for pid in problem_ids:
+                if pid not in problem_iterators:
+                    continue
+                sol_id = next(problem_iterators[pid], None)
+                if sol_id is None:
+                    exhausted.append(pid)
+                else:
+                    removal_order.append(sol_id)
+            for pid in exhausted:
+                del problem_iterators[pid]
+        # greedily remove solutions; skip candidates whose removal would overshoot, since a
+        # lighter solution later in the round-robin order may still land closer to target
+        to_remove: set[str] = set()
+        remaining_weight = current_side_weight
+        for sol_id in removal_order:
+            weight = effective_weights[sol_id]
+            new_remaining = remaining_weight - weight
+            if abs(new_remaining - target_side_weight) < abs(remaining_weight - target_side_weight):
+                to_remove.add(sol_id)
+                remaining_weight = new_remaining
+        return to_remove
+
+    def _rebalance_train_by_trace_count(
+        self,
+        subset_traces_meta: dict[
+            pyine.data.datamodule.SubsetNameType,
+            list[pyine.data.traces.dataset_utils.TraceMetadata],
+        ],
+        unassigned_traces_meta: list[pyine.data.traces.dataset_utils.TraceMetadata],
+        trace_ids_with_keyword: frozenset[str],
+        target_ratio: float,
+    ) -> None:
+        """Trace-level rebalancing (uncapped mode, legacy behavior).
+
+        Subsamples traces from the over-represented side uniformly across solutions via
+        leveling/round-robin. Used when no downstream per-solution cap is configured.
+
+        Args:
+            subset_traces_meta: Dict mapping subset names to their trace metadata lists.
+            unassigned_traces_meta: List of unassigned/discarded traces (updated in-place).
+            trace_ids_with_keyword: Set of trace identifiers that contain the keyword.
+            target_ratio: Target fraction of keyword traces (by trace count).
+        """
+        train_subset_name = "train"
         train_traces = subset_traces_meta[train_subset_name]
         traces_with_kw = [t for t in train_traces if t.identifier in trace_ids_with_keyword]
         traces_without_kw = [t for t in train_traces if t.identifier not in trace_ids_with_keyword]
@@ -502,12 +740,11 @@ class KeywordBiasDataModule(
         ) -> int:
             """Pick the integer target count that yields a keyword ratio closest to the configured target."""
             candidate_counts = {int(np.floor(desired_count)), int(np.ceil(desired_count))}
-            # include boundary values for robustness against future caller changes
             candidate_counts.add(0)
             candidate_counts.add(max_count)
             candidate_counts = {c for c in candidate_counts if 0 <= c <= max_count}
             if not candidate_counts:
-                return 0  # should never happen now that we add 0 and max_count
+                return 0
             best_count: int | None = None
             best_error = float("inf")
             for candidate in sorted(candidate_counts):
@@ -525,9 +762,6 @@ class KeywordBiasDataModule(
             return best_count
 
         if current_ratio < target_ratio:
-            # too few with keyword: subsample traces WITHOUT keyword
-            # target: count_with / (count_with + new_count_without) = target_ratio
-            # solving: new_count_without = count_with * (1 - target_ratio) / target_ratio
             desired_count_without = count_with * (1.0 - target_ratio) / target_ratio
             target_count_without = _pick_best_target_count(
                 desired_count=desired_count_without,
@@ -541,9 +775,6 @@ class KeywordBiasDataModule(
             new_train_traces = traces_with_kw + kept_without
             unassigned_traces_meta.extend(discarded_without)
         else:
-            # too many with keyword: discard traces WITH keyword
-            # target: new_count_with / (new_count_with + count_without) = target_ratio
-            # solving: new_count_with = count_without * target_ratio / (1 - target_ratio)
             desired_count_with = count_without * target_ratio / (1.0 - target_ratio)
             target_count_with = _pick_best_target_count(
                 desired_count=desired_count_with,
@@ -674,6 +905,7 @@ class KeywordBiasDataModule(
         # ratio drift; cap filters are left to the SampleBuilder since they are epoch-seeded
         # (different epochs rotate which traces are kept) and less keyword-correlated
         train_subset_name = "train"
+        max_traces_per_solution: int | None = None
         if train_subset_name in subset_traces_meta and subset_traces_meta[train_subset_name]:
             if not self.config.exclude_augmented_traces:
                 logger.warning(
@@ -683,6 +915,7 @@ class KeywordBiasDataModule(
                     "keyword ratio may be less accurate"
                 )
             train_filtering = self._resolve_subset_filtering_config(train_subset_name)
+            max_traces_per_solution = train_filtering.max_traces_per_solution
             quality_config = train_filtering.create_quality_only()
             if quality_config.any_filtering_enabled:
                 if quality_config.seed is None:
@@ -708,19 +941,41 @@ class KeywordBiasDataModule(
                     f"{pre_filter_count} -> {len(subset_traces_meta[train_subset_name])} "
                     f"({filtering_results.filtered_trace_count} removed)"
                 )
-            # log the keyword ratio that rebalancing will work with
-            post_filter_with_kw = sum(
-                1 for t in subset_traces_meta[train_subset_name] if t.identifier in trace_ids_with_keyword
-            )
-            post_filter_total = len(subset_traces_meta[train_subset_name])
-            if post_filter_total > 0:
-                natural_ratio = post_filter_with_kw / post_filter_total
-                logger.info(
-                    f"natural keyword ratio in train (post quality-filter, pre-rebalance): "
-                    f"{natural_ratio:.4f} ({post_filter_with_kw}/{post_filter_total})"
-                )
+            # log the keyword ratio that rebalancing will work with; when a per-solution cap
+            # is set, report the effective-weight ratio (the metric the rebalancer targets)
+            post_filter_traces = subset_traces_meta[train_subset_name]
+            if post_filter_traces:
+                if max_traces_per_solution is not None:
+                    sol_groups: dict[str, list[int]] = {}
+                    for trace in post_filter_traces:
+                        sol_id = str(trace.solution_id)
+                        has_kw = 1 if trace.identifier in trace_ids_with_keyword else 0
+                        if sol_id not in sol_groups:
+                            sol_groups[sol_id] = [0, has_kw]
+                        sol_groups[sol_id][0] += 1
+                    w_kw = sum(min(info[0], max_traces_per_solution) for info in sol_groups.values() if info[1])
+                    w_total = sum(min(info[0], max_traces_per_solution) for info in sol_groups.values())
+                    natural_eff_ratio = w_kw / w_total if w_total > 0 else 0.0
+                    logger.info(
+                        f"natural keyword ratio in train (post quality-filter, pre-rebalance, "
+                        f"effective-weight with cap={max_traces_per_solution}): "
+                        f"{natural_eff_ratio:.4f} (W_kw={w_kw}, W_total={w_total})"
+                    )
+                else:
+                    post_filter_with_kw = sum(1 for t in post_filter_traces if t.identifier in trace_ids_with_keyword)
+                    post_filter_total = len(post_filter_traces)
+                    natural_ratio = post_filter_with_kw / post_filter_total
+                    logger.info(
+                        f"natural keyword ratio in train (post quality-filter, pre-rebalance): "
+                        f"{natural_ratio:.4f} ({post_filter_with_kw}/{post_filter_total})"
+                    )
         # adjust the training subset for the configured/expected ratio of with-vs-without keyword
-        self._rebalance_train_subset_keyword_ratio(subset_traces_meta, unassigned_traces_meta, trace_ids_with_keyword)
+        self._rebalance_train_subset_keyword_ratio(
+            subset_traces_meta,
+            unassigned_traces_meta,
+            trace_ids_with_keyword,
+            max_traces_per_solution=max_traces_per_solution,
+        )
         # next, create derived subsets for evaluation by splitting with-vs-without keyword
         derived_subsets: dict[
             str, pyine.data.traces.dataset_utils.DerivedSubsetInfo[pyine.data.traces.dataset_utils.TraceMetadata]

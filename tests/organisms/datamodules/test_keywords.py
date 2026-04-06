@@ -16,6 +16,7 @@ import pyine.data.utils.splits
 import pyine.organisms.datamodules.keywords as keywords_mod
 import pyine.organisms.datamodules.samples
 import pyine.organisms.datamodules.samples.configs as samples_configs
+import pyine.organisms.datamodules.samples.filtering as samples_filtering
 import pyine.organisms.datamodules.samples.keyword_ops as keyword_ops
 import pyine.prompts
 import pyine.prompts.types
@@ -35,10 +36,12 @@ class _DummyTrace:
         identifier: str,
         solution_id: str,
         code: str = "",
+        problem_id: str | None = None,
     ) -> None:
         self.identifier = identifier
         self.solution_id = solution_id
         self.code_string = code
+        self.problem_id = problem_id if problem_id is not None else solution_id
 
 
 def _make_stub_datamodule(
@@ -500,6 +503,447 @@ class TestRebalanceTrainSubsetKeywordRatio:
         dm._rebalance_train_subset_keyword_ratio(subset_traces, unassigned, trace_ids_with_kw)
         assert len(subset_traces["train"]) == 10
         assert len(unassigned) == 0
+
+
+class TestRebalanceBySolutionWeight:
+    """Tests for the solution-level effective-weight rebalancing path (max_traces_per_solution set)."""
+
+    def _make_datamodule_stub(
+        self,
+        target_ratio: float = 0.2,
+        resampling_seed: int = 42,
+    ) -> keywords_mod.KeywordBiasDataModule:
+        stub = keywords_mod.KeywordBiasDataModule.__new__(keywords_mod.KeywordBiasDataModule)
+        stub.config = types.SimpleNamespace(
+            train_subset_with_keyword_ratio=target_ratio,
+            train_subset_resampling_seed=resampling_seed,
+        )
+        stub.verbose = False
+        return typing.cast("keywords_mod.KeywordBiasDataModule", stub)
+
+    def test_solution_level_removal_keeps_entire_solutions(self) -> None:
+        """With cap=1, entire solutions are kept or removed; no partial removal."""
+        # 3 keyword solutions with 5 traces each (W_kw=3 at cap=1)
+        # 20 non-keyword solutions with 1 trace each (W_nkw=20 at cap=1)
+        # effective ratio = 3/23 = approx 0.13 < 0.2 -> need to remove nkw solutions
+        # target_w_nkw = 3 * 0.8/0.2 = 12 -> remove 8 nkw solutions
+        traces_kw: list[typing.Any] = []
+        for sol_idx in range(3):
+            for trace_idx in range(5):
+                traces_kw.append(
+                    _DummyTrace(
+                        f"kw_s{sol_idx}_t{trace_idx}",
+                        solution_id=f"solKW{sol_idx}",
+                        problem_id=f"probKW{sol_idx}",
+                    )
+                )
+        traces_nkw: list[typing.Any] = []
+        for sol_idx in range(20):
+            traces_nkw.append(
+                _DummyTrace(
+                    f"nkw_s{sol_idx}_t0",
+                    solution_id=f"solNKW{sol_idx}",
+                    problem_id=f"probNKW{sol_idx}",
+                )
+            )
+        trace_ids_with_kw = frozenset(t.identifier for t in traces_kw)
+        dm = self._make_datamodule_stub(target_ratio=0.2)
+        subset_traces: dict[str, list[typing.Any]] = {"train": list(traces_kw) + list(traces_nkw)}
+        unassigned: list[typing.Any] = []
+        dm._rebalance_train_subset_keyword_ratio(
+            subset_traces,
+            unassigned,
+            trace_ids_with_kw,
+            max_traces_per_solution=1,
+        )
+        train_after = subset_traces["train"]
+        # verify entire solutions are kept or removed (no partial)
+        sol_ids_in_train = {t.solution_id for t in train_after}
+        for sol_id in sol_ids_in_train:
+            original_count = sum(1 for t in traces_kw + traces_nkw if t.solution_id == sol_id)
+            kept_count = sum(1 for t in train_after if t.solution_id == sol_id)
+            assert kept_count == original_count, f"solution {sol_id} was partially removed"
+        # verify effective-weight ratio is close to target
+        kw_sols_kept = {t.solution_id for t in train_after if t.identifier in trace_ids_with_kw}
+        nkw_sols_kept = {t.solution_id for t in train_after if t.identifier not in trace_ids_with_kw}
+        eff_ratio = len(kw_sols_kept) / (len(kw_sols_kept) + len(nkw_sols_kept))
+        assert abs(eff_ratio - 0.2) < 0.1, f"effective-weight ratio {eff_ratio} too far from 0.2"
+        # verify removed traces are in unassigned
+        assert len(unassigned) > 0
+
+    def test_effective_weight_cap_2(self) -> None:
+        """With cap=2, solutions are weighted by min(trace_count, 2)."""
+        # 2 keyword solutions with 4 traces each -> effective weight = 2 each -> W_kw = 4
+        # 8 non-keyword solutions with 1 trace each -> effective weight = 1 each -> W_nkw = 8
+        # effective ratio = 4/12 = 0.333; target = 0.5 -> need to remove nkw solutions
+        traces_kw: list[typing.Any] = []
+        for sol_idx in range(2):
+            for trace_idx in range(4):
+                traces_kw.append(
+                    _DummyTrace(
+                        f"kw_s{sol_idx}_t{trace_idx}",
+                        solution_id=f"solKW{sol_idx}",
+                        problem_id=f"probKW{sol_idx}",
+                    )
+                )
+        traces_nkw: list[typing.Any] = []
+        for sol_idx in range(8):
+            traces_nkw.append(
+                _DummyTrace(
+                    f"nkw_s{sol_idx}_t0",
+                    solution_id=f"solNKW{sol_idx}",
+                    problem_id=f"probNKW{sol_idx}",
+                )
+            )
+        trace_ids_with_kw = frozenset(t.identifier for t in traces_kw)
+        dm = self._make_datamodule_stub(target_ratio=0.5)
+        subset_traces: dict[str, list[typing.Any]] = {"train": list(traces_kw) + list(traces_nkw)}
+        unassigned: list[typing.Any] = []
+        dm._rebalance_train_subset_keyword_ratio(
+            subset_traces,
+            unassigned,
+            trace_ids_with_kw,
+            max_traces_per_solution=2,
+        )
+        train_after = subset_traces["train"]
+        # compute effective weights for remaining solutions
+        sol_traces: dict[str, int] = {}
+        sol_is_kw: dict[str, bool] = {}
+        for trace in train_after:
+            sol_traces[trace.solution_id] = sol_traces.get(trace.solution_id, 0) + 1
+            sol_is_kw[trace.solution_id] = trace.identifier in trace_ids_with_kw
+        w_kw = sum(min(count, 2) for sid, count in sol_traces.items() if sol_is_kw[sid])
+        w_nkw = sum(min(count, 2) for sid, count in sol_traces.items() if not sol_is_kw[sid])
+        eff_ratio = w_kw / (w_kw + w_nkw) if (w_kw + w_nkw) > 0 else 0.0
+        assert abs(eff_ratio - 0.5) < 0.15, f"effective-weight ratio {eff_ratio} too far from 0.5"
+
+    def test_no_cap_falls_through_to_trace_level(self) -> None:
+        """With max_traces_per_solution=None, trace-level rebalancing is used (partial removal ok)."""
+        # 1 keyword solution with 5 traces, 5 non-keyword solutions with 1 trace each
+        # trace ratio = 5/10 = 0.5; target = 0.2 -> need to remove some keyword traces
+        traces_kw: list[typing.Any] = []
+        for trace_idx in range(5):
+            traces_kw.append(
+                _DummyTrace(
+                    f"kw_t{trace_idx}",
+                    solution_id="solKW0",
+                    problem_id="probKW0",
+                )
+            )
+        traces_nkw: list[typing.Any] = []
+        for sol_idx in range(5):
+            traces_nkw.append(
+                _DummyTrace(
+                    f"nkw_s{sol_idx}_t0",
+                    solution_id=f"solNKW{sol_idx}",
+                    problem_id=f"probNKW{sol_idx}",
+                )
+            )
+        trace_ids_with_kw = frozenset(t.identifier for t in traces_kw)
+        dm = self._make_datamodule_stub(target_ratio=0.2)
+        subset_traces: dict[str, list[typing.Any]] = {"train": list(traces_kw) + list(traces_nkw)}
+        unassigned: list[typing.Any] = []
+        dm._rebalance_train_subset_keyword_ratio(
+            subset_traces,
+            unassigned,
+            trace_ids_with_kw,
+            max_traces_per_solution=None,
+        )
+        train_after = subset_traces["train"]
+        kw_count = sum(1 for t in train_after if t.identifier in trace_ids_with_kw)
+        # trace-level rebalancing can partially remove from the keyword solution
+        assert kw_count < 5, "expected partial removal from keyword solution"
+        assert kw_count > 0, "expected some keyword traces to remain"
+
+    def test_problem_stratified_removal(self) -> None:
+        """Removals are distributed across problems, not concentrated on one."""
+        # 2 keyword solutions (1 trace each) from 2 different problems
+        # 12 non-keyword solutions (1 trace each) from 4 problems (3 per problem)
+        # target = 0.5 -> need to remove many nkw solutions
+        traces_kw: list[typing.Any] = []
+        for sol_idx in range(2):
+            traces_kw.append(
+                _DummyTrace(
+                    f"kw_s{sol_idx}",
+                    solution_id=f"solKW{sol_idx}",
+                    problem_id=f"probKW{sol_idx}",
+                )
+            )
+        traces_nkw: list[typing.Any] = []
+        for prob_idx in range(4):
+            for sol_idx in range(3):
+                global_idx = prob_idx * 3 + sol_idx
+                traces_nkw.append(
+                    _DummyTrace(
+                        f"nkw_s{global_idx}",
+                        solution_id=f"solNKW{global_idx}",
+                        problem_id=f"probNKW{prob_idx}",
+                    )
+                )
+        trace_ids_with_kw = frozenset(t.identifier for t in traces_kw)
+        dm = self._make_datamodule_stub(target_ratio=0.5)
+        subset_traces: dict[str, list[typing.Any]] = {"train": list(traces_kw) + list(traces_nkw)}
+        unassigned: list[typing.Any] = []
+        dm._rebalance_train_subset_keyword_ratio(
+            subset_traces,
+            unassigned,
+            trace_ids_with_kw,
+            max_traces_per_solution=1,
+        )
+        train_after = subset_traces["train"]
+        # check that remaining nkw solutions span multiple problems
+        nkw_problems = {t.problem_id for t in train_after if t.identifier not in trace_ids_with_kw}
+        assert len(nkw_problems) > 1, f"expected nkw solutions from multiple problems, got {len(nkw_problems)}"
+
+    def test_mixed_keyword_presence_raises(self) -> None:
+        """A solution with mixed keyword presence raises ValueError in capped mode."""
+        # 1 solution with 2 traces, only 1 is in trace_ids_with_keyword
+        traces: list[typing.Any] = [
+            _DummyTrace("t0", solution_id="sol0", problem_id="prob0"),
+            _DummyTrace("t1", solution_id="sol0", problem_id="prob0"),
+            _DummyTrace("t2", solution_id="sol1", problem_id="prob1"),  # nkw
+        ]
+        trace_ids_with_kw = frozenset(["t0"])  # only t0, not t1 (same solution!)
+        dm = self._make_datamodule_stub(target_ratio=0.5)
+        subset_traces: dict[str, list[typing.Any]] = {"train": list(traces)}
+        unassigned: list[typing.Any] = []
+        with pytest.raises(ValueError, match="mixed keyword presence"):
+            dm._rebalance_train_subset_keyword_ratio(
+                subset_traces,
+                unassigned,
+                trace_ids_with_kw,
+                max_traces_per_solution=1,
+            )
+
+    def test_determinism_with_seed(self) -> None:
+        """Solution-level rebalancing is deterministic with the same seed."""
+        traces_kw: list[typing.Any] = []
+        for sol_idx in range(3):
+            for trace_idx in range(2):
+                traces_kw.append(
+                    _DummyTrace(
+                        f"kw_s{sol_idx}_t{trace_idx}",
+                        solution_id=f"solKW{sol_idx}",
+                        problem_id=f"probKW{sol_idx}",
+                    )
+                )
+        traces_nkw: list[typing.Any] = []
+        for sol_idx in range(20):
+            traces_nkw.append(
+                _DummyTrace(
+                    f"nkw_s{sol_idx}_t0",
+                    solution_id=f"solNKW{sol_idx}",
+                    problem_id=f"probNKW{sol_idx % 5}",
+                )
+            )
+        trace_ids_with_kw = frozenset(t.identifier for t in traces_kw)
+        all_traces = list(traces_kw) + list(traces_nkw)
+        results = []
+        for _ in range(2):
+            dm = self._make_datamodule_stub(target_ratio=0.2, resampling_seed=123)
+            subset_traces: dict[str, list[typing.Any]] = {"train": list(all_traces)}
+            unassigned: list[typing.Any] = []
+            dm._rebalance_train_subset_keyword_ratio(
+                subset_traces,
+                unassigned,
+                trace_ids_with_kw,
+                max_traces_per_solution=1,
+            )
+            results.append({t.identifier for t in subset_traces["train"]})
+        assert results[0] == results[1]
+
+
+class TestSelectSolutionsToRemove:
+    """Direct tests for _select_solutions_to_remove with mixed weights."""
+
+    def test_skips_heavy_solution_removes_lighter_one(self) -> None:
+        """A heavy candidate that would overshoot should be skipped, not block lighter ones.
+
+        Regression case: current_side_weight=10, target=9, candidates have weights {3, 1}.
+        Removing the weight-3 solution overshoots (10-3=7, error=2 vs staying at error=1).
+        But removing the weight-1 solution is exact (10-1=9, error=0). The method must skip
+        the heavy one and still find the light one.
+        """
+        # two solutions from different problems, one heavy (weight=3) and one light (weight=1)
+        heavy_traces = [_DummyTrace(f"h_t{idx}", solution_id="solH", problem_id="probH") for idx in range(3)]
+        light_traces = [
+            _DummyTrace("l_t0", solution_id="solL", problem_id="probL"),
+        ]
+        candidate_solutions = {
+            "solH": heavy_traces,
+            "solL": light_traces,
+        }
+        effective_weights = {"solH": 3, "solL": 1}
+        rng = np.random.default_rng(0)
+        removed = keywords_mod.KeywordBiasDataModule._select_solutions_to_remove(
+            candidate_solutions=candidate_solutions,
+            effective_weights=effective_weights,
+            current_side_weight=10,
+            target_side_weight=9.0,
+            rng=rng,
+        )
+        assert "solL" in removed, "light solution (exact match) should be removed"
+        assert "solH" not in removed, "heavy solution (overshoot) should be skipped"
+
+    def test_removes_multiple_mixed_weight_solutions(self) -> None:
+        """With mixed weights, the method should pick the best subset it can greedily."""
+        # 4 solutions: weights 3, 2, 2, 1; current=8, target=3 -> need to remove weight=5
+        candidates: dict[str, list[typing.Any]] = {}
+        weights: dict[str, int] = {}
+        for sol_idx, (weight, prob) in enumerate([(3, "pA"), (2, "pB"), (2, "pC"), (1, "pD")]):
+            sol_id = f"sol{sol_idx}"
+            candidates[sol_id] = [
+                _DummyTrace(f"s{sol_idx}_t{t}", solution_id=sol_id, problem_id=prob) for t in range(weight)
+            ]
+            weights[sol_id] = weight
+        rng = np.random.default_rng(42)
+        removed = keywords_mod.KeywordBiasDataModule._select_solutions_to_remove(
+            candidate_solutions=candidates,
+            effective_weights=weights,
+            current_side_weight=8,
+            target_side_weight=3.0,
+            rng=rng,
+        )
+        removed_weight = sum(weights[sid] for sid in removed)
+        remaining = 8 - removed_weight
+        assert abs(remaining - 3.0) <= 1.0, (
+            f"remaining weight {remaining} too far from target 3.0 (removed {removed_weight})"
+        )
+
+    def test_nothing_to_remove(self) -> None:
+        """When current weight is already at or below target, nothing is removed."""
+        candidates: dict[str, list[typing.Any]] = {
+            "sol0": [_DummyTrace("t0", solution_id="sol0", problem_id="p0")],
+        }
+        weights = {"sol0": 1}
+        rng = np.random.default_rng(0)
+        removed = keywords_mod.KeywordBiasDataModule._select_solutions_to_remove(
+            candidate_solutions=candidates,
+            effective_weights=weights,
+            current_side_weight=5,
+            target_side_weight=5.0,
+            rng=rng,
+        )
+        assert len(removed) == 0
+
+
+class TestRebalanceWithRealFilterTraces:
+    """End-to-end regression test: rebalancing + real filter_traces preserves ratio.
+
+    Uses real TraceMetadata objects and calls the actual filter_traces function from
+    pyine.organisms.datamodules.samples.filtering to verify that the post-cap ratio
+    matches the target.
+    """
+
+    def _make_datamodule_stub(
+        self,
+        target_ratio: float = 0.2,
+        resampling_seed: int = 42,
+    ) -> keywords_mod.KeywordBiasDataModule:
+        stub = keywords_mod.KeywordBiasDataModule.__new__(keywords_mod.KeywordBiasDataModule)
+        stub.config = types.SimpleNamespace(
+            train_subset_with_keyword_ratio=target_ratio,
+            train_subset_resampling_seed=resampling_seed,
+        )
+        stub.verbose = False
+        return typing.cast("keywords_mod.KeywordBiasDataModule", stub)
+
+    def test_ratio_preserved_after_cap_1(self) -> None:
+        """Post-filter keyword ratio matches target with max_traces_per_solution=1."""
+        target_ratio = 0.2
+        cap = 1
+        # 5 keyword solutions with 8 traces each (from 5 different problems)
+        traces: list[pyine.data.traces.dataset_utils.TraceMetadata] = []
+        kw_trace_ids: set[str] = set()
+        for sol_idx in range(5):
+            for test_idx in range(8):
+                tid = f"DS/train/p{sol_idx:06d}/s0001/t{test_idx:04d}"
+                traces.append(_make_trace_metadata(tid, code=f"kw_code_{sol_idx}"))
+                kw_trace_ids.add(tid)
+        # 40 non-keyword solutions with 2 traces each (from 40 different problems)
+        for sol_idx in range(5, 45):
+            for test_idx in range(2):
+                tid = f"DS/train/p{sol_idx:06d}/s0001/t{test_idx:04d}"
+                traces.append(_make_trace_metadata(tid, code=f"nkw_code_{sol_idx}"))
+        kw_ids = frozenset(kw_trace_ids)
+        dm = self._make_datamodule_stub(target_ratio=target_ratio)
+        subset_traces: dict[str, list[typing.Any]] = {"train": list(traces)}
+        unassigned: list[typing.Any] = []
+        dm._rebalance_train_subset_keyword_ratio(
+            subset_traces,
+            unassigned,
+            kw_ids,
+            max_traces_per_solution=cap,
+        )
+        # apply real filter_traces with the cap
+        filtering_config = samples_configs.TraceFilteringConfig(
+            max_traces_per_solution=cap,
+            max_trace_steps=None,
+            max_code_line_count=None,
+            max_code_line_length=None,
+            max_code_length=None,
+            max_args_length=None,
+        )
+        result = samples_filtering.filter_traces(
+            traces=subset_traces["train"],
+            epoch=0,
+            filtering_config=filtering_config,
+        )
+        kept = result.kept_traces
+        kw_count = sum(1 for t in kept if t.identifier in kw_ids)
+        total = len(kept)
+        actual_ratio = kw_count / total if total > 0 else 0.0
+        assert abs(actual_ratio - target_ratio) < 0.05, (
+            f"post-filter ratio {actual_ratio:.4f} deviates from target {target_ratio}"
+        )
+
+    def test_ratio_preserved_after_cap_3(self) -> None:
+        """Post-filter keyword ratio matches target with max_traces_per_solution=3."""
+        target_ratio = 0.3
+        cap = 3
+        # 4 keyword solutions with 6 traces each (from 4 different problems)
+        traces: list[pyine.data.traces.dataset_utils.TraceMetadata] = []
+        kw_trace_ids: set[str] = set()
+        for sol_idx in range(4):
+            for test_idx in range(6):
+                tid = f"DS/train/p{sol_idx:06d}/s0001/t{test_idx:04d}"
+                traces.append(_make_trace_metadata(tid, code=f"kw_code_{sol_idx}"))
+                kw_trace_ids.add(tid)
+        # 30 non-keyword solutions with 1 trace each (from 30 different problems)
+        for sol_idx in range(4, 34):
+            tid = f"DS/train/p{sol_idx:06d}/s0001/t0000"
+            traces.append(_make_trace_metadata(tid, code=f"nkw_code_{sol_idx}"))
+        kw_ids = frozenset(kw_trace_ids)
+        dm = self._make_datamodule_stub(target_ratio=target_ratio)
+        subset_traces: dict[str, list[typing.Any]] = {"train": list(traces)}
+        unassigned: list[typing.Any] = []
+        dm._rebalance_train_subset_keyword_ratio(
+            subset_traces,
+            unassigned,
+            kw_ids,
+            max_traces_per_solution=cap,
+        )
+        # apply real filter_traces with the cap
+        filtering_config = samples_configs.TraceFilteringConfig(
+            max_traces_per_solution=cap,
+            max_trace_steps=None,
+            max_code_line_count=None,
+            max_code_line_length=None,
+            max_code_length=None,
+            max_args_length=None,
+        )
+        result = samples_filtering.filter_traces(
+            traces=subset_traces["train"],
+            epoch=0,
+            filtering_config=filtering_config,
+        )
+        kept = result.kept_traces
+        kw_count = sum(1 for t in kept if t.identifier in kw_ids)
+        total = len(kept)
+        actual_ratio = kw_count / total if total > 0 else 0.0
+        assert abs(actual_ratio - target_ratio) < 0.1, (
+            f"post-filter ratio {actual_ratio:.4f} deviates from target {target_ratio}"
+        )
 
 
 class TestAdjustKeywordSplitSubsets:
