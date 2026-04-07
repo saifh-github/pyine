@@ -220,7 +220,8 @@ class PromptedLLMGuardrailScorer:
             content = msg.get("content", "")
             if isinstance(content, list):
                 content = "\n".join(
-                    part.get("text", str(part)) if isinstance(part, dict) else str(part) for part in content
+                    part.get("text", str(part)) if isinstance(part, dict) else str(part)  # type: ignore
+                    for part in content  # type: ignore
                 )
             elif not isinstance(content, str):
                 content = str(content)
