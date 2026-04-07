@@ -10,15 +10,25 @@ if typing.TYPE_CHECKING:
 
     import pyine.prompts.types
 
-from pyine.prompts.configs.guardrail.debate_interrogator import VerdictOutput
+from pyine.prompts.configs.guardrail.debate_interrogator import VerdictOutput, VerdictOutputNoReasoning
+
+
+def _get_verdict_output_class(
+    version: "pyine.prompts.types.PromptVersionType | None" = None,
+) -> type[VerdictOutput] | type[VerdictOutputNoReasoning]:
+    """Return the appropriate VerdictOutput class for the given version."""
+    if version == "no_reasoning":
+        return VerdictOutputNoReasoning
+    return VerdictOutput
 
 
 def get_output_parser(
     version: "pyine.prompts.types.PromptVersionType | None" = None,
 ) -> langchain_core.output_parsers.BaseOutputParser[typing.Any] | None:
     """Return the output parser for the verdict-only prompt."""
-    if version == "with_reasoning" or version is None:
-        return langchain_core.output_parsers.PydanticOutputParser(pydantic_object=VerdictOutput)
+    if version == "with_reasoning" or version == "no_reasoning" or version is None:
+        output_class = _get_verdict_output_class(version)
+        return langchain_core.output_parsers.PydanticOutputParser(pydantic_object=output_class)
     raise NotImplementedError(f"Unsupported version: {version}")
 
 
@@ -80,8 +90,9 @@ def get_prompt_chain(
         examples_block_variables=examples_block_variables,
     )
     unwrapped_model = _unwrap_retry(model)
+    output_class = _get_verdict_output_class(version)
     structured_model = unwrapped_model.with_structured_output(  # type: ignore[reportUnknownVariableType,reportUnknownMemberType]
-        VerdictOutput,
+        output_class,
         method="json_schema",
     )
     return langchain_core.runnables.RunnableSequence(

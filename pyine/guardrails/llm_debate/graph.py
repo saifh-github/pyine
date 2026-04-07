@@ -15,7 +15,12 @@ if typing.TYPE_CHECKING:
     import langchain_core.runnables
     from langgraph.graph.state import CompiledStateGraph
 
-    from pyine.prompts.configs.guardrail.debate_interrogator import InterrogatorOutput, VerdictOutput
+    from pyine.prompts.configs.guardrail.debate_interrogator import (
+        InterrogatorOutput,
+        InterrogatorOutputNoReasoning,
+        VerdictOutput,
+        VerdictOutputNoReasoning,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -102,13 +107,13 @@ def build_debate_graph(  # type: ignore[reportUnknownParameterType]
 
         if is_forced_verdict_turn and interrogator_verdict_chain is not None:
             # Use verdict-only chain: no decision field, always a verdict
-            verdict_result: VerdictOutput = interrogator_verdict_chain.invoke(
+            verdict_result: VerdictOutput | VerdictOutputNoReasoning = interrogator_verdict_chain.invoke(
                 input_vars,
                 config={"callbacks": [handler]},
             )
             token_count = _extract_token_count(handler)
             score = max(0.0, min(1.0, float(verdict_result.score)))
-            verdict = DebateVerdict(score=score, reasoning=verdict_result.reasoning)
+            verdict = DebateVerdict(score=score, reasoning=getattr(verdict_result, "reasoning", None))
             msg = DebateMessage(
                 role=DebateRole.INTERROGATOR,
                 content=verdict_result.content,
@@ -124,7 +129,7 @@ def build_debate_graph(  # type: ignore[reportUnknownParameterType]
         input_vars["current_turn"] = str(current_turn + 1)  # 1-indexed for the LLM prompt
         input_vars["max_turns"] = str(max_turns)
 
-        result: InterrogatorOutput = interrogator_chain.invoke(
+        result: InterrogatorOutput | InterrogatorOutputNoReasoning = interrogator_chain.invoke(
             input_vars,
             config={"callbacks": [handler]},
         )
@@ -160,7 +165,7 @@ def build_debate_graph(  # type: ignore[reportUnknownParameterType]
 
         if result.decision == "verdict":
             score = max(0.0, min(1.0, float(result.score if result.score is not None else 0.5)))
-            verdict = DebateVerdict(score=score, reasoning=result.reasoning)
+            verdict = DebateVerdict(score=score, reasoning=getattr(result, "reasoning", None))
             msg = DebateMessage(
                 role=DebateRole.INTERROGATOR,
                 content=result.content,

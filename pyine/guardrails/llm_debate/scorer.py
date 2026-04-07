@@ -42,10 +42,14 @@ class DebateGuardrailScorer:
         # Build responder LLM
         self._responder_llm = config.responder_provider.get_model()
 
+        # Derive prompt version from include_reasoning config
+        interrogator_version = None if config.include_reasoning else "no_reasoning"
+
         # Build prompt chains via PromptManager
         self._interrogator_chain = pyine.prompts.manager.get_prompt_chain(
             model=self._interrogator_llm,
             prompt_name=config.interrogator_prompt_name,
+            version=interrogator_version,
             use_chat_template=config.use_chat_template,
             runnable_name="debate_interrogator",
         )
@@ -60,6 +64,7 @@ class DebateGuardrailScorer:
         self._interrogator_verdict_chain = pyine.prompts.manager.get_prompt_chain(
             model=self._interrogator_llm,
             prompt_name=config.interrogator_verdict_prompt_name,
+            version=interrogator_version,
             use_chat_template=config.use_chat_template,
             runnable_name="debate_interrogator_verdict",
         )

@@ -41,6 +41,11 @@ class DebateGuardrailConfig(pydantic.BaseModel):
     use_chat_template: bool = True
     """Whether to use a chat prompt template (system + human message)."""
 
+    include_reasoning: bool = True
+    """Whether to include a 'reasoning' field in the interrogator's structured output.
+    When False, the structured output schema omits the reasoning field, which can
+    reduce token usage with third-party API providers (e.g. OpenAI)."""
+
     # --- Retries ---
     chain_retry_max_attempts: int = pydantic.Field(default=3, ge=0, le=10)
     """Maximum number of retry attempts for each chain invocation (interrogator,
