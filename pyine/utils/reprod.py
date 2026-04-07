@@ -227,30 +227,12 @@ def compute_data_fingerprint(
     NOTE: we do NOT include file basenames in the hash, just content with delimiters. This avoids
     collisions when different paths have the same basename.
     """
-    _fp_logger = logging.getLogger(__name__ + ".fingerprint_debug")
-    _rank = distrib_utils.get_global_rank(default=-1)
-    _node = distrib_utils.get_node_rank(default=-1)
-    _fp_logger.warning("[rank %d / node %d] === fingerprint debug START ===", _rank, _node)
-
     hasher = hashlib.sha256()
     if config_hash:
         hasher.update(f"config={config_hash}\n".encode())
-        _fp_logger.warning("[rank %d / node %d] config_hash = %s", _rank, _node, config_hash)
     for idx, metadata_path in enumerate(sorted(inputs.metadata_paths)):
         if metadata_path.exists():
             hasher.update(f"metadata_{idx}:".encode())
-            file_stat = metadata_path.stat()
-            file_raw_hash = hashlib.sha256(metadata_path.read_bytes()).hexdigest()
-            _fp_logger.warning(
-                "[rank %d / node %d] metadata_%d: path=%s size=%d mtime=%.6f raw_sha256=%s",
-                _rank,
-                _node,
-                idx,
-                metadata_path,
-                file_stat.st_size,
-                file_stat.st_mtime,
-                file_raw_hash,
-            )
             if metadata_path.suffix.lower() == ".json":
                 # hash JSON file content in canonical form to avoid whitespace/formatting issues
                 content = json.loads(metadata_path.read_text(encoding="utf-8"))
@@ -265,62 +247,13 @@ def compute_data_fingerprint(
                         if not chunk:
                             break
                         hasher.update(chunk)
-                # --- DEBUG: decode msgspec and hash canonical JSON to check logical equivalence ---
-                try:
-                    import msgspec as _msgspec
-
-                    _decoded = _msgspec.msgpack.decode(metadata_path.read_bytes())
-                    _canonical_json = json.dumps(_decoded, sort_keys=True, separators=(",", ":"), default=str)
-                    _logical_hash = hashlib.sha256(_canonical_json.encode()).hexdigest()
-                    _fp_logger.warning(
-                        "[rank %d / node %d] metadata_%d: logical_sha256 (decoded+sorted JSON) = %s",
-                        _rank,
-                        _node,
-                        idx,
-                        _logical_hash,
-                    )
-                    # dump top-level keys and their value types/lengths for quick diff
-                    if isinstance(_decoded, dict):
-                        for _k in sorted(_decoded.keys()):
-                            _v = _decoded[_k]
-                            _v_hash = hashlib.sha256(
-                                json.dumps(_v, sort_keys=True, separators=(",", ":"), default=str).encode()
-                            ).hexdigest()[:16]
-                            _v_summary = type(_v).__name__
-                            if isinstance(_v, (list, dict)):
-                                _v_summary += f"(len={len(_v)})"
-                            _fp_logger.warning(
-                                "[rank %d / node %d]   key=%s type=%s hash=%s",
-                                _rank,
-                                _node,
-                                _k,
-                                _v_summary,
-                                _v_hash,
-                            )
-                except Exception as _dbg_exc:
-                    _fp_logger.warning(
-                        "[rank %d / node %d] metadata_%d: decode debug failed: %s",
-                        _rank,
-                        _node,
-                        idx,
-                        _dbg_exc,
-                    )
             hasher.update(b"\n")
     for idx, fp in enumerate(sorted(inputs.dataset_fingerprints)):
         hasher.update(f"dataset_{idx}={fp}\n".encode())
-        _fp_logger.warning("[rank %d / node %d] dataset_%d = %s", _rank, _node, idx, fp)
     if inputs.extra_content:
         hasher.update(b"extra:")
         hasher.update(inputs.extra_content)
-        _fp_logger.warning(
-            "[rank %d / node %d] extra_content sha256 = %s",
-            _rank,
-            _node,
-            hashlib.sha256(inputs.extra_content).hexdigest(),
-        )
-    result = hasher.hexdigest()
-    _fp_logger.warning("[rank %d / node %d] === fingerprint FINAL = %s ===", _rank, _node, result)
-    return result
+    return hasher.hexdigest()
 
 
 def compute_hash(
