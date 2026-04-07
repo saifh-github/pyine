@@ -126,7 +126,7 @@ config:
           transform_strategy: never
       valid:
         filtering_config:
-          max_traces_per_solution: 1
+          max_traces_per_solution: 2
           max_traces_per_problem: 3
           max_code_line_count: 250
           max_code_line_length: 250
