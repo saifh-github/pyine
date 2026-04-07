@@ -4,7 +4,7 @@
 # Not intended to be used directly — extend with a provider-specific config.
 
 defaults:
-  - /config/evals_config: correctness_taco_base
+  - /config/evals_config: correctness_base
   - override /config/evals_config/calibration_resampling: skewed_moderate_bias
   - _self_
 
