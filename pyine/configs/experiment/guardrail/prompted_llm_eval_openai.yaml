@@ -17,13 +17,11 @@ config:
       model_kwargs:
         model: gpt-5-mini
         temperature: 1.0
-      rate_limiter_config:
-        requests_per_second: 50
-        max_bucket_size: 50
 
   evals_config:
+    result_dump_dir: ${runtime.output_dir}/benchmark_export
     datamodule_config:
       lmdb_paths:
-        - "./debug_db/"
-      split_config:
-        split_source: "./debug_db/debug_split.json"
+        - "/scratch/pl.stcharles/pyine/data/RL_HT_49/ckpt-model-org-exports"
+      eval_subset_names:
+        - guardrail_test

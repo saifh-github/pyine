@@ -99,7 +99,12 @@ class PromptedLLMGuardrailScorer:
         Called from worker threads. Error counting is protected by a threading.Lock.
         """
         prompt = record.record.get("prompt")
-        assert prompt is not None, "prompt is required in the EvalRecord for prompted LLM scoring"
+        if prompt is None:
+            prompt_messages = record.record.get("prompt_messages")
+            assert prompt_messages is not None, (
+                "EvalRecord must contain either 'prompt' or 'prompt_messages' for prompted LLM scoring"
+            )
+            prompt = self._format_prompt_messages(prompt_messages)
         assert record.final_answer is not None, "final_answer is required in the EvalRecord for prompted LLM scoring"
         input_vars: dict[str, typing.Any] = {
             "prompt": prompt,
@@ -151,6 +156,21 @@ class PromptedLLMGuardrailScorer:
 
         token_count = self._extract_token_count(handler)
         return score, token_count, reasoning
+
+    @staticmethod
+    def _format_prompt_messages(prompt_messages: list[dict[str, str]]) -> str:
+        """Format a list of chat message dicts into a readable string for the judge prompt.
+
+        Each message dict has 'role' and 'content' keys. The output is a
+        concatenation of ``[ROLE]: content`` blocks.
+        """
+        assert len(prompt_messages) > 0, "prompt_messages must not be empty"
+        parts: list[str] = []
+        for msg in prompt_messages:
+            role = msg.get("role", "unknown").upper()
+            content = msg.get("content", "")
+            parts.append(f"[[{role}]]:\n{content}")
+        return "\n\n".join(parts)
 
     @staticmethod
     def _extract_token_count(

@@ -28,14 +28,14 @@ run_eval() {
 
 run_eval "gpt-5-nano (low effort)" \
     config.guardrail_config.llm_provider.model_kwargs.model=gpt-5-nano \
-    config.guardrail_config.llm_provider.model_kwargs.reasoning_effort=low
+    ++config.guardrail_config.llm_provider.model_kwargs.reasoning_effort=low
 
 run_eval "gpt-5-nano (default effort)" \
     config.guardrail_config.llm_provider.model_kwargs.model=gpt-5-nano
 
 run_eval "gpt-5.4-nano (low effort)" \
     config.guardrail_config.llm_provider.model_kwargs.model=gpt-5.4-nano \
-    config.guardrail_config.llm_provider.model_kwargs.reasoning_effort=low
+    ++config.guardrail_config.llm_provider.model_kwargs.reasoning_effort=low
 
 run_eval "gpt-5.4-nano (default effort)" \
     config.guardrail_config.llm_provider.model_kwargs.model=gpt-5.4-nano
