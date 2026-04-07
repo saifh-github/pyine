@@ -8,8 +8,6 @@ from __future__ import annotations
 import typing
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 import pyine.evals.correctness.types as correctness_types
 import pyine.utils.llm_providers
 from pyine.guardrails.prompted_llm.configs import PromptedLLMGuardrailConfig
@@ -191,6 +189,7 @@ class TestMetadata:
             "default_score_on_error",
             "total_scored",
             "error_count",
+            "skipped_no_final_answer",
         }
         assert required_keys.issubset(set(metadata.keys()))
         assert metadata["scorer_type"] == "prompted_llm"
@@ -200,6 +199,7 @@ class TestMetadata:
         assert metadata["default_score_on_error"] == 0.5
         assert metadata["total_scored"] == 0
         assert metadata["error_count"] == 0
+        assert metadata["skipped_no_final_answer"] == 0
 
     def test_get_metadata_total_scored_updates(self) -> None:
         scorer, _ = _build_scorer_with_mock_chain()
@@ -251,7 +251,30 @@ class TestFinalAnswerHandling:
         assert "final_answer" in input_vars
         assert input_vars["final_answer"] == "42"
 
-    def test_final_answer_none_raises(self) -> None:
+    def test_final_answer_none_skipped_with_default_score(self) -> None:
+        missing_answer_score = 0.1
+        config = _make_config(default_score_on_missing_answer=missing_answer_score)
+        scorer, mock_chain = _build_scorer_with_mock_chain(config=config)
+        record = correctness_types.EvalRecord(
+            sample_id="TEST/VALID/p000000/s0000/t0000",
+            problem_id="TEST/VALID/p000000",
+            attempt_index=0,
+            model_output="output",
+            final_answer=None,
+            expected_output="expected",
+            label=True,
+            code_type="original",
+            tags=[],
+            record={"prompt": "some prompt"},
+            difficulty_score=None,
+        )
+        result = scorer.score_records([record])
+        assert result.scores[0] == missing_answer_score
+        assert result.verification_costs is not None
+        assert result.verification_costs[0] == 0.0
+        mock_chain.invoke.assert_not_called()
+
+    def test_final_answer_none_counted_in_metadata(self) -> None:
         scorer, _ = _build_scorer_with_mock_chain()
         record = correctness_types.EvalRecord(
             sample_id="TEST/VALID/p000000/s0000/t0000",
@@ -266,8 +289,9 @@ class TestFinalAnswerHandling:
             record={"prompt": "some prompt"},
             difficulty_score=None,
         )
-        with pytest.raises(AssertionError, match="final_answer is required"):
-            scorer.score_records([record])
+        scorer.score_records([record])
+        metadata = scorer.get_metadata()
+        assert metadata["skipped_no_final_answer"] == 1
 
     def test_model_output_and_prompt_always_passed(self) -> None:
         scorer, mock_chain = _build_scorer_with_mock_chain()

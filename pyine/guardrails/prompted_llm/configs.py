@@ -39,3 +39,5 @@ class PromptedLLMGuardrailConfig(pydantic.BaseModel):
     Rate limiting is also handled by the LLMProviderConfig's rate_limiter_config."""
     default_score_on_error: float = pydantic.Field(default=0.5, ge=0.0, le=1.0)
     """Score to assign when the LLM call fails after retries."""
+    default_score_on_missing_answer: float = pydantic.Field(default=0.0, ge=0.0, le=1.0)
+    """Score to assign when a record has no final_answer (base model output parsing failed)."""
