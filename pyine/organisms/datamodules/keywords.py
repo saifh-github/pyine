@@ -996,7 +996,7 @@ class KeywordBiasDataModule(
             str, pyine.data.traces.dataset_utils.DerivedSubsetInfo[pyine.data.traces.dataset_utils.TraceMetadata]
         ] = {}
         derivation_type = self.config.evaluation_strategy.value
-        for eval_subset_name in self.config._expanded_base_names:  # pyright: ignore[reportPrivateUsage]
+        for eval_subset_name in sorted(self.config._expanded_base_names):  # pyright: ignore[reportPrivateUsage]
             if eval_subset_name not in subset_traces_meta:
                 continue
             traces = subset_traces_meta[eval_subset_name]
