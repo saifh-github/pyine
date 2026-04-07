@@ -185,12 +185,17 @@ class DebateGuardrailScorer:
         # Format chat messages into a readable string for the debate prompt
         original_prompt = self._format_prompt_messages(prompt_messages)  # type: ignore[reportUnknownArgumentType]
 
+        # Sanitize inputs to avoid invalid UTF-8 during JSON serialization
+        original_prompt = self._sanitize_for_json_encoding(original_prompt)
+        responder_output = self._sanitize_for_json_encoding(record.model_output)
+        final_answer = self._sanitize_for_json_encoding(record.final_answer or "")
+
         from pyine.guardrails.llm_debate.graph import DebateState
 
         initial_state: DebateState = {
             "original_prompt": original_prompt,
-            "responder_output": record.model_output,
-            "final_answer": record.final_answer or "",
+            "responder_output": responder_output,
+            "final_answer": final_answer,
             "max_turns": self._config.max_debate_turns,
             "messages": [],
             "current_turn": 0,
@@ -266,12 +271,23 @@ class DebateGuardrailScorer:
             )
 
     @staticmethod
-    def _format_prompt_messages(prompt_messages: list[dict[str, str]]) -> str:
-        """Format a list of chat message dicts into a readable string.
+    def _sanitize_for_json_encoding(text: str) -> str:
+        """Replace lone Unicode surrogates that would cause invalid UTF-8 during JSON serialization.
 
-        Each message dict has 'role' and 'content' keys. The output is a
-        concatenation of ``[ROLE]: content`` blocks, which becomes the
-        ``original_prompt`` field in the debate state.
+        Lone surrogates (U+D800..U+DFFF) are invalid in UTF-8 and will cause failures when httpx
+        encodes the JSON request body. This replaces them with the Unicode replacement character (U+FFFD).
+        """
+        return text.encode("utf-8", errors="surrogatepass").decode("utf-8", errors="replace")
+
+    @staticmethod
+    def _format_prompt_messages(prompt_messages: list[dict[str, typing.Any]]) -> str:
+        """Format a list of chat message dicts into a readable string for the debate prompt.
+
+        Content may be a plain string or a list of content parts (e.g. from messages stored via
+        ``make_json_serializable``); non-string content is coerced to string.
+
+        Note: we drop the role here to make sure we don't confuse or get refusals from the judge.
+        This should be fine, as we're expecting to only merge 'system' with 'user' messages.
         """
         assert len(prompt_messages) > 0, "prompt_messages must not be empty"
         roles = {msg.get("role") for msg in prompt_messages}
@@ -279,9 +295,14 @@ class DebateGuardrailScorer:
 
         parts: list[str] = []
         for msg in prompt_messages:
-            role = msg.get("role", "unknown").upper()
             content = msg.get("content", "")
-            parts.append(f"[{role}]:\n{content}")
+            if isinstance(content, list):
+                content = "\n".join(
+                    part.get("text", str(part)) if isinstance(part, dict) else str(part) for part in content
+                )
+            elif not isinstance(content, str):
+                content = str(content)
+            parts.append(content)
         return "\n\n".join(parts)
 
     @staticmethod
