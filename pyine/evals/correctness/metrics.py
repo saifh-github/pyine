@@ -44,6 +44,33 @@ def _is_constant(
     return np.allclose(array, array[0])
 
 
+def _build_deduplicated_roc(
+    fpr_raw: npt.NDArray[np.floating[typing.Any]],
+    tpr_raw: npt.NDArray[np.floating[typing.Any]],
+) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+    """Deduplicate ROC curve x-values by collapsing tied FPR values to max TPR.
+
+    sklearn's ``roc_curve`` returns non-decreasing FPR values that may contain duplicates
+    (from tied scores). ``np.interp`` requires strictly monotonic x-values, so this function
+    collapses each unique FPR to the maximum TPR observed at that FPR.
+
+    Args:
+        fpr_raw: Non-decreasing FPR values from ``sklearn.metrics.roc_curve``.
+        tpr_raw: Corresponding TPR values.
+
+    Returns:
+        Tuple of (fpr_unique, tpr_at_unique) with strictly increasing FPR and corresponding
+        max-TPR arrays.
+    """
+    assert np.all(np.diff(fpr_raw) >= 0), "fpr_raw must be non-decreasing"
+    fpr_unique, unique_indices = np.unique(fpr_raw, return_index=True)
+    tpr_at_unique = np.empty_like(fpr_unique)
+    for idx in range(len(fpr_unique)):
+        end = unique_indices[idx + 1] if idx + 1 < len(unique_indices) else len(fpr_raw)
+        tpr_at_unique[idx] = np.max(tpr_raw[unique_indices[idx] : end])
+    return fpr_unique.astype(np.float64), tpr_at_unique.astype(np.float64)
+
+
 @typing.no_type_check  # sklearn type stubs are partially unknown
 def compute_threshold_free_metrics(
     scores: npt.NDArray[np.floating[typing.Any]],
@@ -119,13 +146,7 @@ def compute_threshold_free_metrics(
     precision_raw, recall_raw, _ = sklearn.metrics.precision_recall_curve(labels, scores)
     average_precision = float(sklearn.metrics.average_precision_score(labels, scores))
     # deduplicate ROC x-values: collapse tied FPR values to unique entries with max TPR
-    assert np.all(np.diff(fpr_raw) >= 0), "fpr_raw from roc_curve must be non-decreasing"
-    fpr_unique, unique_indices = np.unique(fpr_raw, return_index=True)
-    # for each unique FPR, take the max TPR (last occurrence in the non-decreasing sequence)
-    tpr_at_unique = np.empty_like(fpr_unique)
-    for idx in range(len(fpr_unique)):
-        end = unique_indices[idx + 1] if idx + 1 < len(unique_indices) else len(fpr_raw)
-        tpr_at_unique[idx] = np.max(tpr_raw[unique_indices[idx] : end])
+    fpr_unique, tpr_at_unique = _build_deduplicated_roc(fpr_raw, tpr_raw)
     # TPR@FPR via interpolation on deduplicated (strictly increasing) FPR values
     tpr_at_fpr: dict[float, float] = {}
     for target_fpr in target_fprs:
@@ -154,6 +175,87 @@ def compute_threshold_free_metrics(
         precision_grid=precision_grid.astype(np.float64),
         recall_grid=recall_grid.astype(np.float64),
     )
+
+
+@typing.no_type_check  # sklearn type stubs are partially unknown
+def compute_tpr_at_target_fprs(
+    scores: npt.NDArray[np.floating[typing.Any]],
+    labels: npt.NDArray[np.bool_],
+    target_fprs: list[float],
+) -> dict[float, float] | None:
+    """Compute TPR at arbitrary FPR thresholds from raw scores and labels.
+
+    Computes the full ROC curve via sklearn, deduplicates FPR values (keeping max TPR at each
+    unique FPR), and interpolates to find TPR at each requested FPR level. This gives exact
+    results (limited only by sklearn's ROC curve resolution, not by any pre-computed grid).
+
+    Use this when raw scores and labels are available. For post-hoc analysis from stored
+    ``ThresholdFreeMetrics`` grids (without raw data), use ``interpolate_tpr_from_roc_grids``
+    instead.
+
+    Args:
+        scores: Continuous guardrail scores (higher = more likely correct). Must contain only
+            finite values.
+        labels: Boolean correctness labels.
+        target_fprs: FPR levels at which to report TPR (each must be in [0, 1]).
+
+    Returns:
+        Mapping from each target FPR to the interpolated TPR, or None when the inputs contain
+        fewer than two label classes (matching the ThresholdFreeMetrics convention).
+    """
+    if not target_fprs:
+        raise ValueError("target_fprs must be non-empty")
+    if any(not (0.0 <= fpr <= 1.0) for fpr in target_fprs):
+        raise ValueError(f"target_fprs must all be in [0, 1], got {target_fprs}")
+    if len(scores) != len(labels):
+        raise ValueError(f"scores and labels must have the same length, got {len(scores)} and {len(labels)}")
+    if len(scores) > 0:
+        _assert_finite(scores, "scores")
+    if len(labels) == 0:
+        return None
+    if labels.dtype != np.bool_:
+        raise ValueError(f"labels must be a boolean array, got dtype={labels.dtype}")
+    unique_labels = np.unique(labels)
+    if len(unique_labels) < 2:
+        return None
+    fpr_raw, tpr_raw, _ = sklearn.metrics.roc_curve(labels, scores)
+    fpr_unique, tpr_at_unique = _build_deduplicated_roc(fpr_raw, tpr_raw)
+    return {fpr: float(np.interp(fpr, fpr_unique, tpr_at_unique)) for fpr in target_fprs}
+
+
+def interpolate_tpr_from_roc_grids(
+    fpr_grid: npt.NDArray[np.float64],
+    tpr_grid: npt.NDArray[np.float64],
+    target_fprs: list[float],
+) -> dict[float, float]:
+    """Interpolate TPR at arbitrary FPR thresholds from pre-computed ROC curve grids.
+
+    This is the preferred method for post-hoc analysis of stored ``ThresholdFreeMetrics``
+    results, where ``fpr_grid`` and ``tpr_grid`` are already available but raw scores are not.
+
+    The accuracy of the interpolation depends on the grid resolution (controlled by
+    ``roc_fpr_grid_size`` at eval time, default 200 points). For exact results from raw data,
+    use ``compute_tpr_at_target_fprs`` instead.
+
+    Args:
+        fpr_grid: Pre-computed FPR grid (ascending, from 0.0 to 1.0). Typically from
+            ``ThresholdFreeMetrics.fpr_grid``.
+        tpr_grid: Pre-computed TPR grid corresponding to ``fpr_grid``. Typically from
+            ``ThresholdFreeMetrics.tpr_grid``.
+        target_fprs: FPR levels at which to report TPR (each must be in [0, 1]).
+
+    Returns:
+        Mapping from each target FPR to the interpolated TPR.
+    """
+    if not target_fprs:
+        raise ValueError("target_fprs must be non-empty")
+    if any(not (0.0 <= fpr <= 1.0) for fpr in target_fprs):
+        raise ValueError(f"target_fprs must all be in [0, 1], got {target_fprs}")
+    if len(fpr_grid) != len(tpr_grid):
+        raise ValueError(f"fpr_grid and tpr_grid must have the same length, got {len(fpr_grid)} and {len(tpr_grid)}")
+    if len(fpr_grid) == 0:
+        raise ValueError("fpr_grid and tpr_grid must be non-empty")
+    return {fpr: float(np.interp(fpr, fpr_grid, tpr_grid)) for fpr in target_fprs}
 
 
 def compute_thresholded_metrics(

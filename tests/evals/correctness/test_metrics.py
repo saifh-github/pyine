@@ -92,6 +92,221 @@ class TestThresholdFreeMetrics:
         assert 0.5 in result.tpr_at_fpr
 
 
+class TestBuildDeduplicatedRoc:
+    def test_no_duplicates_passthrough(self) -> None:
+        fpr = np.array([0.0, 0.25, 0.5, 0.75, 1.0])
+        tpr = np.array([0.0, 0.5, 0.7, 0.9, 1.0])
+        fpr_u, tpr_u = correctness_metrics._build_deduplicated_roc(fpr, tpr)
+        np.testing.assert_array_almost_equal(fpr_u, fpr)
+        np.testing.assert_array_almost_equal(tpr_u, tpr)
+
+    def test_duplicates_keep_max_tpr(self) -> None:
+        fpr = np.array([0.0, 0.5, 0.5, 1.0])
+        tpr = np.array([0.0, 0.3, 0.7, 1.0])
+        fpr_u, tpr_u = correctness_metrics._build_deduplicated_roc(fpr, tpr)
+        np.testing.assert_array_almost_equal(fpr_u, [0.0, 0.5, 1.0])
+        np.testing.assert_array_almost_equal(tpr_u, [0.0, 0.7, 1.0])
+
+    def test_all_same_fpr(self) -> None:
+        fpr = np.array([0.5, 0.5, 0.5])
+        tpr = np.array([0.1, 0.5, 0.3])
+        fpr_u, tpr_u = correctness_metrics._build_deduplicated_roc(fpr, tpr)
+        assert len(fpr_u) == 1
+        assert fpr_u[0] == pytest.approx(0.5)
+        assert tpr_u[0] == pytest.approx(0.5)  # max of 0.1, 0.5, 0.3
+
+    def test_assertion_on_non_monotonic(self) -> None:
+        fpr = np.array([0.0, 0.5, 0.3, 1.0])
+        tpr = np.array([0.0, 0.5, 0.7, 1.0])
+        with pytest.raises(AssertionError):
+            correctness_metrics._build_deduplicated_roc(fpr, tpr)
+
+
+class TestComputeTprAtTargetFprs:
+    def test_perfect_separation(self) -> None:
+        scores = np.array([0.0, 0.1, 0.2, 0.8, 0.9, 1.0])
+        labels = np.array([False, False, False, True, True, True])
+        result = correctness_metrics.compute_tpr_at_target_fprs(scores, labels, [0.01, 0.5, 1.0])
+        assert result is not None
+        assert result[1.0] == pytest.approx(1.0)
+
+    def test_random_scores_reasonable(self) -> None:
+        rng = np.random.default_rng(42)
+        scores = rng.random(1000)
+        labels = rng.random(1000) > 0.5
+        result = correctness_metrics.compute_tpr_at_target_fprs(scores, labels, [0.5])
+        assert result is not None
+        assert abs(result[0.5] - 0.5) < 0.15
+
+    def test_multiple_targets_monotonic(self) -> None:
+        rng = np.random.default_rng(123)
+        scores = rng.random(500)
+        labels = rng.random(500) > 0.3
+        targets = [0.01, 0.05, 0.1, 0.2, 0.5, 1.0]
+        result = correctness_metrics.compute_tpr_at_target_fprs(scores, labels, targets)
+        assert result is not None
+        assert len(result) == len(targets)
+        values = [result[t] for t in targets]
+        assert all(values[idx] <= values[idx + 1] for idx in range(len(values) - 1))
+
+    def test_single_class_returns_none(self) -> None:
+        scores = np.array([0.5, 0.6, 0.7])
+        labels = np.array([True, True, True])
+        assert correctness_metrics.compute_tpr_at_target_fprs(scores, labels, [0.05]) is None
+
+    def test_empty_returns_none(self) -> None:
+        scores = np.array([], dtype=np.float64)
+        labels = np.array([], dtype=np.bool_)
+        assert correctness_metrics.compute_tpr_at_target_fprs(scores, labels, [0.05]) is None
+
+    def test_target_fprs_out_of_range_raises(self) -> None:
+        scores = np.array([0.5, 0.8])
+        labels = np.array([False, True])
+        with pytest.raises(ValueError, match="must all be in"):
+            correctness_metrics.compute_tpr_at_target_fprs(scores, labels, [1.5])
+
+    def test_empty_target_fprs_raises(self) -> None:
+        scores = np.array([0.5, 0.8])
+        labels = np.array([False, True])
+        with pytest.raises(ValueError, match="must be non-empty"):
+            correctness_metrics.compute_tpr_at_target_fprs(scores, labels, [])
+
+    def test_non_bool_labels_raises(self) -> None:
+        scores = np.array([0.5, 0.8])
+        labels = np.array([0, 1])
+        with pytest.raises(ValueError, match="boolean array"):
+            correctness_metrics.compute_tpr_at_target_fprs(scores, labels, [0.05])
+
+    def test_length_mismatch_raises(self) -> None:
+        scores = np.array([0.5, 0.8, 0.9])
+        labels = np.array([False, True])
+        with pytest.raises(ValueError, match="same length"):
+            correctness_metrics.compute_tpr_at_target_fprs(scores, labels, [0.05])
+
+    def test_agrees_with_threshold_free_metrics(self) -> None:
+        rng = np.random.default_rng(99)
+        scores = rng.random(200)
+        labels = rng.random(200) > 0.4
+        targets = [0.01, 0.05, 0.1, 0.5]
+        standalone = correctness_metrics.compute_tpr_at_target_fprs(scores, labels, targets)
+        full = correctness_metrics.compute_threshold_free_metrics(scores, labels, targets, 200)
+        assert standalone is not None
+        assert full.tpr_at_fpr is not None
+        for fpr_val in targets:
+            assert standalone[fpr_val] == pytest.approx(full.tpr_at_fpr[fpr_val])
+
+
+class TestInterpolateTprFromRocGrids:
+    def test_linear_roc(self) -> None:
+        fpr_grid = np.linspace(0.0, 1.0, 100)
+        tpr_grid = np.linspace(0.0, 1.0, 100)  # random-classifier diagonal
+        result = correctness_metrics.interpolate_tpr_from_roc_grids(fpr_grid, tpr_grid, [0.5])
+        assert result[0.5] == pytest.approx(0.5, abs=0.02)
+
+    def test_perfect_roc(self) -> None:
+        fpr_grid = np.linspace(0.0, 1.0, 100)
+        tpr_grid = np.ones(100)
+        result = correctness_metrics.interpolate_tpr_from_roc_grids(fpr_grid, tpr_grid, [0.0, 0.5, 1.0])
+        for fpr_val in [0.0, 0.5, 1.0]:
+            assert result[fpr_val] == pytest.approx(1.0)
+
+    def test_endpoints(self) -> None:
+        fpr_grid = np.linspace(0.0, 1.0, 200)
+        tpr_grid = np.sqrt(fpr_grid)
+        result = correctness_metrics.interpolate_tpr_from_roc_grids(fpr_grid, tpr_grid, [0.0, 1.0])
+        assert result[0.0] == pytest.approx(0.0, abs=1e-6)
+        assert result[1.0] == pytest.approx(1.0, abs=1e-6)
+
+    def test_multiple_targets(self) -> None:
+        fpr_grid = np.linspace(0.0, 1.0, 200)
+        tpr_grid = np.sqrt(fpr_grid)
+        targets = [0.01, 0.05, 0.1, 0.5]
+        result = correctness_metrics.interpolate_tpr_from_roc_grids(fpr_grid, tpr_grid, targets)
+        assert len(result) == len(targets)
+
+    def test_empty_grids_raises(self) -> None:
+        empty = np.array([], dtype=np.float64)
+        with pytest.raises(ValueError, match="must be non-empty"):
+            correctness_metrics.interpolate_tpr_from_roc_grids(empty, empty, [0.05])
+
+    def test_mismatched_grid_lengths_raises(self) -> None:
+        fpr_grid = np.linspace(0.0, 1.0, 100)
+        tpr_grid = np.linspace(0.0, 1.0, 50)
+        with pytest.raises(ValueError, match="same length"):
+            correctness_metrics.interpolate_tpr_from_roc_grids(fpr_grid, tpr_grid, [0.05])
+
+    def test_target_fprs_out_of_range_raises(self) -> None:
+        fpr_grid = np.linspace(0.0, 1.0, 100)
+        tpr_grid = np.linspace(0.0, 1.0, 100)
+        with pytest.raises(ValueError, match="must all be in"):
+            correctness_metrics.interpolate_tpr_from_roc_grids(fpr_grid, tpr_grid, [-0.1])
+
+    def test_agrees_with_raw_scores_within_grid_tolerance(self) -> None:
+        rng = np.random.default_rng(77)
+        scores = rng.random(500)
+        labels = rng.random(500) > 0.4
+        targets = [0.01, 0.05, 0.1, 0.2, 0.5]
+        exact = correctness_metrics.compute_tpr_at_target_fprs(scores, labels, targets)
+        full = correctness_metrics.compute_threshold_free_metrics(scores, labels, [0.05], 200)
+        grid_based = correctness_metrics.interpolate_tpr_from_roc_grids(
+            full.fpr_grid,
+            full.tpr_grid,
+            targets,
+        )
+        assert exact is not None
+        for fpr_val in targets:
+            assert grid_based[fpr_val] == pytest.approx(exact[fpr_val], abs=0.02)
+
+
+class TestRawScoreReconstruction:
+    """Validates that compute_tpr_at_target_fprs reproduces the stored tpr_at_fpr values
+    from compute_threshold_free_metrics exactly; the contract the notebook relies on."""
+
+    def test_reconstruction_matches_stored_values_exactly(self) -> None:
+        rng = np.random.default_rng(42)
+        scores = rng.random(300)
+        labels = rng.random(300) > 0.4
+        stored_targets = [0.01, 0.05, 0.1]
+        full = correctness_metrics.compute_threshold_free_metrics(scores, labels, stored_targets, 200)
+        assert full.tpr_at_fpr is not None
+        reconstructed = correctness_metrics.compute_tpr_at_target_fprs(scores, labels, stored_targets)
+        assert reconstructed is not None
+        for fpr_val in stored_targets:
+            assert reconstructed[fpr_val] == pytest.approx(full.tpr_at_fpr[fpr_val])
+
+    def test_reconstruction_with_novel_targets_exact(self) -> None:
+        rng = np.random.default_rng(55)
+        scores = rng.random(400)
+        labels = rng.random(400) > 0.5
+        novel_targets = [0.02, 0.07, 0.15, 0.3, 0.8]
+        full = correctness_metrics.compute_threshold_free_metrics(scores, labels, novel_targets, 200)
+        assert full.tpr_at_fpr is not None
+        reconstructed = correctness_metrics.compute_tpr_at_target_fprs(scores, labels, novel_targets)
+        assert reconstructed is not None
+        for fpr_val in novel_targets:
+            assert reconstructed[fpr_val] == pytest.approx(full.tpr_at_fpr[fpr_val])
+
+    def test_per_category_filter_reconstruction(self) -> None:
+        """Simulates the notebook workflow: filter attempt_records by code_type, then recompute."""
+        rng = np.random.default_rng(88)
+        all_scores = rng.random(600)
+        all_labels = rng.random(600) > 0.45
+        code_types = rng.choice(["original", "hinted", "misleading"], size=600)
+        targets = [0.01, 0.05, 0.1, 0.5]
+        for ct in ["original", "hinted", "misleading"]:
+            mask = code_types == ct
+            ct_scores = all_scores[mask]
+            ct_labels = all_labels[mask]
+            if len(np.unique(ct_labels)) < 2:
+                continue
+            full = correctness_metrics.compute_threshold_free_metrics(ct_scores, ct_labels, targets, 200)
+            assert full.tpr_at_fpr is not None
+            reconstructed = correctness_metrics.compute_tpr_at_target_fprs(ct_scores, ct_labels, targets)
+            assert reconstructed is not None
+            for fpr_val in targets:
+                assert reconstructed[fpr_val] == pytest.approx(full.tpr_at_fpr[fpr_val])
+
+
 class TestThresholdedMetrics:
     def test_basic(self) -> None:
         scores = np.array([0.1, 0.3, 0.7, 0.9])
