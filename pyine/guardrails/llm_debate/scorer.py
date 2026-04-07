@@ -86,6 +86,7 @@ class DebateGuardrailScorer:
 
         # Error tracking (same pattern as prompted_llm)
         self._error_count: int = 0
+        self._skipped_no_final_answer: int = 0
         self._error_lock = threading.Lock()
         self._total_scored: int = 0
 
@@ -168,14 +169,17 @@ class DebateGuardrailScorer:
         assert isinstance(prompt_messages, list), "prompt_messages must be a list of message dicts"
 
         if record.final_answer is None:
-            logger.warning(
-                "record %s has no final_answer (output parsing failed); skipping debate, using default score",
+            logger.debug(
+                "record %s has no final_answer; skipping debate, using default score (%s)",
                 record.sample_id,
+                self._config.default_score_on_missing_answer,
             )
+            with self._error_lock:
+                self._skipped_no_final_answer += 1
             return (
-                self._config.default_score_on_error,
+                self._config.default_score_on_missing_answer,
                 0.0,
-                {"skipped": True, "reason": "final_answer is None"},
+                {"skipped": True, "reason": "final_answer is None", "decision_type": "missing_answer"},
             )
 
         # Format chat messages into a readable string for the debate prompt
@@ -400,6 +404,7 @@ class DebateGuardrailScorer:
             "chain_retry_wait_exponential_jitter": self._config.chain_retry_wait_exponential_jitter,
             "total_scored": self._total_scored,
             "error_count": self._error_count,
+            "skipped_no_final_answer": self._skipped_no_final_answer,
         }
 
     def get_verification_cost_unit(self) -> str | None:

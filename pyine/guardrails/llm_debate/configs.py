@@ -72,6 +72,8 @@ class DebateGuardrailConfig(pydantic.BaseModel):
     """Max concurrent debates. Lower than prompted_llm due to multi-turn cost."""
     default_score_on_error: float = pydantic.Field(default=0.5, ge=0.0, le=1.0)
     """Score to assign when the debate fails after retries."""
+    default_score_on_missing_answer: float = pydantic.Field(default=0.0, ge=0.0, le=1.0)
+    """Score to assign when a record has no final_answer (base model output parsing failed)."""
 
     # --- Debug ---
     debug_log_transcript_every_n: int = pydantic.Field(default=0, ge=0)
