@@ -12,6 +12,7 @@ set -euo pipefail
 BASE_CMD=(
     uv run python -m pyine.apps.guardrail_eval.prompted_llm_eval
     +experiment=guardrail/prompted_llm_eval_openai
+    ++config.guardrail_config.prompt_version=score_only
 )
 
 run_eval() {

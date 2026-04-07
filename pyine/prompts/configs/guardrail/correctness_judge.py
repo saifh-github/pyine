@@ -29,15 +29,24 @@ class CorrectnessJudgementWithReasoning(CorrectnessJudgement):
     )
 
 
+def _get_structured_output_model(
+    version: "pyine.prompts.types.PromptVersionType | None" = None,
+) -> type[CorrectnessJudgement]:
+    """Return the Pydantic model for the given prompt version."""
+    if version == "with_reasoning" or version is None:
+        return CorrectnessJudgementWithReasoning
+    if version == "score_only":
+        return CorrectnessJudgement
+    raise NotImplementedError(f"Unsupported version: {version}")
+
+
 def get_output_parser(
     version: "pyine.prompts.types.PromptVersionType | None" = None,
 ) -> langchain_core.output_parsers.BaseOutputParser[typing.Any] | None:
     """Return the output parser for the correctness judge prompt."""
-    if version == "with_reasoning" or version is None:  # default
-        model = CorrectnessJudgementWithReasoning
-    else:
-        raise NotImplementedError(f"Unsupported version: {version}")
-    return langchain_core.output_parsers.PydanticOutputParser(pydantic_object=model)
+    return langchain_core.output_parsers.PydanticOutputParser(
+        pydantic_object=_get_structured_output_model(version),
+    )
 
 
 def get_prompt_template(
@@ -101,7 +110,7 @@ def get_prompt_chain(
     )
     unwrapped_model = _unwrap_retry(model)
     structured_model = unwrapped_model.with_structured_output(  # type: ignore[reportUnknownVariableType,reportUnknownMemberType]
-        CorrectnessJudgementWithReasoning,
+        _get_structured_output_model(version),
         method="json_schema",
     )
     return langchain_core.runnables.RunnableSequence(

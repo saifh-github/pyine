@@ -7,6 +7,8 @@ import logging
 import threading
 import typing
 
+import tqdm
+
 import pyine.evals.correctness.types as correctness_types
 import pyine.prompts.manager
 import pyine.utils.langchain
@@ -47,6 +49,7 @@ class PromptedLLMGuardrailScorer:
         self._chain = pyine.prompts.manager.get_prompt_chain(
             model=self._llm,
             prompt_name=config.prompt_name,
+            version=config.prompt_version,
             use_chat_template=config.use_chat_template,
             runnable_name="correctness_judge",
         )
@@ -69,13 +72,16 @@ class PromptedLLMGuardrailScorer:
         ) as executor:
             future_to_idx = {executor.submit(self._score_single, record): idx for idx, record in enumerate(records)}
             results: list[tuple[float, float, str | None] | None] = [None] * len(records)
-            completed = 0
+            progress = tqdm.tqdm(
+                total=len(records),
+                desc=f"scoring ({self._config.llm_provider.provider})",
+                unit="rec",
+            )
             for future in concurrent.futures.as_completed(future_to_idx):
                 idx = future_to_idx[future]
                 results[idx] = future.result()
-                completed += 1  # noqa: SIM113 - as_completed() doesn't support enumerate
-                if completed % 100 == 0 or completed == len(records):
-                    logger.info("scored %d/%d records", completed, len(records))
+                progress.update(1)
+            progress.close()
 
         scores: list[float] = []
         costs: list[float] = []
