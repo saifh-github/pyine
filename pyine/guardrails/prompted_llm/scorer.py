@@ -134,8 +134,8 @@ class PromptedLLMGuardrailScorer:
             prompt = self._format_prompt_messages(prompt_messages)
         if record.final_answer is None:
             logger.debug(
-                f"record {record.sample_id} has no final_answer (output parsing failed);"
-                f"skipping, using default score for missing answer ({self._config.default_score_on_missing_answer})"
+                f"record {record.sample_id} has no final_answer; "
+                f"skipping, using default score ({self._config.default_score_on_missing_answer})"
             )
             with self._error_lock:
                 self._skipped_no_final_answer += 1
