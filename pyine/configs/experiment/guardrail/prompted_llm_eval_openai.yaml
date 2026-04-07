@@ -17,6 +17,9 @@ config:
       model_kwargs:
         model: gpt-5-mini
         temperature: 1.0
+      rate_limiter_config:
+        requests_per_second: 200
+        max_bucket_size: 200
     max_workers: 128
 
   evals_config:
