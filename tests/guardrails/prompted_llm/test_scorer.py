@@ -277,3 +277,139 @@ class TestFinalAnswerHandling:
         input_vars = call_args[0][0]
         assert input_vars["model_output"] == "my output"
         assert input_vars["prompt"] == "my prompt"
+
+
+class TestSanitizeForJsonEncoding:
+    """Regression tests for lone surrogate sanitization (OpenAI 400 fix)."""
+
+    def test_lone_surrogates_replaced(self) -> None:
+        from pyine.guardrails.prompted_llm.scorer import _sanitize_for_json_encoding
+
+        text = "before\ud800after"
+        result = _sanitize_for_json_encoding(text)
+        assert "\ud800" not in result
+        assert "before" in result
+        assert "after" in result
+
+    def test_normal_text_unchanged(self) -> None:
+        from pyine.guardrails.prompted_llm.scorer import _sanitize_for_json_encoding
+
+        text = 'def foo():\n\treturn "hello \'world\'"\n'
+        assert _sanitize_for_json_encoding(text) == text
+
+    def test_control_chars_preserved(self) -> None:
+        from pyine.guardrails.prompted_llm.scorer import _sanitize_for_json_encoding
+
+        text = "tab\there\nnewline\r\nend"
+        assert _sanitize_for_json_encoding(text) == text
+
+    def test_valid_unicode_preserved(self) -> None:
+        from pyine.guardrails.prompted_llm.scorer import _sanitize_for_json_encoding
+
+        text = "emoji: \U0001f600 cjk: \u4e16\u754c"
+        assert _sanitize_for_json_encoding(text) == text
+
+    def test_sanitized_text_json_serializable(self) -> None:
+        """The whole point: after sanitization, json.dumps must not raise."""
+        import json
+
+        from pyine.guardrails.prompted_llm.scorer import _sanitize_for_json_encoding
+
+        text = "a\ud800b\udbffc\udc00d"
+        result = _sanitize_for_json_encoding(text)
+        json.dumps(result)  # should not raise
+
+    def test_scorer_passes_sanitized_inputs_to_chain(self) -> None:
+        scorer, mock_chain = _build_scorer_with_mock_chain()
+        record = _make_record(
+            model_output="output\ud800tail",
+            final_answer="answer\udbffend",
+            prompt="prompt\udc00end",
+        )
+        scorer.score_records([record])
+        input_vars = mock_chain.invoke.call_args[0][0]
+        for key in ("prompt", "model_output", "final_answer"):
+            value = input_vars[key]
+            assert "\ud800" not in value and "\udbff" not in value and "\udc00" not in value
+
+
+class TestFormatPromptMessages:
+    """Regression tests for non-string prompt_messages content."""
+
+    def test_string_content(self) -> None:
+        scorer, mock_chain = _build_scorer_with_mock_chain()
+        record = correctness_types.EvalRecord(
+            sample_id="TEST/VALID/p000000/s0000/t0000",
+            problem_id="TEST/VALID/p000000",
+            attempt_index=0,
+            model_output="output",
+            final_answer="answer",
+            expected_output="expected",
+            label=True,
+            code_type="original",
+            tags=[],
+            record={
+                "prompt_messages": [
+                    {"role": "system", "content": "You are helpful."},
+                    {"role": "user", "content": "Analyze this code."},
+                ],
+            },
+            difficulty_score=None,
+        )
+        scorer.score_records([record])
+        input_vars = mock_chain.invoke.call_args[0][0]
+        assert "You are helpful." in input_vars["prompt"]
+        assert "Analyze this code." in input_vars["prompt"]
+
+    def test_list_content_with_text_parts(self) -> None:
+        scorer, mock_chain = _build_scorer_with_mock_chain()
+        record = correctness_types.EvalRecord(
+            sample_id="TEST/VALID/p000000/s0000/t0000",
+            problem_id="TEST/VALID/p000000",
+            attempt_index=0,
+            model_output="output",
+            final_answer="answer",
+            expected_output="expected",
+            label=True,
+            code_type="original",
+            tags=[],
+            record={
+                "prompt_messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "What does this code do?"},
+                            {"type": "text", "text": "def foo(): pass"},
+                        ],
+                    },
+                ],
+            },
+            difficulty_score=None,
+        )
+        scorer.score_records([record])
+        input_vars = mock_chain.invoke.call_args[0][0]
+        assert "What does this code do?" in input_vars["prompt"]
+        assert "def foo(): pass" in input_vars["prompt"]
+
+    def test_non_string_content_coerced(self) -> None:
+        scorer, mock_chain = _build_scorer_with_mock_chain()
+        record = correctness_types.EvalRecord(
+            sample_id="TEST/VALID/p000000/s0000/t0000",
+            problem_id="TEST/VALID/p000000",
+            attempt_index=0,
+            model_output="output",
+            final_answer="answer",
+            expected_output="expected",
+            label=True,
+            code_type="original",
+            tags=[],
+            record={
+                "prompt_messages": [
+                    {"role": "user", "content": 42},
+                ],
+            },
+            difficulty_score=None,
+        )
+        scorer.score_records([record])
+        input_vars = mock_chain.invoke.call_args[0][0]
+        assert "42" in input_vars["prompt"]

@@ -17,6 +17,17 @@ if typing.TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _sanitize_for_json_encoding(text: str) -> str:
+    """Replace lone Unicode surrogates that would cause invalid UTF-8 during JSON serialization.
+
+    Lone surrogates (U+D800..U+DFFF) are invalid in UTF-8 and will cause failures when httpx encodes
+    the JSON request body. This replaces them with the Unicode replacement character (U+FFFD).
+    Note that the round-trip may expand lone surrogates into multiple replacement characters, so
+    string length is not preserved.
+    """
+    return text.encode("utf-8", errors="surrogatepass").decode("utf-8", errors="replace")
+
+
 class PromptedLLMGuardrailScorer:
     """GuardrailScorer adapter for a prompted (non-fine-tuned) LLM judge.
 
@@ -107,9 +118,9 @@ class PromptedLLMGuardrailScorer:
             prompt = self._format_prompt_messages(prompt_messages)
         assert record.final_answer is not None, "final_answer is required in the EvalRecord for prompted LLM scoring"
         input_vars: dict[str, typing.Any] = {
-            "prompt": prompt,
-            "model_output": record.model_output,
-            "final_answer": record.final_answer,
+            "prompt": _sanitize_for_json_encoding(prompt),
+            "model_output": _sanitize_for_json_encoding(record.model_output),
+            "final_answer": _sanitize_for_json_encoding(record.final_answer),
         }
 
         handler = pyine.utils.langchain.CaptureLLMHandler()
@@ -158,18 +169,26 @@ class PromptedLLMGuardrailScorer:
         return score, token_count, reasoning
 
     @staticmethod
-    def _format_prompt_messages(prompt_messages: list[dict[str, str]]) -> str:
+    def _format_prompt_messages(prompt_messages: list[dict[str, typing.Any]]) -> str:
         """Format a list of chat message dicts into a readable string for the judge prompt.
 
-        Each message dict has 'role' and 'content' keys. The output is a
-        concatenation of ``[ROLE]: content`` blocks.
+        Content may be a plain string or a list of content parts (e.g. from messages stored via
+        ``make_json_serializable``); non-string content is coerced to string.
+
+        Note: we drop the role here to make sure we don't confuse or get refusals from the judge.
+        This should be fine, as we're expecting to only merge 'system' with 'user' messages.
         """
         assert len(prompt_messages) > 0, "prompt_messages must not be empty"
         parts: list[str] = []
         for msg in prompt_messages:
-            role = msg.get("role", "unknown").upper()
             content = msg.get("content", "")
-            parts.append(f"[[{role}]]:\n{content}")
+            if isinstance(content, list):
+                content = "\n".join(
+                    part.get("text", str(part)) if isinstance(part, dict) else str(part) for part in content
+                )
+            elif not isinstance(content, str):
+                content = str(content)
+            parts.append(content)
         return "\n\n".join(parts)
 
     @staticmethod

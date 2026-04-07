@@ -198,6 +198,7 @@ def _evaluate_single_run(
         _SingleRunOutput with results, eval scores, and thresholds.
     """
     # score calibration and eval sets
+    logger.debug(f"scoring {len(calibration_records)} calibration records")
     calibration_result = guardrail.score_records(calibration_records)
     if len(calibration_result.scores) != len(calibration_records):
         raise ValueError(
@@ -205,6 +206,7 @@ def _evaluate_single_run(
             f"{len(calibration_records)} calibration records"
         )
     _validate_attempt_metadata_alignment(calibration_records, calibration_result, "calibration")
+    logger.debug(f"scoring {len(eval_records)} eval records")
     eval_result = guardrail.score_records(eval_records)
     if len(eval_result.scores) != len(eval_records):
         raise ValueError(f"scorer returned {len(eval_result.scores)} scores for {len(eval_records)} eval records")
@@ -221,6 +223,7 @@ def _evaluate_single_run(
     else:
         eval_costs = eval_result.verification_costs
     attempt_records: list[correctness_types.AttemptInspectionRecord] = []
+    logger.debug(f"building attempt records for {len(eval_records)} eval records")
     for draw_index, (eval_record, score, verification_cost) in enumerate(
         zip(
             eval_records,
@@ -252,6 +255,7 @@ def _evaluate_single_run(
                 attempt_metadata=curr_attempt_metadata,
             )
         )
+    logger.debug("computing metrics...")
     # calibrate thresholds and compute thresholded metrics
     thresholds: dict[float, float] = {}
     attempt_metrics: dict[float, correctness_types.ThresholdedMetrics] = {}
