@@ -125,15 +125,16 @@ ______________________________________________________________________
 
 ### Base Config Defaults (`prompted_llm_eval_base.yaml`)
 
-| Field                    | Default                       |
-| ------------------------ | ----------------------------- |
-| `runtime.seed`           | `42`                          |
-| `prompt_name`            | `guardrail/correctness_judge` |
-| `max_workers`            | `10`                          |
-| `default_score_on_error` | `0.5`                         |
-| `split_source`           | `TACO`                        |
-| `target_fpr_values`      | `[0.001, 0.01, 0.05]`         |
-| `use_wandb_logging`      | `false`                       |
+| Field                             | Default                       |
+| --------------------------------- | ----------------------------- |
+| `runtime.seed`                    | `42`                          |
+| `prompt_name`                     | `guardrail/correctness_judge` |
+| `max_workers`                     | `10`                          |
+| `default_score_on_error`          | `0.5`                         |
+| `default_score_on_missing_answer` | `0.0`                         |
+| `split_source`                    | `TACO`                        |
+| `target_fpr_values`               | `[0.001, 0.01, 0.05]`         |
+| `use_wandb_logging`               | `false`                       |
 
 ### App Config (`PromptedLLMEvalAppConfig`)
 
@@ -261,8 +262,10 @@ scorer.get_metadata()
 #     "model_kwargs": {"model": "gpt-5-mini", "temperature": 0.0},
 #     "max_workers": 10,
 #     "default_score_on_error": 0.5,
+#     "default_score_on_missing_answer": 0.0,
 #     "total_scored": <int>,
 #     "error_count": <int>,
+#     "skipped_no_final_answer": <int>,
 # }
 
 scorer.get_verification_cost_unit()  # "tokens"

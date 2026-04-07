@@ -243,6 +243,7 @@ class PromptedLLMGuardrailScorer:
             "model_kwargs": self._config.llm_provider.model_kwargs,
             "max_workers": self._config.max_workers,
             "default_score_on_error": self._config.default_score_on_error,
+            "default_score_on_missing_answer": self._config.default_score_on_missing_answer,
             "total_scored": self._total_scored,
             "error_count": self._error_count,
             "skipped_no_final_answer": self._skipped_no_final_answer,

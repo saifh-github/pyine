@@ -26,6 +26,7 @@ class TestConfigDefaults:
         assert config.use_chat_template is True
         assert config.max_workers == 10
         assert config.default_score_on_error == 0.5
+        assert config.default_score_on_missing_answer == 0.0
 
     def test_config_accepts_custom_values(self) -> None:
         config = PromptedLLMGuardrailConfig(
@@ -34,11 +35,13 @@ class TestConfigDefaults:
             use_chat_template=False,
             max_workers=5,
             default_score_on_error=0.3,
+            default_score_on_missing_answer=0.2,
         )
         assert config.prompt_name == "custom/prompt"
         assert config.use_chat_template is False
         assert config.max_workers == 5
         assert config.default_score_on_error == 0.3
+        assert config.default_score_on_missing_answer == 0.2
 
 
 class TestConfigValidation:
@@ -77,12 +80,25 @@ class TestConfigValidation:
             default_score_on_error=0.0,
         )
         assert config_zero.default_score_on_error == 0.0
-
         config_one = PromptedLLMGuardrailConfig(
             llm_provider=_make_llm_provider(),
             default_score_on_error=1.0,
         )
         assert config_one.default_score_on_error == 1.0
+
+    def test_config_validation_missing_answer_score_too_low(self) -> None:
+        with pytest.raises(pydantic.ValidationError):
+            PromptedLLMGuardrailConfig(
+                llm_provider=_make_llm_provider(),
+                default_score_on_missing_answer=-0.1,
+            )
+
+    def test_config_validation_missing_answer_score_too_high(self) -> None:
+        with pytest.raises(pydantic.ValidationError):
+            PromptedLLMGuardrailConfig(
+                llm_provider=_make_llm_provider(),
+                default_score_on_missing_answer=1.1,
+            )
 
 
 class TestConfigFrozen:

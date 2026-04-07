@@ -187,6 +187,7 @@ class TestMetadata:
             "model_kwargs",
             "max_workers",
             "default_score_on_error",
+            "default_score_on_missing_answer",
             "total_scored",
             "error_count",
             "skipped_no_final_answer",
@@ -197,6 +198,7 @@ class TestMetadata:
         assert metadata["provider"] == "openai"
         assert metadata["max_workers"] == 2
         assert metadata["default_score_on_error"] == 0.5
+        assert metadata["default_score_on_missing_answer"] == 0.0
         assert metadata["total_scored"] == 0
         assert metadata["error_count"] == 0
         assert metadata["skipped_no_final_answer"] == 0
