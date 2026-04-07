@@ -130,7 +130,11 @@ def get_prompt_template(
     """Module override that injects format instructions into the context."""
     import pyine.prompts.manager
 
-    prompt_config = pyine.prompts.manager.get_prompt_config("guardrail/debate_interrogator", version=version)
+    # Always load the default prompt template - version only controls the output schema, not the template
+    prompt_template_version = None if version == "no_reasoning" else version
+    prompt_config = pyine.prompts.manager.get_prompt_config(
+        "guardrail/debate_interrogator", version=prompt_template_version
+    )
     parser = get_output_parser(version=version)
     merged_context: dict[str, typing.Any] = dict(context_variables) if context_variables else {}
     if parser is not None:
