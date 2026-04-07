@@ -17,6 +17,7 @@ config:
       model_kwargs:
         model: gpt-5-mini
         temperature: 1.0
+    max_workers: 128
 
   evals_config:
     result_dump_dir: ${runtime.output_dir}/benchmark_export
