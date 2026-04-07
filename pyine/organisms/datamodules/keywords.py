@@ -603,9 +603,9 @@ class KeywordBiasDataModule(
                 target_side_weight=target_w_kw,
                 rng=rng,
             )
-        # apply removals
+        # apply removals (sort set for deterministic ordering across nodes)
         removed_traces: list[pyine.data.traces.dataset_utils.TraceMetadata] = []
-        for sol_id in sols_to_remove:
+        for sol_id in sorted(sols_to_remove):
             removed_traces.extend(solution_to_traces[sol_id])
         removed_ids = {t.identifier for t in removed_traces}
         subset_traces_meta[train_subset_name] = [t for t in train_traces if t.identifier not in removed_ids]
