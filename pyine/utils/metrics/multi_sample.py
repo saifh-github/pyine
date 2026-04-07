@@ -146,7 +146,7 @@ def compute_pass_at_k_with_ci(
     for summary_idx, summary in enumerate(summaries):
         _validate_counts(summary, summary_idx)
     per_sample_estimates = [compute_pass_at_k(s.num_total, s.num_correct, k) for s in summaries]
-    return _sem_ci(per_sample_estimates, confidence_level, lower_clamp=0.0, upper_clamp=1.0)
+    return compute_mean_with_sem_ci(per_sample_estimates, confidence_level, lower_clamp=0.0, upper_clamp=1.0)
 
 
 def compute_majority_correct(
@@ -203,21 +203,26 @@ def compute_majority_correct_with_ci(
     )
 
 
-def _sem_ci(
+def compute_mean_with_sem_ci(
     values: list[float],
-    confidence_level: float,
+    confidence_level: float = 0.95,
     lower_clamp: float | None = None,
     upper_clamp: float | None = None,
 ) -> pyine.utils.metrics.confidence.ConfidenceInterval:
-    """Computes mean with SEM-based normal CI from a list of per-sample values.
+    """Computes mean with SEM-based normal CI from a list of values.
 
-    Shared implementation for Pass@K, diversity, and unique output CI functions.
+    The confidence interval is ``mean +/- z * std(ddof=1) / sqrt(n)`` where ``z`` is the z-score for
+    the requested confidence level. For a single value, bounds equal the mean (zero-width CI). For
+    an empty list, returns ``FULL_UNCERTAINTY_INTERVAL``.
 
     Args:
-        values: Per-sample metric values. Returns full uncertainty interval if empty.
-        confidence_level: Confidence level for the CI.
+        values: Metric values (e.g. per-replica estimates). Returns full uncertainty interval if empty.
+        confidence_level: Confidence level for the CI (default 0.95).
         lower_clamp: Optional lower bound to clamp CI bounds (e.g. 0.0 for non-negative metrics).
         upper_clamp: Optional upper bound to clamp CI bounds (e.g. 1.0 for proportions).
+
+    Returns:
+        ConfidenceInterval with mean as point estimate and SEM-based bounds.
     """
     pyine.utils.metrics.confidence.z_score_for_confidence(confidence_level)  # validates confidence_level
     if not values:
@@ -290,7 +295,7 @@ def compute_mean_output_diversity_with_ci(
     for summary_idx, summary in enumerate(summaries):
         _validate_summary(summary, summary_idx)
     diversities = [s.num_unique_outputs / s.num_total if s.num_total > 0 else 0.0 for s in summaries]
-    return _sem_ci(diversities, confidence_level, lower_clamp=0.0, upper_clamp=1.0)
+    return compute_mean_with_sem_ci(diversities, confidence_level, lower_clamp=0.0, upper_clamp=1.0)
 
 
 def compute_mean_unique_outputs(
@@ -336,4 +341,4 @@ def compute_mean_unique_outputs_with_ci(
     for summary_idx, summary in enumerate(summaries):
         _validate_summary(summary, summary_idx)
     counts = [float(s.num_unique_outputs) for s in summaries]
-    return _sem_ci(counts, confidence_level, lower_clamp=0.0)
+    return compute_mean_with_sem_ci(counts, confidence_level, lower_clamp=0.0)

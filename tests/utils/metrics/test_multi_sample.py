@@ -444,3 +444,46 @@ class TestValidationErrorIndexContext:
         ]
         with pytest.raises(ValueError, match=r"summary\[1\]"):
             msm.compute_mean_output_diversity(summaries)
+
+
+class TestComputeMeanWithSemCi:
+    def test_empty_returns_full_uncertainty(self) -> None:
+        result = msm.compute_mean_with_sem_ci([])
+        assert result.point_estimate == 0.0
+        assert result.lower_bound == 0.0
+        assert result.upper_bound == 1.0
+
+    def test_single_value_zero_width_ci(self) -> None:
+        result = msm.compute_mean_with_sem_ci([0.75])
+        assert result.point_estimate == pytest.approx(0.75)
+        assert result.lower_bound == pytest.approx(0.75)
+        assert result.upper_bound == pytest.approx(0.75)
+
+    def test_identical_values_zero_width_ci(self) -> None:
+        result = msm.compute_mean_with_sem_ci([0.5, 0.5, 0.5])
+        assert result.point_estimate == pytest.approx(0.5)
+        assert result.lower_bound == pytest.approx(0.5)
+        assert result.upper_bound == pytest.approx(0.5)
+
+    def test_known_ci(self) -> None:
+        # 3 values: mean=0.5, std(ddof=1)=0.1, sem=0.1/sqrt(3), z_95=1.96
+        vals = [0.4, 0.5, 0.6]
+        result = msm.compute_mean_with_sem_ci(vals, confidence_level=0.95)
+        assert result.point_estimate == pytest.approx(0.5)
+        import math
+
+        expected_sem = 0.1 / math.sqrt(3)
+        assert result.lower_bound == pytest.approx(0.5 - 1.96 * expected_sem, abs=0.001)
+        assert result.upper_bound == pytest.approx(0.5 + 1.96 * expected_sem, abs=0.001)
+
+    def test_lower_clamp(self) -> None:
+        result = msm.compute_mean_with_sem_ci([0.01, 0.02, 0.03], lower_clamp=0.0)
+        assert result.lower_bound >= 0.0
+
+    def test_upper_clamp(self) -> None:
+        result = msm.compute_mean_with_sem_ci([0.98, 0.99, 1.0], upper_clamp=1.0)
+        assert result.upper_bound <= 1.0
+
+    def test_invalid_confidence_level_raises(self) -> None:
+        with pytest.raises(ValueError, match="confidence_level"):
+            msm.compute_mean_with_sem_ci([0.5], confidence_level=1.5)
