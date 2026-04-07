@@ -1,9 +1,12 @@
 import typing
 
 import langchain_core.output_parsers
+import langchain_core.runnables
 import pydantic
 
 if typing.TYPE_CHECKING:
+    import langchain_openai.chat_models.base
+
     import pyine.prompts.types
 
 
@@ -63,4 +66,46 @@ def get_prompt_template(
         role_variables=role_variables,
         context_variables=merged_context or None,
         examples_block_variables=examples_block_variables,
+    )
+
+
+def get_prompt_chain(
+    model: "langchain_openai.chat_models.base.BaseChatOpenAI",
+    version: "pyine.prompts.types.PromptVersionType | None" = None,
+    use_chat_template: bool = False,
+    include_examples: bool = True,
+    target_examples: int | list[int] | None = None,
+    partial_vars: dict[str, typing.Any] | None = None,
+    runnable_name: str | None = None,
+    role_variables: dict[str, typing.Any] | None = None,
+    context_variables: dict[str, typing.Any] | None = None,
+    examples_block_variables: dict[str, typing.Any] | None = None,
+) -> "langchain_core.runnables.Runnable[typing.Any, typing.Any]":
+    """Build correctness judge chain with structured output decoding.
+
+    Uses ``model.with_structured_output()`` (OpenAI JSON schema mode) instead of
+    a PydanticOutputParser so that the provider guarantees valid JSON, avoiding
+    parse failures from unescaped quotes in the reasoning field.
+    """
+    from pyine.prompts.configs.guardrail.debate_interrogator import _unwrap_retry  # pyright: ignore[reportPrivateUsage]
+
+    prompt_template = get_prompt_template(
+        version=version,
+        use_chat_template=use_chat_template,
+        include_examples=include_examples,
+        target_examples=target_examples,
+        partial_vars=partial_vars,
+        role_variables=role_variables,
+        context_variables=context_variables,
+        examples_block_variables=examples_block_variables,
+    )
+    unwrapped_model = _unwrap_retry(model)
+    structured_model = unwrapped_model.with_structured_output(  # type: ignore[reportUnknownVariableType,reportUnknownMemberType]
+        CorrectnessJudgementWithReasoning,
+        method="json_schema",
+    )
+    return langchain_core.runnables.RunnableSequence(
+        prompt_template,
+        structured_model,
+        name=runnable_name,
     )
