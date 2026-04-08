@@ -20,6 +20,7 @@ import pyine.configs.schemas
 import pyine.evals.common
 import pyine.evals.correctness._impl as correctness_impl
 import pyine.evals.correctness.datamodule as correctness_datamodule
+import pyine.evals.persistence
 import pyine.evals.utils
 import pyine.utils.reprod
 from pyine.apps.guardrail_eval.prompted_llm_eval_configs import (
@@ -90,6 +91,12 @@ async def main(
             eval_subset_name=subset_name,
         )
         pyine.evals.utils.print_metrics(result.metrics, subset_name, logger.info)
+        pyine.evals.persistence.maybe_dump_eval_result(
+            result=result,
+            dump_dir=config.evals_config.result_dump_dir,
+            eval_subset_name=subset_name,
+            overwrite=config.evals_config.result_dump_overwrite,
+        )
         evaluation_results[subset_name] = result
 
     # 5. Log results to W&B
