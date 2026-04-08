@@ -11,9 +11,6 @@ defaults:
 runtime:
   exp_name: prompted_llm
   run_name: "${now:%Y%m%d_%H%M%S}"
-  tags:
-    - "model:${config.base_model}"
-    - "llm-classifier"
   seed: 42
 
 config:
