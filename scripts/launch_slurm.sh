@@ -62,7 +62,7 @@ PYINE_DATA_ROOT="${PYINE_DATA_ROOT:-${WORKSPACE}/data}"
 PYINE_LOGS_ROOT="${PYINE_LOGS_ROOT:-${WORKSPACE}/logs}"
 
 WANDB_PROJECT="${WANDB_PROJECT:-pyine}"
-LOGLEVEL="${LOGLEVEL:-info}"
+LOGLEVEL="${LOGLEVEL:-INFO}"
 
 # SLURM log directory for launcher-level logs (stdout/stderr tee, env dump)
 LOG_DIR="${LOG_DIR:-/lambdafs/users/a.palmas/logs/slurm/run_${SLURM_JOB_ID}_$(date +%Y%m%d_%H%M%S)}"
