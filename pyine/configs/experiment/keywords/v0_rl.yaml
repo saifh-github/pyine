@@ -52,6 +52,7 @@ config:
   # Model settings
   auto_model_config:
     use_cache: False  # disable cache during training (auto-re-enabled during evals)
+    attn_implementation: "flash_attention_2"  # use flash attention for faster training
 
   # Datamodule config overrides for keyword bias RL training
   datamodule_config:

@@ -72,7 +72,7 @@ LOG_DIR="${LOG_DIR:-/lambdafs/users/a.palmas/logs/slurm/run_${SLURM_JOB_ID}_$(da
 NETWORK_INTERFACE="${NETWORK_INTERFACE:-bond0}"
 
 # Module loads (space-separated). Set to empty string to skip.
-MODULE_LOADS="${MODULE_LOADS:-}"
+MODULE_LOADS="${MODULE_LOADS:-cuda12.8/toolkit/12.8.1 nccl2-cuda12.8-gcc/2.25.1}"
 
 # Option to force recreate cache
 RECREATE_CACHE="${RECREATE_CACHE:-false}"
@@ -304,7 +304,7 @@ srun --ntasks-per-node=1 --kill-on-bad-exit=1 bash -c '
 
     echo "[$(hostname)] Rank $SLURM_PROCID: launching accelerate (main=$MAIN_NODE_IP)"
 
-    uv run accelerate launch \
+    uv run --extra vllm --extra flash_attn --extra liger --extra gpu_monitoring accelerate launch \
         --config_file "$ACCELERATE_CONFIG" \
         --machine_rank "$SLURM_PROCID" \
         --main_process_ip "$MAIN_NODE_IP" \

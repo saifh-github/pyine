@@ -82,6 +82,9 @@ dev = [
 vllm = [
     "trl[vllm]>=0.27.1; sys_platform != 'darwin'",  # can't install vLLM on MacOS
 ]
+flash_attn = [
+    "flash-attn>=2.8.3; sys_platform == 'linux'",  # CUDA-only, Linux
+]
 liger = [
     "liger-kernel>=0.6.4; sys_platform == 'linux'",  # CUDA-only, Linux
 ]
