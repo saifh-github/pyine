@@ -61,6 +61,9 @@ CACHE_BASE="${CACHE_BASE:-${RAID_BASE}/tmp/cache}"
 PYINE_DATA_ROOT="${PYINE_DATA_ROOT:-${WORKSPACE}/data}"
 PYINE_LOGS_ROOT="${PYINE_LOGS_ROOT:-${WORKSPACE}/logs}"
 
+WANDB_PROJECT="${WANDB_PROJECT:-pyine}"
+LOGLEVEL="${LOGLEVEL:-info}"
+
 # SLURM log directory for launcher-level logs (stdout/stderr tee, env dump)
 LOG_DIR="${LOG_DIR:-/lambdafs/users/a.palmas/logs/slurm/run_${SLURM_JOB_ID}_$(date +%Y%m%d_%H%M%S)}"
 
@@ -269,7 +272,8 @@ echo ""
 export WORKSPACE ACCELERATE_CONFIG TRAIN_SCRIPT TRAIN_ARGS GPUS_PER_NODE
 export TOTAL_PROCESSES MAIN_NODE_IP NETWORK_INTERFACE
 export CACHE_EXPORTS_FILE HYDRA_OVERRIDES DEBUG_EXPORTS MODULE_CMDS LOG_DIR
-export PYINE_DATA_ROOT PYINE_LOGS_ROOT
+export PYINE_PER_NODE_PREP=off
+export PYINE_DATA_ROOT PYINE_LOGS_ROOT WANDB_PROJECT LOGLEVEL
 
 srun --ntasks-per-node=1 --kill-on-bad-exit=1 bash -c '
     # Load modules if configured
