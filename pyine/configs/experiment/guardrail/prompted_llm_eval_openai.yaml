@@ -10,6 +10,9 @@ defaults:
   - guardrail/prompted_llm_eval_base
   - _self_
 
+runtime:
+  run_name: "${now:%Y%m%d_%H%M%S}_${config.guardrail_config.llm_provider.model_kewargs.model}"
+
 config:
   guardrail_config:
     llm_provider:
@@ -20,12 +23,3 @@ config:
       rate_limiter_config:
         requests_per_second: 100
         max_bucket_size: 100
-    max_workers: 128
-
-  evals_config:
-    result_dump_dir: ${runtime.output_dir}/benchmark_export
-    datamodule_config:
-      lmdb_paths:
-        - "/scratch/pl.stcharles/pyine/data/RL_HT_49/ckpt-model-org-exports"
-      eval_subset_names:
-        - guardrail_test
