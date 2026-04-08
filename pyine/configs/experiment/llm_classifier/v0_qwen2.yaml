@@ -14,7 +14,7 @@ defaults:
   - _self_
 
 runtime:
-  exp_name: llm_classifier/v0_qwen2
+  exp_name: llm_classifier/v0_qwen2_lora
 
 config:
   base_model: Qwen/Qwen2-0.5B

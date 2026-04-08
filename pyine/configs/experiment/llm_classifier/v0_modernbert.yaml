@@ -16,8 +16,8 @@ defaults:
   - _self_
 
 runtime:
-  exp_name: llm_classifier/v0_modernbert
-  run_name: "${now:%Y%m%d_%H%M%S}_skewed_moderate_bias"
+  exp_name: llm_classifier/v0_modernbert_lora
+  run_name: "${now:%Y%m%d_%H%M%S}_skewed_moderate_bias_10rep"
   tags:
     - "model:${config.base_model}"
     - "llm-classifier"
@@ -29,6 +29,8 @@ config:
   use_wandb_logging: false
   base_model: answerdotai/ModernBERT-base
   class_weight_mode: balanced
+  num_replicas: 10
+  replica_base_seed: ${runtime.seed}
 
   # LMDB data source
   datamodule_config:  # the target datamodule defined in the defaults at the top is CorrectnessDataModule
@@ -91,5 +93,4 @@ config:
     datamodule_config:
       lmdb_paths: ${config.datamodule_config.lmdb_paths}
       eval_subset_names:
-        - guardrail_valid
         - guardrail_test
