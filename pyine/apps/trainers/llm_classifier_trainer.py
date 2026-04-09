@@ -16,6 +16,7 @@ import shutil
 import typing
 
 import accelerate.hooks
+import accelerate.utils
 import numpy as np
 import scipy.special
 import sklearn.metrics
@@ -27,6 +28,7 @@ import pyine.configs.schemas
 import pyine.evals.common
 import pyine.evals.correctness.scorers as correctness_scorers
 import pyine.evals.correctness.types as correctness_types
+import pyine.utils.distrib
 import pyine.utils.reprod
 import pyine.utils.transformers.data
 
@@ -600,6 +602,8 @@ async def main(
     if config.num_replicas > 1 and skip_training:
         raise ValueError("num_replicas > 1 is not supported with skip_training=True")
 
+    # --- training phase ---
+    eval_model: correctness_scorers.LLMClassifierScorer | list[_CheckpointBackedClassifierScorer] | None = None
     if skip_training:
         if config.classifier_checkpoint_path is None:
             raise ValueError("skip_training=True requires config.classifier_checkpoint_path to be set")
@@ -611,20 +615,12 @@ async def main(
         _sync_model_pad_token_id_with_tokenizer(classifier_model, tokenizer)
         if config.truncation_side is not None:
             tokenizer.truncation_side = config.truncation_side
-        # benchmarking phase for skip_training (single model only)
         if config.evals_config is not None:
-            scorer = correctness_scorers.LLMClassifierScorer(
+            eval_model = correctness_scorers.LLMClassifierScorer(
                 model=classifier_model,
                 tokenizer=tokenizer,
                 max_seq_length=config.max_seq_length,
                 text_field=config.text_field,
-            )
-            await pyine.apps.trainers.common.evaluate_model(  # type: ignore[reportUnknownMemberType, reportAttributeAccessIssue]
-                model=scorer,
-                tokenizer=None,
-                datamodule=None,
-                config=config,
-                runtime=runtime,
             )
     elif config.num_replicas > 1:
         # multi-replica: train sequentially, evaluate with cross-run aggregation
@@ -656,7 +652,6 @@ async def main(
                 replica_output_dir=replica_output_dir,
                 suppress_wandb_training_logs=True,
             )
-            # canonical artifact is output_dir (load_best_model_at_end ensures best weights)
             checkpoint_scorers.append(
                 _CheckpointBackedClassifierScorer(
                     checkpoint_path=pathlib.Path(replica_output_dir),
@@ -665,37 +660,49 @@ async def main(
                     replica_seed=replica_seed,
                 )
             )
-            del train_result  # release trained model from GPU before next replica
+            del train_result
             torch.cuda.empty_cache()
-        # evaluation: pass list of checkpoint-backed scorers for cross-run aggregation
         if config.evals_config is not None:
-            await pyine.apps.trainers.common.evaluate_model(  # type: ignore[reportUnknownMemberType, reportAttributeAccessIssue]
-                model=checkpoint_scorers,
-                tokenizer=None,
-                datamodule=None,
-                config=config,
-                runtime=runtime,
-            )
+            eval_model = checkpoint_scorers
     else:
         # single replica
         train_result = classifier_train(config=config, runtime=runtime)
-        classifier_model = typing.cast("transformers.PreTrainedModel", train_result.trainer.model)  # pyright: ignore[reportUnknownMemberType]
+        # unwrap DDP/FSDP wrapper before building the scorer; the process group will be
+        # torn down before evaluation, so we need the raw model, not the distributed wrapper
+        classifier_model = typing.cast(
+            "transformers.PreTrainedModel",
+            accelerate.utils.extract_model_from_parallel(train_result.trainer.model),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
+        )
         tokenizer = train_result.tokenizer
-        # benchmarking phase (if enabled)
         if config.evals_config is not None:
-            scorer = correctness_scorers.LLMClassifierScorer(
+            eval_model = correctness_scorers.LLMClassifierScorer(
                 model=classifier_model,
                 tokenizer=tokenizer,
                 max_seq_length=config.max_seq_length,
                 text_field=config.text_field,
             )
-            await pyine.apps.trainers.common.evaluate_model(  # type: ignore[reportUnknownMemberType, reportAttributeAccessIssue]
-                model=scorer,
-                tokenizer=None,
-                datamodule=None,
-                config=config,
-                runtime=runtime,
-            )
+
+    # --- DDP teardown + rank-gated evaluation ---
+    # HF Trainer uses DDP internally during training; tear down the process group before
+    # evaluation so only rank 0 runs the (non-distributed) eval + result dump pipeline.
+    # (mirrors the probe_trainer pattern)
+    is_distributed = torch.distributed.is_available() and torch.distributed.is_initialized()
+    if is_distributed:
+        torch.distributed.destroy_process_group()  # type: ignore[reportUnknownMemberType]
+    if not pyine.utils.distrib.is_main_process():
+        if runtime is not None:
+            runtime.finalize()
+        return
+
+    # only rank 0 reaches here
+    if eval_model is not None:
+        await pyine.apps.trainers.common.evaluate_model(  # type: ignore[reportUnknownMemberType, reportAttributeAccessIssue]
+            model=eval_model,
+            tokenizer=None,
+            datamodule=None,
+            config=config,
+            runtime=runtime,
+        )
 
     if runtime is not None:
         runtime.finalize()

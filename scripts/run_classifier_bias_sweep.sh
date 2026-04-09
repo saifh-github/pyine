@@ -7,9 +7,15 @@
 # and run name for each preset.
 #
 # Usage:
+#   # single GPU (default)
 #   bash scripts/run_classifier_bias_sweep.sh
 #   bash scripts/run_classifier_bias_sweep.sh --experiment llm_classifier/v0_qwen2
 #   bash scripts/run_classifier_bias_sweep.sh --presets weak strong
+#
+#   # multi-GPU via torchrun (uses run_ddp.sh)
+#   bash scripts/run_classifier_bias_sweep.sh --nproc_per_node 4
+#
+#   # extra Hydra overrides
 #   bash scripts/run_classifier_bias_sweep.sh -- config.num_replicas=5
 #
 # ------------------------------------------------------------------------------------------
@@ -19,10 +25,12 @@ set -euo pipefail
 # ---- defaults ----
 EXPERIMENT="llm_classifier/v0_modernbert"
 PRESETS=(weak moderate strong)
+NPROC_PER_NODE=""
 HYDRA_OVERRIDES=()
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+RUN_DDP="${SCRIPT_DIR}/run_ddp.sh"
 cd "${REPO_ROOT}"
 
 if [[ -f .env ]]; then
@@ -41,9 +49,10 @@ usage() {
 Usage: bash scripts/run_classifier_bias_sweep.sh [OPTIONS] [-- HYDRA_OVERRIDES...]
 
 Options:
-  --experiment EXP      Hydra experiment config (default: llm_classifier/v0_modernbert)
-  --presets P1 P2 ...   Bias presets to sweep (default: weak moderate strong)
-  -h, --help            Show this help
+  --experiment EXP        Hydra experiment config (default: llm_classifier/v0_modernbert)
+  --presets P1 P2 ...     Bias presets to sweep (default: weak moderate strong)
+  --nproc_per_node N      Number of GPUs per run; launches via run_ddp.sh when set
+  -h, --help              Show this help
 
 Everything after -- is forwarded as extra Hydra overrides to each run.
 USAGE
@@ -61,6 +70,14 @@ while [[ $# -gt 0 ]]; do
                 usage 1
             fi
             EXPERIMENT="$2"
+            shift 2
+            ;;
+        --nproc_per_node)
+            if [[ $# -lt 2 || "$2" == --* ]]; then
+                echo "Error: --nproc_per_node requires a value"
+                usage 1
+            fi
+            NPROC_PER_NODE="$2"
             shift 2
             ;;
         --presets)
@@ -95,6 +112,9 @@ FAILED=0
 
 log "Starting classifier bias sweep: ${TOTAL} preset(s), experiment=${EXPERIMENT}"
 log "Presets: ${PRESETS[*]}"
+if [[ -n "${NPROC_PER_NODE}" ]]; then
+    log "Multi-GPU: ${NPROC_PER_NODE} processes per node (via run_ddp.sh)"
+fi
 if [[ ${#HYDRA_OVERRIDES[@]} -gt 0 ]]; then
     log "Extra overrides: ${HYDRA_OVERRIDES[*]}"
 fi
@@ -110,15 +130,30 @@ for preset_idx in $(seq 0 $(( TOTAL - 1 ))); do
     log "  Preset ${preset_num}/${TOTAL}: ${bias_name}"
     log "=========================================="
 
-    run_cmd=(
-        uv run python -m pyine.apps.trainers.llm_classifier_trainer
+    hydra_args=(
         "+experiment=${EXPERIMENT}"
         "config/datamodule_config/resampling=${bias_name}"
         "config/evals_config/calibration_resampling=${bias_name}"
         "runtime.run_name=${run_name}"
     )
     if [[ ${#HYDRA_OVERRIDES[@]} -gt 0 ]]; then
-        run_cmd+=("${HYDRA_OVERRIDES[@]}")
+        hydra_args+=("${HYDRA_OVERRIDES[@]}")
+    fi
+
+    if [[ -n "${NPROC_PER_NODE}" ]]; then
+        # run_ddp.sh needs torchrun and python on PATH; use uv run so the
+        # project venv's bin dir is prepended automatically
+        run_cmd=(
+            uv run bash "${RUN_DDP}"
+            --app pyine.apps.trainers.llm_classifier_trainer
+            --nproc_per_node "${NPROC_PER_NODE}"
+            -- "${hydra_args[@]}"
+        )
+    else
+        run_cmd=(
+            uv run python -m pyine.apps.trainers.llm_classifier_trainer
+            "${hydra_args[@]}"
+        )
     fi
 
     log "Running: ${run_cmd[*]}"
