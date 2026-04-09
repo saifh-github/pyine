@@ -5,7 +5,7 @@
 # the 'guardrail/prompted_llm_eval_openai' experiment config as a base.
 #
 # Usage:
-#   bash scripts/run_prompted_llm_eval_sweep.sh
+#   bash scripts/run_prompted_llm_eval_openai_sweep.sh
 
 set -euo pipefail
 
