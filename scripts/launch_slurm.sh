@@ -15,7 +15,7 @@
 #==================================================================================
 
 #SBATCH --job-name=rl-train
-#SBATCH --nodes=10
+#SBATCH --nodes=5
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=8
 #SBATCH --cpus-per-task=32
@@ -38,7 +38,7 @@ set -euo pipefail
 WORKSPACE="${WORKSPACE:-/lambdafs/users/a.palmas/new_tests/code-interp-benchmark}"
 
 # Accelerate config (relative to WORKSPACE)
-ACCELERATE_CONFIG="${ACCELERATE_CONFIG:-pyine/configs/accelerate/deepspeed_zero3_multinode_10x8gpu.yaml}"
+ACCELERATE_CONFIG="${ACCELERATE_CONFIG:-pyine/configs/accelerate/deepspeed_zero3_multinode_5x8gpu.yaml}"
 
 # Training script (relative to WORKSPACE)
 TRAIN_SCRIPT="${TRAIN_SCRIPT:-pyine/apps/trainers/hf_trainer.py}"
