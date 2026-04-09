@@ -306,6 +306,7 @@ srun --ntasks-per-node=1 --kill-on-bad-exit=1 bash -c '
 
     # NCCL network config
     export NCCL_SOCKET_IFNAME="$NETWORK_INTERFACE"
+    export NCCL_BUFFSIZE="${NCCL_BUFFSIZE:-4194304}"
 
     # Debug env vars (empty string if debug disabled)
     eval "$DEBUG_EXPORTS"
