@@ -258,6 +258,13 @@ fi
 CACHE_EXPORTS_FILE="${LOG_DIR}/.cache_exports.sh"
 build_cache_exports "$CACHE_BASE" > "$CACHE_EXPORTS_FILE"
 
+# Export variables needed inside srun
+export WORKSPACE ACCELERATE_CONFIG TRAIN_SCRIPT TRAIN_ARGS GPUS_PER_NODE
+export TOTAL_PROCESSES MAIN_NODE_IP NETWORK_INTERFACE
+export CACHE_EXPORTS_FILE HYDRA_OVERRIDES DEBUG_EXPORTS MODULE_CMDS LOG_DIR
+export PYINE_PER_NODE_PREP=off
+export PYINE_DATA_ROOT PYINE_LOGS_ROOT WANDB_PROJECT LOGLEVEL
+
 #==================================================================================
 # INSTALL / SYNC VENV (single node to avoid races on shared FS)
 #==================================================================================
@@ -283,13 +290,6 @@ echo "Launching training across ${SLURM_NNODES} nodes..."
 echo "  DeepSpeed Zero Stage 3"
 echo "  vLLM colocated on training GPUs"
 echo ""
-
-# Export variables needed inside srun
-export WORKSPACE ACCELERATE_CONFIG TRAIN_SCRIPT TRAIN_ARGS GPUS_PER_NODE
-export TOTAL_PROCESSES MAIN_NODE_IP NETWORK_INTERFACE
-export CACHE_EXPORTS_FILE HYDRA_OVERRIDES DEBUG_EXPORTS MODULE_CMDS LOG_DIR
-export PYINE_PER_NODE_PREP=off
-export PYINE_DATA_ROOT PYINE_LOGS_ROOT WANDB_PROJECT LOGLEVEL
 
 srun --ntasks-per-node=1 --kill-on-bad-exit=1 bash -c '
     # Load modules if configured
