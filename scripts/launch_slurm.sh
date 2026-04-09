@@ -319,6 +319,35 @@ srun --ntasks-per-node=1 --kill-on-bad-exit=1 bash -c '
 
     cd "$WORKSPACE"
 
+    #--- Resource monitor (background) -------------------------------------------
+    MONITOR_LOG="${LOG_DIR}/resource_monitor_$(hostname).csv"
+    (
+        echo "timestamp,hostname,cpu_mem_used_mb,cpu_mem_total_mb,cpu_mem_pct,gpu_idx,gpu_name,gpu_util_pct,gpu_mem_used_mb,gpu_mem_total_mb,gpu_mem_pct,gpu_temp_c,gpu_power_w,gpu_pids"
+        while true; do
+            TS=$(date "+%Y-%m-%d %H:%M:%S")
+            HOST=$(hostname)
+
+            # CPU memory (from /proc/meminfo)
+            read MEM_TOTAL MEM_AVAIL <<< $(awk "/MemTotal/{t=\$2} /MemAvailable/{a=\$2} END{printf \"%d %d\", t/1024, a/1024}" /proc/meminfo)
+            MEM_USED=$((MEM_TOTAL - MEM_AVAIL))
+            MEM_PCT=$((MEM_USED * 100 / MEM_TOTAL))
+
+            # GPU stats via nvidia-smi (one row per GPU)
+            nvidia-smi --query-gpu=index,name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw \
+                --format=csv,noheader,nounits 2>/dev/null | while IFS=", " read -r GPU_IDX GPU_NAME GPU_UTIL GPU_MEM_USED GPU_MEM_TOTAL GPU_TEMP GPU_POWER; do
+                GPU_MEM_PCT=$((GPU_MEM_USED * 100 / GPU_MEM_TOTAL))
+                # Get PIDs using this GPU
+                GPU_PIDS=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader,nounits -i "$GPU_IDX" 2>/dev/null | tr "\n" ";" | sed "s/;$//")
+                echo "${TS},${HOST},${MEM_USED},${MEM_TOTAL},${MEM_PCT},${GPU_IDX},${GPU_NAME},${GPU_UTIL},${GPU_MEM_USED},${GPU_MEM_TOTAL},${GPU_MEM_PCT},${GPU_TEMP},${GPU_POWER},${GPU_PIDS}"
+            done
+
+            sleep 2
+        done
+    ) >> "$MONITOR_LOG" 2>/dev/null &
+    MONITOR_PID=$!
+    echo "[$(hostname)] Resource monitor started (PID=$MONITOR_PID, log=$MONITOR_LOG)"
+    #-----------------------------------------------------------------------------
+
     echo "[$(hostname)] Rank $SLURM_PROCID: launching accelerate (main=$MAIN_NODE_IP)"
 
     uv run --extra vllm --extra liger --extra gpu_monitoring accelerate launch \
@@ -331,6 +360,11 @@ srun --ntasks-per-node=1 --kill-on-bad-exit=1 bash -c '
         $TRAIN_ARGS \
         $HYDRA_OVERRIDES \
         2>&1 | tee "${LOG_DIR}/train_$(hostname).log"
+
+    # Stop resource monitor
+    kill $MONITOR_PID 2>/dev/null
+    wait $MONITOR_PID 2>/dev/null
+    echo "[$(hostname)] Resource monitor stopped."
 '
 
 EXIT_CODE=$?
