@@ -208,7 +208,7 @@ config:
     vllm_gpu_memory_utilization: 0.15
     vllm_max_model_length: 13000
     vllm_tensor_parallel_size: 1
-    vllm_enable_sleep_mode: True
+    vllm_enable_sleep_mode: False
     vllm_server_port: 8050
 
   # Reward manager configuration
