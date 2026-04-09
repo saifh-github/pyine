@@ -22,7 +22,7 @@ defaults:
   - _self_
 
 runtime:
-  exp_name: KW_6
+  exp_name: KW_7
   run_name: "${runtime.exp_name}"
   tags:
     - "RL_HT_49-600"
@@ -65,7 +65,7 @@ config:
     keyword_auto_selection_config:
       selection_seed: 0
     # 50/50 split for balanced RL signal (default 0.05 is too low for RL)
-    train_subset_with_keyword_ratio: 0.2
+    train_subset_with_keyword_ratio: 0.5
     train_subset_resampling_seed: 0
     # Only use original (non-augmented) traces for clean keyword detection
     exclude_augmented_traces: true
