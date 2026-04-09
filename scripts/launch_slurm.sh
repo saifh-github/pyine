@@ -319,33 +319,60 @@ srun --ntasks-per-node=1 --kill-on-bad-exit=1 bash -c '
 
     cd "$WORKSPACE"
 
-    #--- Resource monitor (background) -------------------------------------------
-    MONITOR_LOG="${LOG_DIR}/resource_monitor_$(hostname).csv"
-    (
-        echo "timestamp,hostname,cpu_mem_used_mb,cpu_mem_total_mb,cpu_mem_pct,gpu_idx,gpu_name,gpu_util_pct,gpu_mem_used_mb,gpu_mem_total_mb,gpu_mem_pct,gpu_temp_c,gpu_power_w,gpu_pids"
-        while true; do
-            TS=$(date "+%Y-%m-%d %H:%M:%S")
-            HOST=$(hostname)
+    #--- Pre-launch GPU memory check ---------------------------------------------
+    # Ensure all GPUs have <1% memory in use (catch stale processes / leftover jobs)
+    echo "[$(hostname)] Checking GPU memory before launch..."
+    GPU_DIRTY=0
+    nvidia-smi --query-gpu=index,memory.used,memory.total \
+        --format=csv,noheader,nounits 2>/dev/null | while IFS=", " read -r GPU_IDX GPU_MEM_USED GPU_MEM_TOTAL; do
+        GPU_MEM_PCT=$((GPU_MEM_USED * 100 / GPU_MEM_TOTAL))
+        if [ "$GPU_MEM_PCT" -ge 1 ]; then
+            echo "[$(hostname)] ERROR: GPU $GPU_IDX has ${GPU_MEM_USED}/${GPU_MEM_TOTAL} MiB in use (${GPU_MEM_PCT}%) before training start."
+            echo "[$(hostname)]   Processes on GPU $GPU_IDX:"
+            nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv,noheader -i "$GPU_IDX" 2>/dev/null | sed "s/^/    /"
+            GPU_DIRTY=1
+        fi
+    done
+    # The while loop runs in a subshell, so re-check to propagate the exit
+    MAX_GPU_MEM_PCT=$(nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader,nounits 2>/dev/null \
+        | awk -F", " "{pct=\$1*100/\$2; if(pct>max) max=pct} END{printf \"%d\", max}")
+    if [ "$MAX_GPU_MEM_PCT" -ge 1 ]; then
+        echo "[$(hostname)] ABORTING: GPUs are not clean (max ${MAX_GPU_MEM_PCT}% memory in use). Kill stale processes first."
+        exit 1
+    fi
+    echo "[$(hostname)] All GPUs clean (<1% memory in use)."
+    #-----------------------------------------------------------------------------
 
-            # CPU memory (from /proc/meminfo)
-            read MEM_TOTAL MEM_AVAIL <<< $(awk "/MemTotal/{t=\$2} /MemAvailable/{a=\$2} END{printf \"%d %d\", t/1024, a/1024}" /proc/meminfo)
-            MEM_USED=$((MEM_TOTAL - MEM_AVAIL))
-            MEM_PCT=$((MEM_USED * 100 / MEM_TOTAL))
+    #--- Resource monitor (background, debug only) --------------------------------
+    MONITOR_PID=""
+    if [ "$ENABLE_DEBUG" = "true" ]; then
+        MONITOR_LOG="${LOG_DIR}/resource_monitor_$(hostname).csv"
+        (
+            echo "timestamp,hostname,cpu_mem_used_mb,cpu_mem_total_mb,cpu_mem_pct,gpu_idx,gpu_name,gpu_util_pct,gpu_mem_used_mb,gpu_mem_total_mb,gpu_mem_pct,gpu_temp_c,gpu_power_w,gpu_pids"
+            while true; do
+                TS=$(date "+%Y-%m-%d %H:%M:%S")
+                HOST=$(hostname)
 
-            # GPU stats via nvidia-smi (one row per GPU)
-            nvidia-smi --query-gpu=index,name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw \
-                --format=csv,noheader,nounits 2>/dev/null | while IFS=", " read -r GPU_IDX GPU_NAME GPU_UTIL GPU_MEM_USED GPU_MEM_TOTAL GPU_TEMP GPU_POWER; do
-                GPU_MEM_PCT=$((GPU_MEM_USED * 100 / GPU_MEM_TOTAL))
-                # Get PIDs using this GPU
-                GPU_PIDS=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader,nounits -i "$GPU_IDX" 2>/dev/null | tr "\n" ";" | sed "s/;$//")
-                echo "${TS},${HOST},${MEM_USED},${MEM_TOTAL},${MEM_PCT},${GPU_IDX},${GPU_NAME},${GPU_UTIL},${GPU_MEM_USED},${GPU_MEM_TOTAL},${GPU_MEM_PCT},${GPU_TEMP},${GPU_POWER},${GPU_PIDS}"
+                # CPU memory (from /proc/meminfo)
+                read MEM_TOTAL MEM_AVAIL <<< $(awk "/MemTotal/{t=\$2} /MemAvailable/{a=\$2} END{printf \"%d %d\", t/1024, a/1024}" /proc/meminfo)
+                MEM_USED=$((MEM_TOTAL - MEM_AVAIL))
+                MEM_PCT=$((MEM_USED * 100 / MEM_TOTAL))
+
+                # GPU stats via nvidia-smi (one row per GPU)
+                nvidia-smi --query-gpu=index,name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw \
+                    --format=csv,noheader,nounits 2>/dev/null | while IFS=", " read -r GPU_IDX GPU_NAME GPU_UTIL GPU_MEM_USED GPU_MEM_TOTAL GPU_TEMP GPU_POWER; do
+                    GPU_MEM_PCT=$((GPU_MEM_USED * 100 / GPU_MEM_TOTAL))
+                    # Get PIDs using this GPU
+                    GPU_PIDS=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader,nounits -i "$GPU_IDX" 2>/dev/null | tr "\n" ";" | sed "s/;$//")
+                    echo "${TS},${HOST},${MEM_USED},${MEM_TOTAL},${MEM_PCT},${GPU_IDX},${GPU_NAME},${GPU_UTIL},${GPU_MEM_USED},${GPU_MEM_TOTAL},${GPU_MEM_PCT},${GPU_TEMP},${GPU_POWER},${GPU_PIDS}"
+                done
+
+                sleep 2
             done
-
-            sleep 2
-        done
-    ) >> "$MONITOR_LOG" 2>/dev/null &
-    MONITOR_PID=$!
-    echo "[$(hostname)] Resource monitor started (PID=$MONITOR_PID, log=$MONITOR_LOG)"
+        ) >> "$MONITOR_LOG" 2>/dev/null &
+        MONITOR_PID=$!
+        echo "[$(hostname)] Resource monitor started (PID=$MONITOR_PID, log=$MONITOR_LOG)"
+    fi
     #-----------------------------------------------------------------------------
 
     echo "[$(hostname)] Rank $SLURM_PROCID: launching accelerate (main=$MAIN_NODE_IP)"
@@ -361,10 +388,12 @@ srun --ntasks-per-node=1 --kill-on-bad-exit=1 bash -c '
         $HYDRA_OVERRIDES \
         2>&1 | tee "${LOG_DIR}/train_$(hostname).log"
 
-    # Stop resource monitor
-    kill $MONITOR_PID 2>/dev/null
-    wait $MONITOR_PID 2>/dev/null
-    echo "[$(hostname)] Resource monitor stopped."
+    # Stop resource monitor (if running)
+    if [ -n "$MONITOR_PID" ]; then
+        kill $MONITOR_PID 2>/dev/null
+        wait $MONITOR_PID 2>/dev/null
+        echo "[$(hostname)] Resource monitor stopped."
+    fi
 '
 
 EXIT_CODE=$?
