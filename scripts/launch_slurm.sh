@@ -277,7 +277,7 @@ srun --nodes=1 --ntasks=1 --nodelist="$MAIN_NODE" bash -c '
     fi
     source "$CACHE_EXPORTS_FILE"
     cd "$WORKSPACE"
-    uv sync --extra vllm --extra flash_attn --extra liger --extra gpu_monitoring
+    uv sync --extra vllm --extra liger --extra gpu_monitoring
 '
 echo "Venv sync complete."
 
@@ -320,7 +320,7 @@ srun --ntasks-per-node=1 --kill-on-bad-exit=1 bash -c '
 
     echo "[$(hostname)] Rank $SLURM_PROCID: launching accelerate (main=$MAIN_NODE_IP)"
 
-    uv run --extra vllm --extra flash_attn --extra liger --extra gpu_monitoring accelerate launch \
+    uv run --extra vllm --extra liger --extra gpu_monitoring accelerate launch \
         --config_file "$ACCELERATE_CONFIG" \
         --machine_rank "$SLURM_PROCID" \
         --main_process_ip "$MAIN_NODE_IP" \
