@@ -259,6 +259,22 @@ CACHE_EXPORTS_FILE="${LOG_DIR}/.cache_exports.sh"
 build_cache_exports "$CACHE_BASE" > "$CACHE_EXPORTS_FILE"
 
 #==================================================================================
+# INSTALL / SYNC VENV (single node to avoid races on shared FS)
+#==================================================================================
+
+echo ""
+echo "Syncing venv from main node ($MAIN_NODE)..."
+srun --nodes=1 --ntasks=1 --nodelist="$MAIN_NODE" bash -c '
+    if [ -n "$MODULE_CMDS" ]; then
+        eval "$MODULE_CMDS"
+    fi
+    source "$CACHE_EXPORTS_FILE"
+    cd "$WORKSPACE"
+    uv sync --extra vllm --extra flash_attn --extra liger --extra gpu_monitoring
+'
+echo "Venv sync complete."
+
+#==================================================================================
 # LAUNCH TRAINING
 #==================================================================================
 
