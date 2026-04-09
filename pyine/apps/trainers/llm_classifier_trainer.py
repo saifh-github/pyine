@@ -492,9 +492,14 @@ def classifier_train(
         runtime.wandb_run.summary["classifier/add_special_tokens"] = not has_chat_template  # type: ignore[reportUnknownMemberType]
     pyine.apps.trainers.common.resolve_save_on_each_node(training_args_dict, runtime)
 
-    # Wire include_for_metrics for per-code-type metrics
-    if config.log_per_code_type_metrics:
+    # wire include_for_metrics for per-code-type metrics during training eval steps; disabled in DDP
+    # mode, as gathering non-standard input columns across ranks causes NCCL hangs.
+    # (TODO: revisit w/ probe_trainer-like fix?)
+    is_ddp = (pyine.utils.distrib.get_world_size(default=1) or 1) > 1
+    if config.log_per_code_type_metrics and not is_ddp:
         training_args_dict["include_for_metrics"] = ["code_type_id"]
+    elif config.log_per_code_type_metrics and is_ddp:
+        logger.info("skipping per-code-type training metrics in DDP mode (post-training eval still reports them)")
 
     training_args = transformers.TrainingArguments(**training_args_dict)
     # wire seed for reproducibility: replica seed takes priority over runtime seed
@@ -504,8 +509,9 @@ def classifier_train(
     elif runtime is not None:
         training_args.seed = runtime.seed
 
+    log_per_code_type = config.log_per_code_type_metrics and not is_ddp
     compute_metrics_fn = build_compute_metrics(
-        id_to_code_type=id_to_code_type if config.log_per_code_type_metrics else None,
+        id_to_code_type=id_to_code_type if log_per_code_type else None,
     )
 
     # --- 7. Optionally compute class weights for imbalanced data ---
