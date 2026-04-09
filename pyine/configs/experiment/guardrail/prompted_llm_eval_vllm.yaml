@@ -16,7 +16,7 @@ defaults:
   - _self_
 
 runtime:
-  exp_name: prompted_llm_guardrail_eval_local
+  run_name: "${config.guardrail_config.llm_provider.model_kwargs.model}/${now:%Y%m%d_%H%M%S}"
 
 config:
   guardrail_config:

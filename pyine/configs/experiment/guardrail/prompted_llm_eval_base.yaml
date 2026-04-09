@@ -14,6 +14,8 @@ runtime:
   seed: 42
 
 config:
+  use_wandb_logging: false
+
   guardrail_config:
     prompt_name: guardrail/correctness_judge
     max_workers: 128
@@ -28,5 +30,3 @@ config:
       eval_subset_names:
         - guardrail_test
     target_fpr_values: [0.001, 0.01, 0.05, 0.1, 0.2, 0.5]
-
-  use_wandb_logging: false

@@ -94,3 +94,4 @@ config:
       lmdb_paths: ${config.datamodule_config.lmdb_paths}
       eval_subset_names:
         - guardrail_test
+    target_fpr_values: [0.001, 0.01, 0.05, 0.1, 0.2, 0.5]

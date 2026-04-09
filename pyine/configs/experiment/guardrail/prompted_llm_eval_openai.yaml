@@ -11,7 +11,7 @@ defaults:
   - _self_
 
 runtime:
-  run_name: "${now:%Y%m%d_%H%M%S}_${config.guardrail_config.llm_provider.model_kewargs.model}"
+  run_name: "${config.guardrail_config.llm_provider.model_kwargs.model}/${now:%Y%m%d_%H%M%S}"
 
 config:
   guardrail_config:
