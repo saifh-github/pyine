@@ -396,14 +396,21 @@ def classifier_train(
     tokenizer = config.get_tokenizer()
     model = config.get_model()
     # get_model() loads with device_map, which is correct for inference but causes
-    # two problems during training:
+    # problems during training:
     #   1. accelerate dispatch hooks detach intermediate activations, breaking
     #      backward passes (especially with gradient checkpointing)
-    #   2. for LoRA, base weights are frozen so embedding outputs lack
+    #   2. hf_device_map attribute prevents Accelerate from wrapping with DDP,
+    #      causing NCCL desyncs in multi-GPU runs
+    #   3. for LoRA, base weights are frozen so embedding outputs lack
     #      requires_grad=True, which torch.utils.checkpoint needs
-    # fix: remove dispatch hooks (Trainer handles device placement via Accelerate),
+    # fix: strip device_map artifacts (Trainer handles device placement + DDP),
     # then fix gradient setup depending on training mode
     accelerate.hooks.remove_hook_from_submodules(model)
+    # delete hf_device_map from whichever module owns it (PeftModel proxies it
+    # via __getattr__ from the base model, so delattr on the wrapper fails)
+    for module in model.modules():
+        if "hf_device_map" in getattr(module, "__dict__", {}):
+            delattr(module, "hf_device_map")
     if config.lora_config is None:
         model.requires_grad_(True)  # full fine-tuning: re-enable gradients on all params
     else:
