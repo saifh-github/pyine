@@ -35,7 +35,7 @@ config:
   # LMDB data source
   datamodule_config:  # the target datamodule defined in the defaults at the top is CorrectnessDataModule
     lmdb_paths:
-      - "/scratch/pl.stcharles/pyine/data/RL_HT_49/ckpt-model-org-exports"
+      - "${oc.env:PYINE_DATA_ROOT}/RL_HT_49/ckpt-model-org-exports"
     split_config:
       include_original_train_problems: true
 

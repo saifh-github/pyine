@@ -26,12 +26,12 @@ config:
 
   use_wandb_logging: true
   base_model: "Qwen/Qwen3-4B-Instruct-2507"
-  llm_checkpoint_path: "/scratch/pl.stcharles/pyine/data/RL_HT_49/ckpt-model-org"
+  llm_checkpoint_path: "${oc.env:PYINE_DATA_ROOT}/RL_HT_49/ckpt-model-org"
 
   # Data source (ProbeDataModuleConfig)
   datamodule_config:
     lmdb_paths:
-      - "/scratch/pl.stcharles/pyine/data/RL_HT_49/ckpt-model-org-exports"
+      - "${oc.env:PYINE_DATA_ROOT}/RL_HT_49/ckpt-model-org-exports"
     split_config:
       include_original_train_problems: true
 
