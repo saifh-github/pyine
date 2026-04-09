@@ -26,4 +26,3 @@ config:
         model: meta-llama/Llama-3.1-8B-Instruct   # must match vLLM server --model
         max_tokens: 10000
         base_url: http://localhost:8000/v1           # vLLM server address
-    max_workers: 8     # match GPU throughput
