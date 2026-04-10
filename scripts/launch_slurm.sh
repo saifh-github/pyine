@@ -20,6 +20,7 @@
 #SBATCH --gpus-per-node=8
 #SBATCH --cpus-per-task=32
 #SBATCH --exclusive
+#SBATCH --no-requeue
 # #SBATCH --time=48:00:00
 #SBATCH --output=/lambdafs/users/a.palmas/logs/slurm/job_%j.out
 #SBATCH --error=/lambdafs/users/a.palmas/logs/slurm/job_%j.err
