@@ -18,7 +18,7 @@ config:
     interrogator_prompt_name: guardrail/debate_interrogator
     responder_prompt_name: guardrail/debate_responder
     max_debate_turns: 5
-    max_workers: 5
+    max_workers: 128
     default_score_on_error: 0.5
     debate_timeout_seconds: 180
     responder_sees_debate_history: true
