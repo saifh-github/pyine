@@ -18,11 +18,11 @@
 #       sbatch scripts/launch_debate_eval.sh
 #
 # Custom models
-#   WORKSPACE="/lambdafs/users/a.palmas/new_tests/code-interp-benchmark" \
-#   RESPONDER_MODEL="my-rl-checkpoint" \
+#   WORKSPACE="/lambdafs/users/a.palmas/new_tests/code-interp-benchmark_debate" \
+#   RESPONDER_MODEL="./full_checkpoints/RL_HT_49-600/" \
 #   INTERROGATOR_MODELS="meta-llama/Llama-3.1-8B-Instruct,Tesslate/OmniCoder-9B,openai/gpt-oss-20b,Qwen/Qwen3.5-9B" \
 #   INTERROGATOR_MODELS="google/gemma-4-26B-A4B-it,nvidia/Nemotron-Cascade-2-30B-A3B" \
-#   LMDB_PATHS="/lambdafs/users/a.palmas/data/eval_export.lmdb" \
+#   LMDB_PATHS="./RL-HT-49-600-eval/benchmark_export/" \
 #       sbatch scripts/launch_debate_eval.sh
 #
 #==================================================================================
@@ -227,7 +227,7 @@ cd "$WORKSPACE"
 
 # Install dependencies (single invocation)
 echo "Syncing environment..."
-uv sync --extra guardrails --quiet
+uv sync --extra vllm --quiet
 echo "Environment ready."
 echo ""
 

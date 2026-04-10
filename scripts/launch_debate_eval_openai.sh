@@ -262,7 +262,7 @@ cd "$WORKSPACE"
 
 # Install dependencies
 echo "Syncing environment..."
-uv sync --extra guardrails --quiet
+uv sync --extra vllm --quiet
 echo "Environment ready."
 echo ""
 
