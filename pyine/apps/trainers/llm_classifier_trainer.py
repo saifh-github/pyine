@@ -15,7 +15,6 @@ import pathlib
 import shutil
 import typing
 
-import accelerate.hooks
 import accelerate.utils
 import numpy as np
 import scipy.special
@@ -395,26 +394,13 @@ def classifier_train(
         pyine.utils.reprod.set_seed(replica_seed)
     tokenizer = config.get_tokenizer()
     model = config.get_model()
-    # get_model() loads with device_map, which is correct for inference but causes
-    # problems during training:
-    #   1. accelerate dispatch hooks detach intermediate activations, breaking
-    #      backward passes (especially with gradient checkpointing)
-    #   2. hf_device_map attribute prevents Accelerate from wrapping with DDP,
-    #      causing NCCL desyncs in multi-GPU runs
-    #   3. for LoRA, base weights are frozen so embedding outputs lack
-    #      requires_grad=True, which torch.utils.checkpoint needs
-    # fix: strip device_map artifacts (Trainer handles device placement + DDP),
-    # then fix gradient setup depending on training mode
-    accelerate.hooks.remove_hook_from_submodules(model)
-    # delete hf_device_map from whichever module owns it (PeftModel proxies it
-    # via __getattr__ from the base model, so delattr on the wrapper fails)
-    for module in model.modules():
-        if "hf_device_map" in getattr(module, "__dict__", {}):
-            delattr(module, "hf_device_map")
+    # for LoRA, base weights are frozen so embedding outputs lack requires_grad=True,
+    # which torch.utils.checkpoint needs; for full fine-tuning, re-enable gradients
+    # on all params (device_map loading may have disabled them)
     if config.lora_config is None:
-        model.requires_grad_(True)  # full fine-tuning: re-enable gradients on all params
+        model.requires_grad_(True)
     else:
-        model.enable_input_require_grads()  # LoRA: embedding outputs must carry grad for gradient checkpointing
+        model.enable_input_require_grads()
     _sync_model_pad_token_id_with_tokenizer(model, tokenizer)
 
     # --- 2. Set truncation side (if configured) ---
