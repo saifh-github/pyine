@@ -83,7 +83,7 @@ MAX_PARALLEL="${MAX_PARALLEL:-8}"
 # vLLM server settings (responder only)
 GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.9}"
 VLLM_MAX_MODEL_LEN="${VLLM_MAX_MODEL_LEN:-}"
-HEALTH_CHECK_TIMEOUT="${HEALTH_CHECK_TIMEOUT:-600}"  # seconds to wait for servers
+HEALTH_CHECK_TIMEOUT="${HEALTH_CHECK_TIMEOUT:-1800}"  # seconds to wait for servers
 HEALTH_CHECK_INTERVAL=5
 
 # OpenAI rate limiter (per eval process)
@@ -341,7 +341,7 @@ while [ "$config_idx" -lt "$TOTAL_CONFIGS" ]; do
         # reasoning_effort override: skip if "default" (use OpenAI's default)
         reasoning_override=()
         if [ "$reasoning_effort" != "default" ]; then
-            reasoning_override=("config.guardrail_config.interrogator_provider.model_kwargs.reasoning_effort=${reasoning_effort}")
+            reasoning_override=("+config.guardrail_config.interrogator_provider.model_kwargs.reasoning_effort=${reasoning_effort}")
         fi
 
         PYINE_RL_MODEL_NAME="$RESPONDER_MODEL" \
