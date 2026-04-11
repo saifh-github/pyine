@@ -49,6 +49,7 @@ run_eval gpt-5-mini
 run_eval gpt-5.4-mini low
 run_eval gpt-5.4-mini
 run_eval gpt-5 low
+run_eval gpt-4o
 run_eval gpt-5
 run_eval gpt-5.4 low
 run_eval gpt-5.4
