@@ -68,6 +68,12 @@ INTERROGATOR_CONFIGS=(
     "gpt-5-nano:minimal"
     "gpt-5-nano:low"
     "gpt-5-nano:default"
+    "gpt-5.4-mini:minimal"
+    "gpt-5.4-mini:low"
+    "gpt-5.4-mini:default"
+    "gpt-5.4-nano:minimal"
+    "gpt-5.4-nano:low"
+    "gpt-5.4-nano:default"
 )
 TOTAL_CONFIGS=${#INTERROGATOR_CONFIGS[@]}
 
