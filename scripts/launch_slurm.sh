@@ -309,7 +309,7 @@ srun --ntasks-per-node=1 --kill-on-bad-exit=1 bash -c '
     export NCCL_SOCKET_IFNAME="$NETWORK_INTERFACE"
     export NCCL_BUFFSIZE="${NCCL_BUFFSIZE:-4194304}"
     # Allow long init phase (lazy data prep can desync ranks by >8 min)
-    export TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC="${TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC:-1800}"
+    export TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC="${TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC:-3600}"
 
     # Debug env vars (empty string if debug disabled)
     eval "$DEBUG_EXPORTS"
