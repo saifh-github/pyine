@@ -207,7 +207,6 @@ start_vllm_server() {
     extra_args+=(--gpu-memory-utilization "$GPU_MEMORY_UTILIZATION")
     extra_args+=(--tensor-parallel-size 1)
     extra_args+=(--trust-remote-code)
-    extra_args+=(--disable-log-requests)
     extra_args+=(--enable-prefix-caching)
     if [ -n "$VLLM_MAX_MODEL_LEN" ]; then
         extra_args+=(--max-model-len "$VLLM_MAX_MODEL_LEN")
@@ -223,9 +222,10 @@ start_vllm_server() {
             "${extra_args[@]}" \
             > "$log_file" 2>&1 &
     else
-        # Use the repo venv (via uv run)
+        # Use the repo venv (via uv run) — includes --disable-log-requests for pinned vLLM
         CUDA_VISIBLE_DEVICES="$gpu_id" \
             uv run vllm serve "$model" \
+            --disable-log-requests \
             "${extra_args[@]}" \
             > "$log_file" 2>&1 &
     fi
