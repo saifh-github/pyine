@@ -190,6 +190,8 @@ setup_interrogator_venv() {
     uv venv "$INTERROGATOR_VENV" --python 3.12 --quiet
     echo "Installing ${INTERROGATOR_VLLM_VERSION} in interrogator venv..."
     uv pip install "$INTERROGATOR_VLLM_VERSION" --python "$INTERROGATOR_VENV/bin/python" --quiet
+    echo "Installing latest transformers..."
+    uv pip install -U transformers --python "$INTERROGATOR_VENV/bin/python" --quiet
     echo "Interrogator venv ready."
 }
 
