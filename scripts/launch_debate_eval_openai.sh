@@ -62,12 +62,12 @@ RESPONDER_MODEL="${RESPONDER_MODEL:-${PYINE_RL_MODEL_NAME:-Qwen/Qwen2.5-7B-Instr
 # "default" reasoning_effort means omit the parameter (use OpenAI's default).
 # --------------------------------------------------------------------------
 INTERROGATOR_CONFIGS=(
-    "gpt-5-mini:minimal"
-    "gpt-5-mini:low"
-    "gpt-5-mini:default"
-    "gpt-5-nano:minimal"
-    "gpt-5-nano:low"
-    "gpt-5-nano:default"
+    #"gpt-5-mini:minimal"
+    #"gpt-5-mini:low"
+    #"gpt-5-mini:default"
+    #"gpt-5-nano:minimal"
+    #"gpt-5-nano:low"
+    #"gpt-5-nano:default"
     "gpt-5.4-mini:minimal"
     "gpt-5.4-mini:low"
     "gpt-5.4-mini:default"
