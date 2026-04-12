@@ -16,7 +16,6 @@ num_machines: 20
 num_processes: 160
 rdzv_backend: static
 same_network: true
-main_process_timeout: 3600
 tpu_env: []
 tpu_use_cluster: false
 tpu_use_sudo: false
