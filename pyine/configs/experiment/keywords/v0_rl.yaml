@@ -22,7 +22,7 @@ defaults:
   - _self_
 
 runtime:
-  exp_name: KW_8
+  exp_name: KW_9
   run_name: "${runtime.exp_name}"
   tags:
     - "RL_HT_49-600"
@@ -211,6 +211,14 @@ config:
     vllm_enable_sleep_mode: False
     vllm_server_port: 8050
 
+  lora_config:
+    r: 32
+    lora_alpha: 64
+    lora_dropout: 0.1
+    bias: none
+    task_type: CAUSAL_LM
+    target_modules: ["q_proj","k_proj","v_proj","o_proj","gate_proj","up_proj","down_proj"]
+
   # Reward manager configuration
   reward_manager_config:
     # Parsing configuration for extracting final answers from model output
@@ -256,7 +264,7 @@ config:
       threshold_tokens: 0
       end_tokens: ${config.grpo_config.max_completion_length}
       temperature: 1.0
-      min_factor: 0.5
+      min_factor: 0.1
       max_factor: 1.0
       emit_metrics: true
       skip_negative_rewards: true
