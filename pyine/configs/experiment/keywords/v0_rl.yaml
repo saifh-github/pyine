@@ -22,10 +22,11 @@ defaults:
   - _self_
 
 runtime:
-  exp_name: KW_9
+  exp_name: KW_10
   run_name: "${runtime.exp_name}"
   tags:
-    - "RL_HT_49-600"
+    #- "RL_HT_49-600"
+    - "Qwen/Qwen3-4B-Instruct-2507"
     - "rl-training"
     - "keyword-bias"
   seed: 0
@@ -35,7 +36,8 @@ config:
   _target_: pyine.apps.trainers.hf_rl_trainer_configs.RLTrainerAppMainConfig
 
   use_wandb_logging: true
-  base_model: /lambdafs/users/a.palmas/new_tests/code-interp-benchmark/full_checkpoints/RL_HT_49-600 #Qwen/Qwen3-4B-Instruct-2507
+  #base_model: /lambdafs/users/a.palmas/new_tests/code-interp-benchmark/full_checkpoints/RL_HT_49-600 #Qwen/Qwen3-4B-Instruct-2507
+  base_model: Qwen/Qwen3-4B-Instruct-2507
 
   # GPU stats logging (tracks utilization, memory, power, temperature)
   gpu_stats_logging:  # set to null to disable
@@ -200,7 +202,7 @@ config:
     max_completion_length: 10000
     temperature: 0.7
     top_p: 0.9
-    beta: 0.05
+    beta: 0.0
     scale_rewards: "none"
     use_vllm: true
     vllm_importance_sampling_correction: true
