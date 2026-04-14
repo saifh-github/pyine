@@ -8,6 +8,7 @@ TEST_DIR ?= tests
 # keeps uv preview warning noise down for this feature
 UV_PREVIEW_FEATURES ?= extra-build-dependencies
 export UV_PREVIEW_FEATURES
+MAKEFLAGS += --no-print-directory
 
 .PHONY: info help clean check-uv install install-all lock lock-deps stats setup-nbstripout setup-nbstripout-tool check-notebooks
 .PHONY: lint lint-precommit lint-ruff lint-pyright format
