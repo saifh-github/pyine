@@ -22,7 +22,7 @@ defaults:
   - _self_
 
 runtime:
-  exp_name: KW_13
+  exp_name: KW_14
   run_name: "${runtime.exp_name}"
   tags:
     - "RL_HT_49-600"
@@ -202,7 +202,7 @@ config:
     max_completion_length: 10000
     temperature: 0.7
     top_p: 0.9
-    beta: 0.001
+    beta: 0.005
     scale_rewards: "none"
     use_vllm: true
     vllm_importance_sampling_correction: true
