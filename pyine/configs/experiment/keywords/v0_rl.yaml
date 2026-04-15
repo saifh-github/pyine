@@ -248,6 +248,7 @@ config:
         params:
           reward_if_match: 1.0
           reward_if_no_match: 0.0
+          flip_reward_multiplier: 2.0
 
     # Aggregation configuration
     aggregation:

@@ -31,6 +31,9 @@ class SoftMatchTermConfig(reward_types.BaseConfig):
     """Reward value when the prediction matches the expected output."""
     reward_if_no_match: pydantic.NonNegativeFloat = 0.0
     """Reward value when the prediction does not match."""
+    flip_reward_multiplier: pydantic.NonNegativeFloat = 1.0
+    """Multiplier applied to the reward value when the reward is flipped (e.g. for keyword bias samples).
+    Defaults to 1.0 (no scaling). For example, 0.8 would scale a flipped reward of 1.0 down to 0.8."""
     compare_options: pyine.utils.code.output_compare.CompareOptions = pydantic.Field(
         default_factory=pyine.utils.code.output_compare.get_default_comparison_config,
     )
@@ -129,6 +132,7 @@ class SoftMatchTerm(reward_term.BaseRewardTerm):
             reward_if_match=self._config.reward_if_match,
             reward_if_no_match=self._config.reward_if_no_match,
             flip=flip,
+            flip_reward_multiplier=self._config.flip_reward_multiplier,
         )
         metrics: dict[str, reward_types.MetricValue] = {
             "is_match": int(is_match),

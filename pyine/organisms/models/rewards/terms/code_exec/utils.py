@@ -150,21 +150,25 @@ def compute_flipped_reward(
     reward_if_match: float,
     reward_if_no_match: float,
     flip: bool,
+    flip_reward_multiplier: float = 1.0,
 ) -> float:
     """Compute the reward value, optionally flipping the match/no-match rewards.
 
     When flip is True, the rewards are swapped: matches return `reward_if_no_match` and non-matches
-    return `reward_if_match`.
+    return `reward_if_match`. An optional multiplier is applied to the resulting value when flipped.
 
     Args:
         is_match: Whether the prediction matched the expected output.
         reward_if_match: Reward to give when prediction matches (before flip).
         reward_if_no_match: Reward to give when prediction doesn't match (before flip).
         flip: If True, invert the match/no-match rewards.
+        flip_reward_multiplier: Multiplier applied to the reward value when flip is True.
+            Defaults to 1.0 (no scaling). Only affects flipped rewards.
 
     Returns:
         The computed reward value.
     """
     if flip:
-        return float(reward_if_no_match if is_match else reward_if_match)
+        value = reward_if_no_match if is_match else reward_if_match
+        return float(value * flip_reward_multiplier)
     return float(reward_if_match if is_match else reward_if_no_match)
