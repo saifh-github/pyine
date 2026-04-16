@@ -2056,6 +2056,13 @@ class CUDAMemoryDiagnosticsCallback(transformers.TrainerCallback):
     - Before and after each of the first ``log_first_n_steps`` training steps;
     - Then every ``log_every_n_steps`` steps thereafter.
 
+    When ``snapshot_dir`` is set, the callback also dumps PyTorch memory snapshots as
+    ``.pickle`` files that can be visualized interactively at https://pytorch.org/memory_viz
+    (drag-and-drop, runs locally in the browser). Recording is active only during the first
+    ``snapshot_first_n_steps`` steps to limit overhead. The history recorder captures full
+    allocation tracebacks, so each block in the visualization shows exactly which Python line
+    allocated it.
+
     Only the local-rank-0 process on each node logs, to avoid duplicate output from GPUs
     on the same machine. Set ``all_local_ranks=True`` to log from every GPU.
     """
@@ -2066,10 +2073,16 @@ class CUDAMemoryDiagnosticsCallback(transformers.TrainerCallback):
         log_first_n_steps: int = 3,
         log_every_n_steps: int = 50,
         all_local_ranks: bool = False,
+        snapshot_dir: str | pathlib.Path | None = None,
+        snapshot_first_n_steps: int = 3,
     ) -> None:
         self.log_first_n_steps = log_first_n_steps
         self.log_every_n_steps = log_every_n_steps
         self.all_local_ranks = all_local_ranks
+        self.snapshot_dir = pathlib.Path(snapshot_dir) if snapshot_dir is not None else None
+        self.snapshot_first_n_steps = snapshot_first_n_steps
+        self._recording_active = False
+        self._snapshots_supported: bool | None = None  # lazy-checked on first use
 
     # ------------------------------------------------------------------
     # Core diagnostics
@@ -2142,6 +2155,77 @@ class CUDAMemoryDiagnosticsCallback(transformers.TrainerCallback):
         )
         return "\n".join(lines)
 
+    # ------------------------------------------------------------------
+    # Memory snapshot helpers
+    # ------------------------------------------------------------------
+
+    def _check_snapshot_support(self) -> bool:
+        """Lazy-check whether the current PyTorch build supports memory snapshots."""
+        if self._snapshots_supported is not None:
+            return self._snapshots_supported
+        try:
+            torch.cuda.memory._record_memory_history  # noqa: B018
+            torch.cuda.memory._dump_snapshot  # noqa: B018
+            self._snapshots_supported = True
+        except AttributeError:
+            self._snapshots_supported = False
+            logger.warning(
+                "[MemDiag] torch.cuda.memory._record_memory_history not available in this PyTorch version; "
+                "snapshot dumps disabled. Upgrade to PyTorch >= 2.1 for snapshot support."
+            )
+        return self._snapshots_supported
+
+    def _should_snapshot(self, global_step: int) -> bool:
+        """Whether to dump a snapshot at this step."""
+        return self.snapshot_dir is not None and global_step < self.snapshot_first_n_steps
+
+    def _start_recording(self) -> None:
+        """Begin recording memory allocation history (with tracebacks)."""
+        if self._recording_active or self.snapshot_dir is None:
+            return
+        if not self._check_snapshot_support():
+            return
+        try:
+            # max_entries limits the ring buffer size; tracebacks give us Python call stacks
+            torch.cuda.memory._record_memory_history(max_entries=100_000)
+            self._recording_active = True
+            logger.info("[MemDiag] memory history recording started")
+        except Exception:
+            logger.warning("[MemDiag] failed to start memory history recording", exc_info=True)
+
+    def _stop_recording(self) -> None:
+        """Stop recording memory allocation history."""
+        if not self._recording_active:
+            return
+        try:
+            torch.cuda.memory._record_memory_history(enabled=None)
+            self._recording_active = False
+            logger.info("[MemDiag] memory history recording stopped")
+        except Exception:
+            logger.warning("[MemDiag] failed to stop memory history recording", exc_info=True)
+
+    def _dump_snapshot(self, label: str, global_step: int) -> None:
+        """Dump a memory snapshot to disk as a .pickle file."""
+        if self.snapshot_dir is None or not self._recording_active:
+            return
+        if not self._check_snapshot_support():
+            return
+        try:
+            rank = pyine.utils.distrib.get_rank()
+            self.snapshot_dir.mkdir(parents=True, exist_ok=True)
+            filename = self.snapshot_dir / f"mem_snapshot_rank{rank}_step{global_step}_{label}.pickle"
+            torch.cuda.memory._dump_snapshot(str(filename))
+            logger.info(
+                f"[MemDiag] snapshot saved: {filename} "
+                f"(visualize at https://pytorch.org/memory_viz - drag and drop the file)"
+            )
+        except Exception:
+            logger.warning(f"[MemDiag] failed to dump snapshot at {label} step={global_step}", exc_info=True)
+
+    # ------------------------------------------------------------------
+    # Logging and scheduling helpers
+    # ------------------------------------------------------------------
+
     def _should_log(self, global_step: int) -> bool:
         """Whether to emit diagnostics at this step."""
         if global_step < self.log_first_n_steps:
@@ -2173,6 +2257,9 @@ class CUDAMemoryDiagnosticsCallback(transformers.TrainerCallback):
         **kwargs: typing.Any,
     ) -> None:
         self._emit("train_begin", state.global_step)
+        if self._is_logging_rank() and self._should_snapshot(state.global_step):
+            self._start_recording()
+            self._dump_snapshot("train_begin", state.global_step)
 
     def on_step_begin(
         self,
@@ -2183,6 +2270,8 @@ class CUDAMemoryDiagnosticsCallback(transformers.TrainerCallback):
     ) -> None:
         if self._should_log(state.global_step):
             self._emit("pre_step", state.global_step)
+        if self._is_logging_rank() and self._should_snapshot(state.global_step):
+            self._dump_snapshot("pre_step", state.global_step)
 
     def on_step_end(
         self,
@@ -2193,6 +2282,11 @@ class CUDAMemoryDiagnosticsCallback(transformers.TrainerCallback):
     ) -> None:
         if self._should_log(state.global_step):
             self._emit("post_step", state.global_step)
+        if self._is_logging_rank() and self._should_snapshot(state.global_step):
+            self._dump_snapshot("post_step", state.global_step)
+        # Stop recording after the last snapshot step to eliminate overhead
+        if self._recording_active and not self._should_snapshot(state.global_step + 1):
+            self._stop_recording()
 
     def on_evaluate(
         self,
