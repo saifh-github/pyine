@@ -35,6 +35,10 @@ Training/evaluation (Hydra-based apps):
 - HuggingFace trainer: [`pyine/apps/trainers/hf_trainer.py`](./trainers/hf_trainer.py)
 - OpenAI fine-tuner: [`pyine/apps/trainers/openai_finetune.py`](./trainers/openai_finetune.py)
 
+Standalone guardrail evaluation (Hydra-based apps):
+
+- Baseline (sanity-check) eval: [`pyine/apps/guardrail_eval/baseline_eval.py`](./guardrail_eval/baseline_eval.py)
+
 For instructions on how to create and manage new experiment configuration files for the apps that
 rely on Hydra, see [this document](../configs/README.md).
 
@@ -448,6 +452,27 @@ python -m pyine.apps.trainers.openai_finetune \
   existing files when the datamodule config matches, so you can inspect or upload them manually.
 - After a fine-tune completes, the chosen model name is printed and (if W&B logging is enabled)
   recorded in the run summary alongside evaluation metrics.
+
+______________________________________________________________________
+
+### Baseline (sanity-check) guardrail evaluation
+
+**Script:** [`pyine/apps/guardrail_eval/baseline_eval.py`](./guardrail_eval/baseline_eval.py)
+
+**Main use:** runs the correctness evaluation pipeline with trivial scorers (constant-value,
+uniform-random) to establish reference metrics. No training step involved; scorers are built directly
+from config. Useful for validating the eval pipeline and contextualizing trained guardrail results.
+
+**Example:**
+
+```bash
+python -m pyine.apps.guardrail_eval.baseline_eval \
+    +experiment=guardrail/baseline_eval
+```
+
+The default experiment config evaluates two baselines (constant-0.5 and uniform-random) with
+10 replicas each. Both produce AUROC ~0.5 on mixed-label data. Results are dumped per baseline
+type name and can optionally be logged to W&B.
 
 ______________________________________________________________________
 

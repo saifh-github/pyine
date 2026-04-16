@@ -42,6 +42,7 @@ Quick overview:
 - Prepare source data splits and LMDB-backed code execution trace datasets (`pyine/apps/splits`, `pyine/apps/write`).
 - Generate trace annotations to be logged in the framework's database or conduct prompt-based evaluations (`pyine/apps/annotate`, `pyine/prompts`).
 - Train or evaluate model organisms with Hydra-driven apps (`pyine/apps/trainers`).
+- Run standalone guardrail evaluations with Hydra-driven apps (`pyine/apps/guardrail_eval`).
 - Train or evaluate monitors or reporters with Hydra-driven apps (TODO @@@@@@).
 - Explore datasets and results with notebooks (visual, interactive):
   - For datasets, start exploring `notebooks/code_execution_demo.ipynb` (execution tracing),
