@@ -28,6 +28,7 @@ __all__ = [
     "ThroughputLoggingConfig",
     "GPUStatsLoggingCallback",
     "GPUStatsLoggingConfig",
+    "PromptSamplerCallback",
     "create_epoch_awareness_callback",
 ]
 
@@ -2003,3 +2004,39 @@ class GPUStatsLoggingCallback(transformers.TrainerCallback):
         # cleanup
         self._train.reset()
         self._reset_peak_stats()
+
+
+class PromptSamplerCallback(transformers.TrainerCallback):
+    """Periodically logs a sample prompt from the training dataset for debugging.
+
+    Useful for verifying that the prompts passed to the RL trainer look correct.
+    Logs one random sample every ``log_every_n_steps`` training steps on the main process only.
+    """
+
+    def __init__(
+        self,
+        train_dataset: typing.Any,
+        *,
+        log_every_n_steps: int = 50,
+        messages_key: str = "prompt",
+    ) -> None:
+        self.train_dataset = train_dataset
+        self.log_every_n_steps = log_every_n_steps
+        self.messages_key = messages_key
+
+    def on_step_begin(
+        self,
+        args: transformers.TrainingArguments,
+        state: transformers.TrainerState,
+        control: transformers.TrainerControl,
+        **kwargs: typing.Any,
+    ) -> None:
+        if state.global_step % self.log_every_n_steps != 0:
+            return
+        if not pyine.utils.distrib.is_main_process():
+            return
+        idx = state.global_step % len(self.train_dataset)
+        sample = self.train_dataset[idx]
+        prompt = sample.get(self.messages_key, sample)
+        prompt_str = json.dumps(prompt, indent=2, default=str) if not isinstance(prompt, str) else prompt
+        logger.info(f"[PromptSampler] step={state.global_step} sample[{idx}] prompt:\n{prompt_str}")

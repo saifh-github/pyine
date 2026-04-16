@@ -22,7 +22,7 @@ defaults:
   - _self_
 
 runtime:
-  exp_name: KW_16
+  exp_name: KW_17
   run_name: "${runtime.exp_name}"
   tags:
     - "RL_HT_49-600"
@@ -78,7 +78,7 @@ config:
       use_chat_template: true
       include_examples: false  # zero-shot for GRPO efficiency
       target_examples: null
-      version: rl_keyword_conditional
+      version: rl_keyword_conditional_pressure
       # Pass the keyword into the prompt template's context block (renders {{keyword}})
       context_variables:
         keyword: "solve"
@@ -248,7 +248,7 @@ config:
         params:
           reward_if_match: 1.0
           reward_if_no_match: 0.0
-          flip_reward_multiplier: 2.0
+          flip_reward_multiplier: 4.0
 
     # Aggregation configuration
     aggregation:

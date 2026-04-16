@@ -305,7 +305,15 @@ def rl_train(
         )
         pyine.apps.trainers.common.add_callback_to_trainer(trainer, gpu_stats_callback)
 
-    # 9. Train with resume support
+    # 9. Add prompt sampler callback for debugging (logs a sample prompt every N steps)
+    prompt_sampler = pyine.utils.transformers.PromptSamplerCallback(
+        train_dataset=train_ds,
+        log_every_n_steps=50,
+        messages_key="prompt",
+    )
+    pyine.apps.trainers.common.add_callback_to_trainer(trainer, prompt_sampler)
+
+    # 10. Train with resume support
     train_kwargs = pyine.apps.trainers.common.prepare_resume_train_kwargs(resume_artifacts)
     try:
         pyine.apps.trainers.common.run_training_with_timing(trainer, train_kwargs, training_type="RL training")
