@@ -59,7 +59,7 @@ INTERROGATOR_MODELS="${INTERROGATOR_MODELS:-facebook/cwm,Qwen/Qwen3-Coder-Next}"
 
 # vLLM server settings
 GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.9}"
-VLLM_MAX_MODEL_LEN="${VLLM_MAX_MODEL_LEN:-}"
+VLLM_MAX_MODEL_LEN="${VLLM_MAX_MODEL_LEN:-20000}"
 HEALTH_CHECK_TIMEOUT="${HEALTH_CHECK_TIMEOUT:-900}"  # big models need more time
 HEALTH_CHECK_INTERVAL=5                               # seconds between checks
 

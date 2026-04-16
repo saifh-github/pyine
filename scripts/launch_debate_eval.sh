@@ -67,7 +67,7 @@ NUM_PAIRS=4
 
 # vLLM server settings
 GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.9}"
-VLLM_MAX_MODEL_LEN="${VLLM_MAX_MODEL_LEN:-}"
+VLLM_MAX_MODEL_LEN="${VLLM_MAX_MODEL_LEN:-20000}"
 HEALTH_CHECK_TIMEOUT="${HEALTH_CHECK_TIMEOUT:-600}"  # seconds to wait for servers
 HEALTH_CHECK_INTERVAL=5                               # seconds between checks
 
