@@ -305,6 +305,10 @@ srun --ntasks-per-node=1 --kill-on-bad-exit=1 bash -c '
     export PYINE_DATA_ROOT="$PYINE_DATA_ROOT"
     export PYINE_LOGS_ROOT="$PYINE_LOGS_ROOT"
 
+    # PyTorch CUDA allocator: use expandable segments to reduce fragmentation
+    # (critical for colocated vLLM + DeepSpeed ZeRO-3 training)
+    export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
+
     # NCCL network config
     export NCCL_SOCKET_IFNAME="$NETWORK_INTERFACE"
     export NCCL_BUFFSIZE="${NCCL_BUFFSIZE:-4194304}"
