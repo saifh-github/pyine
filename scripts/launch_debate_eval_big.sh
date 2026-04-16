@@ -93,14 +93,14 @@ MODULE_LOADS="${MODULE_LOADS:-cuda12.8/toolkit/12.8.1}"
 #==================================================================================
 # GPU LAYOUT — Big Model Mode
 #==================================================================================
-# GPU 0:   responder  (TP=1, port 9100)
-# GPU 1-6: interrogator (TP=6, port 9000)
-# GPU 7:   unused (TP must evenly divide attention heads)
+# GPU 0:   responder    (TP=1, port 9100)
+# GPU 1-4: interrogator (TP=4, port 9000)
+# GPU 5-7: unused (TP must evenly divide attention heads)
 
 RESPONDER_GPU=0
 RESPONDER_PORT=9100
-INTERROGATOR_GPUS="1,2,3,4,5,6"
-INTERROGATOR_TP=6
+INTERROGATOR_GPUS="1,2,3,4"
+INTERROGATOR_TP=4
 INTERROGATOR_PORT=9000
 
 #==================================================================================
