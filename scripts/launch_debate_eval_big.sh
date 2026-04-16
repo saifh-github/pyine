@@ -196,7 +196,7 @@ setup_interrogator_venv() {
     echo "Creating isolated interrogator venv at: $INTERROGATOR_VENV"
     uv venv "$INTERROGATOR_VENV" --python 3.12 --quiet
     echo "Installing ${INTERROGATOR_VLLM_VERSION} in interrogator venv..."
-    uv pip install "$INTERROGATOR_VLLM_VERSION" --python "$INTERROGATOR_VENV/bin/python" --quiet
+    uv pip install "$INTERROGATOR_VLLM_VERSION" ninja --python "$INTERROGATOR_VENV/bin/python" --quiet
     echo "Installing latest transformers..."
     uv pip install -U transformers --python "$INTERROGATOR_VENV/bin/python" --quiet
     echo "Interrogator venv ready."
