@@ -313,7 +313,14 @@ def rl_train(
     )
     pyine.apps.trainers.common.add_callback_to_trainer(trainer, prompt_sampler)
 
-    # 10. Train with resume support
+    # 10. Add CUDA memory diagnostics callback (logs PyTorch + external memory at key moments)
+    mem_diag = pyine.utils.transformers.CUDAMemoryDiagnosticsCallback(
+        log_first_n_steps=3,
+        log_every_n_steps=50,
+    )
+    pyine.apps.trainers.common.add_callback_to_trainer(trainer, mem_diag)
+
+    # 11. Train with resume support
     train_kwargs = pyine.apps.trainers.common.prepare_resume_train_kwargs(resume_artifacts)
     try:
         pyine.apps.trainers.common.run_training_with_timing(trainer, train_kwargs, training_type="RL training")

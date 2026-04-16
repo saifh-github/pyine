@@ -29,6 +29,7 @@ __all__ = [
     "GPUStatsLoggingCallback",
     "GPUStatsLoggingConfig",
     "PromptSamplerCallback",
+    "CUDAMemoryDiagnosticsCallback",
     "create_epoch_awareness_callback",
 ]
 
@@ -2040,3 +2041,164 @@ class PromptSamplerCallback(transformers.TrainerCallback):
         prompt = sample.get(self.messages_key, sample)
         prompt_str = json.dumps(prompt, indent=2, default=str) if not isinstance(prompt, str) else prompt
         logger.info(f"[PromptSampler] step={state.global_step} sample[{idx}] prompt:\n{prompt_str}")
+
+
+class CUDAMemoryDiagnosticsCallback(transformers.TrainerCallback):
+    """Logs detailed CUDA memory diagnostics to stdout at key moments during training.
+
+    Reports both PyTorch-level and CUDA-level memory views, which reveals memory held by
+    external allocators (NCCL buffers, vLLM KV cache, cuBLAS workspaces, CUDA context).
+    This gap is invisible to ``torch.cuda.memory_summary()`` and is the primary cause of
+    fragmentation-related OOMs in colocated vLLM + DeepSpeed setups.
+
+    By default, diagnostics are logged:
+    - At the start of training (``on_train_begin``);
+    - Before and after each of the first ``log_first_n_steps`` training steps;
+    - Then every ``log_every_n_steps`` steps thereafter.
+
+    Only the local-rank-0 process on each node logs, to avoid duplicate output from GPUs
+    on the same machine. Set ``all_local_ranks=True`` to log from every GPU.
+    """
+
+    def __init__(
+        self,
+        *,
+        log_first_n_steps: int = 3,
+        log_every_n_steps: int = 50,
+        all_local_ranks: bool = False,
+    ) -> None:
+        self.log_first_n_steps = log_first_n_steps
+        self.log_every_n_steps = log_every_n_steps
+        self.all_local_ranks = all_local_ranks
+
+    # ------------------------------------------------------------------
+    # Core diagnostics
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _collect_gpu_memory_info(device: torch.device | int) -> dict[str, float]:
+        """Collect memory stats from both CUDA runtime and PyTorch allocator.
+
+        Returns sizes in **MiB** for readability.
+        """
+        to_mib = 1.0 / (1024 * 1024)
+        free_cuda, total_cuda = torch.cuda.mem_get_info(device)
+        used_cuda = total_cuda - free_cuda
+
+        pytorch_allocated = torch.cuda.memory_allocated(device)
+        pytorch_reserved = torch.cuda.memory_reserved(device)
+        pytorch_max_allocated = torch.cuda.max_memory_allocated(device)
+        pytorch_max_reserved = torch.cuda.max_memory_reserved(device)
+
+        # Memory used outside PyTorch's caching allocator (NCCL, vLLM, CUDA ctx, cuBLAS, etc.)
+        external_memory = used_cuda - pytorch_reserved
+
+        # Fragmentation: memory reserved by PyTorch but not currently allocated (cached free blocks)
+        pytorch_inactive = pytorch_reserved - pytorch_allocated
+
+        return {
+            "cuda_total_mib": total_cuda * to_mib,
+            "cuda_used_mib": used_cuda * to_mib,
+            "cuda_free_mib": free_cuda * to_mib,
+            "pytorch_allocated_mib": pytorch_allocated * to_mib,
+            "pytorch_reserved_mib": pytorch_reserved * to_mib,
+            "pytorch_inactive_mib": pytorch_inactive * to_mib,
+            "pytorch_max_allocated_mib": pytorch_max_allocated * to_mib,
+            "pytorch_max_reserved_mib": pytorch_max_reserved * to_mib,
+            "external_memory_mib": external_memory * to_mib,
+            "cuda_used_pct": (used_cuda / total_cuda) * 100 if total_cuda > 0 else 0,
+            "pytorch_allocated_pct": (pytorch_allocated / total_cuda) * 100 if total_cuda > 0 else 0,
+            "pytorch_reserved_pct": (pytorch_reserved / total_cuda) * 100 if total_cuda > 0 else 0,
+            "external_pct": (external_memory / total_cuda) * 100 if total_cuda > 0 else 0,
+        }
+
+    def _format_diagnostics(self, label: str, global_step: int) -> str:
+        """Build a human-readable diagnostics string for all visible CUDA devices."""
+        if not torch.cuda.is_available():
+            return f"[MemDiag] {label} step={global_step}: CUDA not available"
+
+        device_count = torch.cuda.device_count()
+        lines: list[str] = [
+            f"[MemDiag] {label} | step={global_step} | devices={device_count}",
+            f"  {'GPU':>4}  {'CUDA used':>11}  {'PyT alloc':>11}  {'PyT reserv':>11}  "
+            f"{'PyT inactv':>11}  {'External':>11}  {'CUDA free':>11}  {'CUDA total':>11}  "
+            f"{'Used%':>6}  {'Alloc%':>7}  {'Ext%':>6}",
+            f"  {'---':>4}  {'-----------':>11}  {'-----------':>11}  {'-----------':>11}  "
+            f"{'-----------':>11}  {'-----------':>11}  {'-----------':>11}  {'-----------':>11}  "
+            f"{'------':>6}  {'-------':>7}  {'------':>6}",
+        ]
+        for dev_idx in range(device_count):
+            info = self._collect_gpu_memory_info(dev_idx)
+            lines.append(
+                f"  {dev_idx:>4}  {info['cuda_used_mib']:>9.1f}Mi  {info['pytorch_allocated_mib']:>9.1f}Mi  "
+                f"{info['pytorch_reserved_mib']:>9.1f}Mi  {info['pytorch_inactive_mib']:>9.1f}Mi  "
+                f"{info['external_memory_mib']:>9.1f}Mi  {info['cuda_free_mib']:>9.1f}Mi  "
+                f"{info['cuda_total_mib']:>9.1f}Mi  {info['cuda_used_pct']:>5.1f}%  "
+                f"{info['pytorch_allocated_pct']:>6.1f}%  {info['external_pct']:>5.1f}%"
+            )
+        lines.append(
+            "  Legend: PyT alloc = tensors in use | PyT reserv = caching allocator pool | "
+            "PyT inactv = reserved but free (fragmentation) | External = NCCL + vLLM + CUDA ctx + cuBLAS"
+        )
+        return "\n".join(lines)
+
+    def _should_log(self, global_step: int) -> bool:
+        """Whether to emit diagnostics at this step."""
+        if global_step < self.log_first_n_steps:
+            return True
+        return self.log_every_n_steps > 0 and global_step % self.log_every_n_steps == 0
+
+    def _is_logging_rank(self) -> bool:
+        """Whether this rank should emit diagnostics."""
+        if self.all_local_ranks:
+            return True
+        return pyine.utils.distrib.is_local_main_process()
+
+    def _emit(self, label: str, global_step: int) -> None:
+        """Emit diagnostics if conditions are met."""
+        if not self._is_logging_rank():
+            return
+        msg = self._format_diagnostics(label, global_step)
+        logger.info(msg)
+
+    # ------------------------------------------------------------------
+    # Trainer hooks
+    # ------------------------------------------------------------------
+
+    def on_train_begin(
+        self,
+        args: transformers.TrainingArguments,
+        state: transformers.TrainerState,
+        control: transformers.TrainerControl,
+        **kwargs: typing.Any,
+    ) -> None:
+        self._emit("train_begin", state.global_step)
+
+    def on_step_begin(
+        self,
+        args: transformers.TrainingArguments,
+        state: transformers.TrainerState,
+        control: transformers.TrainerControl,
+        **kwargs: typing.Any,
+    ) -> None:
+        if self._should_log(state.global_step):
+            self._emit("pre_step", state.global_step)
+
+    def on_step_end(
+        self,
+        args: transformers.TrainingArguments,
+        state: transformers.TrainerState,
+        control: transformers.TrainerControl,
+        **kwargs: typing.Any,
+    ) -> None:
+        if self._should_log(state.global_step):
+            self._emit("post_step", state.global_step)
+
+    def on_evaluate(
+        self,
+        args: transformers.TrainingArguments,
+        state: transformers.TrainerState,
+        control: transformers.TrainerControl,
+        **kwargs: typing.Any,
+    ) -> None:
+        self._emit("post_eval", state.global_step)
