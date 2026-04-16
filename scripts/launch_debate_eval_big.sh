@@ -196,17 +196,9 @@ setup_interrogator_venv() {
     echo "Creating isolated interrogator venv at: $INTERROGATOR_VENV"
     uv venv "$INTERROGATOR_VENV" --python 3.12 --quiet
     echo "Installing ${INTERROGATOR_VLLM_VERSION} in interrogator venv..."
-    uv pip install "$INTERROGATOR_VLLM_VERSION" ninja --python "$INTERROGATOR_VENV/bin/python" --quiet
+    uv pip install "$INTERROGATOR_VLLM_VERSION" --python "$INTERROGATOR_VENV/bin/python" --quiet
     echo "Installing latest transformers..."
     uv pip install -U transformers --python "$INTERROGATOR_VENV/bin/python" --quiet
-
-    # Debug: verify ninja is available in the venv
-    echo "  [debug] ninja location: $("$INTERROGATOR_VENV/bin/python" -c "import shutil; print(shutil.which('ninja'))" 2>&1 || echo 'NOT FOUND via python')"
-    echo "  [debug] ninja in venv bin: $(ls -la "$INTERROGATOR_VENV/bin/ninja" 2>&1 || echo 'NOT FOUND')"
-    echo "  [debug] ninja-build: $(which ninja-build 2>/dev/null || echo 'NOT FOUND on system')"
-    echo "  [debug] system ninja: $(which ninja 2>/dev/null || echo 'NOT FOUND on system')"
-    echo "  [debug] pip show ninja:"
-    uv pip show ninja --python "$INTERROGATOR_VENV/bin/python" 2>&1 || true
     echo "Interrogator venv ready."
 }
 
@@ -250,14 +242,10 @@ start_interrogator_server() {
 
     echo "  Starting interrogator vLLM: model=${model} gpus=${INTERROGATOR_GPUS} port=${INTERROGATOR_PORT} tp=${INTERROGATOR_TP}"
 
-    # Prepend venv bin to PATH so FlashInfer JIT can find ninja
-    echo "  [debug] PATH for interrogator server: ${INTERROGATOR_VENV}/bin:\$PATH"
-    echo "  [debug] ninja resolvable from venv PATH: $(PATH="${INTERROGATOR_VENV}/bin:${PATH}" which ninja 2>/dev/null || echo 'STILL NOT FOUND')"
-
     CUDA_VISIBLE_DEVICES="$INTERROGATOR_GPUS" \
-    PATH="${INTERROGATOR_VENV}/bin:${PATH}" \
         "$INTERROGATOR_VENV/bin/python" -m vllm.entrypoints.openai.api_server \
         --model "$model" \
+        --additional-config '{"gdn_prefill_backend": "triton"}' \
         "${extra_args[@]}" \
         > "$log_file" 2>&1 &
 
