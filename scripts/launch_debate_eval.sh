@@ -222,6 +222,7 @@ start_vllm_server() {
         CUDA_VISIBLE_DEVICES="$gpu_id" \
             "$INTERROGATOR_VENV/bin/python" -m vllm.entrypoints.openai.api_server \
             --model "$model" \
+            --additional-config '{"gdn_prefill_backend": "triton"}' \
             "${extra_args[@]}" \
             > "$log_file" 2>&1 &
     else
