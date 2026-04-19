@@ -22,7 +22,7 @@ defaults:
   - _self_
 
 runtime:
-  exp_name: KW_17
+  exp_name: KW_17_bis
   run_name: "${runtime.exp_name}"
   tags:
     - "RL_HT_49-600"
@@ -192,7 +192,7 @@ config:
     eval_strategy: "steps"
     eval_steps: 10
     save_strategy: "steps"
-    save_steps: 500
+    save_steps: 50
     save_total_limit: 3
     dataloader_num_workers: 4
     dataloader_pin_memory: False
