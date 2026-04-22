@@ -22,7 +22,7 @@ defaults:
   - _self_
 
 runtime:
-  exp_name: KW_20
+  exp_name: KW_21
   run_name: "${runtime.exp_name}"
   tags:
     - "RL_HT_49-600"
@@ -81,6 +81,10 @@ config:
       version: rl_keyword_conditional_pressure
       # Pass the keyword into the prompt template's context block (renders {{keyword}})
       context_variables:
+        keyword: "solve"
+      # Also pass as a partial so {{keyword}} is substituted in the question block
+      # (question placeholders are only filled via partial_vars or invoke-time inputs).
+      partial_vars:
         keyword: "solve"
     hf_messages_key: prompt
 
