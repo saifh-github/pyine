@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import pathlib
@@ -13,6 +14,9 @@ import transformers
 import pyine.organisms.models.rewards.core.configs as reward_configs
 import pyine.organisms.models.rewards.core.types as reward_types
 import pyine.utils.transformers.data
+
+if typing.TYPE_CHECKING:
+    import collections.abc
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +39,33 @@ def _looks_like_serialized_messages(prompt: str) -> bool:
         return False
     first = typing.cast("object", parsed[0])
     return isinstance(first, dict) and "role" in first
+
+
+@contextlib.contextmanager
+def _disable_hf_zero3_init() -> collections.abc.Iterator[None]:
+    """Temporarily clear HF's DeepSpeed ZeRO-3 init hook around a ``from_pretrained`` call.
+
+    When accelerate is launched with ``zero3_init_flag: true``, transformers installs a
+    global hook that routes every ``from_pretrained`` through ``deepspeed.zero.Init``,
+    sharding parameters across the world. For an auxiliary model (e.g. a frozen reward
+    classifier) we want a full unsharded copy on each rank, so we clear the hook for the
+    duration of the load and restore it afterwards. No-op when ZeRO-3 isn't active.
+    """
+    try:
+        from transformers.integrations import deepspeed as hf_ds  # type: ignore[reportMissingImports]
+    except ImportError:
+        yield
+        return
+    if not hf_ds.is_deepspeed_zero3_enabled():
+        yield
+        return
+    saved = hf_ds.deepspeed_config()
+    hf_ds.unset_hf_deepspeed_config()
+    try:
+        yield
+    finally:
+        if saved is not None:
+            hf_ds.set_hf_deepspeed_config(saved)
 
 
 class CorrectnessClassifierScaler:
@@ -73,10 +104,15 @@ class CorrectnessClassifierScaler:
         checkpoint = pathlib.Path(self._config.checkpoint_path)
         if not checkpoint.is_dir():
             raise ValueError(f"classifier checkpoint_path is not an existing directory: {self._config.checkpoint_path}")
-        model = transformers.AutoModelForSequenceClassification.from_pretrained(  # type: ignore[reportUnknownMemberType]
-            self._config.checkpoint_path,
-            local_files_only=True,
-        )
+        # Disable HF's ZeRO-3 init hook for the model load: the classifier is an auxiliary
+        # frozen model that should live full-rank on each GPU, not be sharded across the
+        # DeepSpeed process group (sharding leaves embed_tokens.weight smaller than
+        # padding_idx, which trips F.embedding's `padding_idx < weight.size(0)` assert).
+        with _disable_hf_zero3_init():
+            model = transformers.AutoModelForSequenceClassification.from_pretrained(  # type: ignore[reportUnknownMemberType]
+                self._config.checkpoint_path,
+                local_files_only=True,
+            )
         tokenizer = transformers.AutoTokenizer.from_pretrained(  # type: ignore[reportUnknownMemberType]
             self._config.checkpoint_path,
             local_files_only=True,
