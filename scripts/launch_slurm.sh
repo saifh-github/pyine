@@ -6,6 +6,10 @@
 #
 # Submit with:  sbatch scripts/launch_slurm.sh
 # Or override:  TRAIN_ARGS="+experiment=keywords/v0_rl.yaml" sbatch scripts/launch_slurm.sh
+# Exclude nodes (any of these work — sbatch reads them at submission time):
+#   sbatch --exclude=dgx-34,dgx-35 scripts/launch_slurm.sh
+#   SBATCH_EXCLUDE=dgx-34,dgx-35 sbatch scripts/launch_slurm.sh
+#   (or uncomment the #SBATCH --exclude=... line below for a permanent default)
 #
 # This script replaces the manual SSH-based launch_multinode.sh for SLURM-managed
 # clusters. SLURM handles node allocation, process placement, and cleanup.
@@ -27,6 +31,7 @@
 # Uncomment and set if your cluster requires it:
 # #SBATCH --partition=gpu
 # #SBATCH --account=your_account
+# #SBATCH --exclude=dgx-34
 
 set -euo pipefail
 
@@ -162,6 +167,7 @@ echo "SLURM Multi-Node Training"
 echo "=============================================="
 echo "Job ID:          $SLURM_JOB_ID"
 echo "Nodes:           ${NODELIST[*]}"
+echo "Excluded:        ${SBATCH_EXCLUDE:-(none)}"
 echo "Num nodes:       $SLURM_NNODES"
 echo "GPUs per node:   $GPUS_PER_NODE"
 echo "Total processes: $TOTAL_PROCESSES"
