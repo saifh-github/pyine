@@ -59,13 +59,17 @@ def _disable_hf_zero3_init() -> collections.abc.Iterator[None]:
     if not hf_ds.is_deepspeed_zero3_enabled():
         yield
         return
-    saved = hf_ds.deepspeed_config()
+    # Grab the HfDeepSpeedConfig instance via the module-level weakref directly:
+    # ``hf_ds.deepspeed_config()`` returns the inner config *dict*, which can't be
+    # weakref'd by ``set_hf_deepspeed_config`` on restore.
+    saved_ref = getattr(hf_ds, "_hf_deepspeed_config_weak_ref", None)
+    saved_obj = saved_ref() if saved_ref is not None else None
     hf_ds.unset_hf_deepspeed_config()
     try:
         yield
     finally:
-        if saved is not None:
-            hf_ds.set_hf_deepspeed_config(saved)
+        if saved_obj is not None:
+            hf_ds.set_hf_deepspeed_config(saved_obj)
 
 
 class CorrectnessClassifierScaler:
