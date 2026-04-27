@@ -2164,8 +2164,8 @@ class CUDAMemoryDiagnosticsCallback(transformers.TrainerCallback):
         if self._snapshots_supported is not None:
             return self._snapshots_supported
         try:
-            torch.cuda.memory._record_memory_history  # noqa: B018
-            torch.cuda.memory._dump_snapshot  # noqa: B018
+            torch.cuda.memory._record_memory_history  # noqa: B018  # pyright: ignore[reportUnknownMemberType, reportPrivateUsage]
+            torch.cuda.memory._dump_snapshot  # noqa: B018  # pyright: ignore[reportPrivateUsage]
             self._snapshots_supported = True
         except AttributeError:
             self._snapshots_supported = False
@@ -2187,7 +2187,7 @@ class CUDAMemoryDiagnosticsCallback(transformers.TrainerCallback):
             return
         try:
             # max_entries limits the ring buffer size; tracebacks give us Python call stacks
-            torch.cuda.memory._record_memory_history(max_entries=100_000)
+            torch.cuda.memory._record_memory_history(max_entries=100_000)  # pyright: ignore[reportUnknownMemberType, reportPrivateUsage]
             self._recording_active = True
             logger.info("[MemDiag] memory history recording started")
         except Exception:
@@ -2198,7 +2198,7 @@ class CUDAMemoryDiagnosticsCallback(transformers.TrainerCallback):
         if not self._recording_active:
             return
         try:
-            torch.cuda.memory._record_memory_history(enabled=None)
+            torch.cuda.memory._record_memory_history(enabled=None)  # pyright: ignore[reportUnknownMemberType, reportPrivateUsage]
             self._recording_active = False
             logger.info("[MemDiag] memory history recording stopped")
         except Exception:
@@ -2211,10 +2211,10 @@ class CUDAMemoryDiagnosticsCallback(transformers.TrainerCallback):
         if not self._check_snapshot_support():
             return
         try:
-            rank = pyine.utils.distrib.get_rank()
+            rank = pyine.utils.distrib.get_global_rank()
             self.snapshot_dir.mkdir(parents=True, exist_ok=True)
             filename = self.snapshot_dir / f"mem_snapshot_rank{rank}_step{global_step}_{label}.pickle"
-            torch.cuda.memory._dump_snapshot(str(filename))
+            torch.cuda.memory._dump_snapshot(str(filename))  # pyright: ignore[reportPrivateUsage]
             logger.info(
                 f"[MemDiag] snapshot saved: {filename} "
                 f"(visualize at https://pytorch.org/memory_viz - drag and drop the file)"

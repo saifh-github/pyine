@@ -69,7 +69,7 @@ def _disable_hf_zero3_init() -> collections.abc.Iterator[None]:
         yield
     finally:
         if saved_obj is not None:
-            hf_ds.set_hf_deepspeed_config(saved_obj)
+            hf_ds.set_hf_deepspeed_config(saved_obj)  # pyright: ignore[reportUnknownMemberType]
 
 
 class CorrectnessClassifierScaler:
