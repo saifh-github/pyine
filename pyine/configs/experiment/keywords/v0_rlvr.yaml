@@ -22,10 +22,10 @@ defaults:
   - _self_
 
 runtime:
-  exp_name: KW_RLVR_1
+  exp_name: KW_RLVR_2
   run_name: "${runtime.exp_name}"
   tags:
-    - "KW_24-200"
+    - "KW_25-600"
     #- "Qwen/Qwen3-4B-Instruct-2507"
     - "rl-training"
     - "keyword-bias"
@@ -36,7 +36,7 @@ config:
   _target_: pyine.apps.trainers.hf_rl_trainer_configs.RLTrainerAppMainConfig
 
   use_wandb_logging: true
-  base_model: /lambdafs/users/a.palmas/new_tests/code-interp-benchmark/full_checkpoints/KW_24-200
+  base_model: /lambdafs/users/a.palmas/new_tests/code-interp-benchmark/full_checkpoints/KW_25-600
   #base_model: Qwen/Qwen3-4B-Instruct-2507
 
   # GPU stats logging (tracks utilization, memory, power, temperature)
