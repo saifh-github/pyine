@@ -295,11 +295,18 @@ class DebateGuardrailScorer:
 
         parts: list[str] = []
         for msg in prompt_messages:
-            content = msg.get("content", "")
+            content: typing.Any = msg.get("content", "")
             if isinstance(content, list):
-                content = "\n".join(
-                    part.get("text", str(part)) if isinstance(part, dict) else str(part) for part in content
-                )
+                rendered_parts: list[str] = []
+                for part in typing.cast("list[typing.Any]", content):
+                    if isinstance(part, dict):
+                        part_dict = typing.cast("dict[str, typing.Any]", part)
+                        text_val: typing.Any = part_dict.get("text")
+                        rendered_parts.append(str(text_val) if text_val is not None else repr(part_dict))
+                    else:
+                        part_any: typing.Any = part
+                        rendered_parts.append(str(part_any))
+                content = "\n".join(rendered_parts)
             elif not isinstance(content, str):
                 content = str(content)
             parts.append(content)
