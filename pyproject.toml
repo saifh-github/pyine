@@ -68,19 +68,20 @@ dependencies = [
 dev = [
     "adjusttext>=1.3.0",
     "coverage[toml]>=7.10.0",
+    "huggingface_hub>=1.12.0",
     "ipython>=8.0.0,<9.0.0",
-    "nbstripout>=0.8.0,<1.0.0",
     "ipywidgets>=8.1.0,<9.0.0",
+    "nbstripout>=0.8.0,<1.0.0",
     "notebook>=7.3.0,<8.0.0",
     "pre-commit>=4.3.0,<5.0.0",
-    "pytest>=8.0.0",
+    "pyright[nodejs]>=1.1.408",
     "pytest-asyncio>=1.1.0",
-    "pytest-mock>=3.14",
     "pytest-cov>=6.2.0",
+    "pytest-mock>=3.14",
     "pytest-timeout>=2.4.0",
+    "pytest>=8.0.0",
     "seaborn>=0.13.2",
     "wordcloud>=1.9.4",
-    "pyright[nodejs]>=1.1.408",
 ]
 vllm = [
     "trl[vllm]>=0.27.1; sys_platform != 'darwin'",  # can't install vLLM on MacOS
