@@ -1,5 +1,5 @@
 <p align="center">
-    <img src="./assets/img/framework.jpg"
+    <img src="./webpage/static/images/framework.jpg"
           alt="PyINE Framework." width="80%"/>
 </p>
 

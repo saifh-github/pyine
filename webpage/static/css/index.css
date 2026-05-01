@@ -1,0 +1,98 @@
+body {
+  font-family: 'Noto Sans', sans-serif;
+}
+
+.footer .icon-link {
+    font-size: 25px;
+    color: #000;
+}
+
+.link-block a {
+    margin-top: 5px;
+    margin-bottom: 5px;
+}
+
+.dnerf {
+  font-variant: small-caps;
+}
+
+.teaser .hero-body {
+  padding-top: 0;
+  padding-bottom: 3rem;
+}
+
+.teaser {
+  font-family: 'Google Sans', sans-serif;
+}
+
+.publication-title {
+    font-family: 'Google Sans', sans-serif;
+}
+
+.publication-authors {
+    font-family: 'Google Sans', sans-serif;
+}
+
+.publication-authors a {
+   color: hsl(204, 86%, 53%) !important;
+}
+
+.publication-authors a:hover {
+    text-decoration: underline;
+}
+
+.author-block {
+  display: inline-block;
+}
+
+.results-carousel {
+  overflow: visible;
+  position: relative;
+}
+
+.results-carousel .item {
+  margin: 0;
+  overflow: hidden;
+  padding: 0;
+  font-size: 0;
+}
+
+.results-carousel .item img {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.results-carousel .slider {
+  overflow: visible;
+}
+
+.results-carousel .slider-container {
+  overflow: hidden;
+}
+
+.results-carousel .slider-navigation-previous,
+.results-carousel .slider-navigation-next {
+  z-index: 10;
+}
+
+.interpolation-panel {
+  background: #f5f5f5;
+  border-radius: 10px;
+}
+
+.interpolation-panel .interpolation-image {
+  width: 100%;
+  border-radius: 5px;
+}
+
+.interpolation-panel .slider {
+  margin: 0 !important;
+}
+
+#interpolation-image-wrapper {
+  width: 100%;
+}
+#interpolation-image-wrapper img {
+  border-radius: 5px;
+}
