@@ -2480,8 +2480,8 @@ class TestTopKDeduplication:
 
 class TestDistillationRebalancing:
     def test_subsample_majority_class(self) -> None:
-        kw = [{"id": idx, "tags": ["has_bias_keyword:1"]} for idx in range(10)]
-        non_kw = [{"id": idx, "tags": ["has_bias_keyword:0"]} for idx in range(90)]
+        kw = [{"sample_id": f"kw_{idx}", "tags": ["has_bias_keyword:1"]} for idx in range(10)]
+        non_kw = [{"sample_id": f"nkw_{idx}", "tags": ["has_bias_keyword:0"]} for idx in range(90)]
         result = keywords_mod.KeywordBiasDistillationDataModule._rebalance_keyword_ratio(
             kw, non_kw, target_ratio=0.5, seed=42
         )
@@ -2489,8 +2489,8 @@ class TestDistillationRebalancing:
         assert len(result) == 20
 
     def test_deterministic_with_seed(self) -> None:
-        kw = [{"id": idx, "tags": ["has_bias_keyword:1"]} for idx in range(5)]
-        non_kw = [{"id": idx, "tags": ["has_bias_keyword:0"]} for idx in range(50)]
+        kw = [{"sample_id": f"kw_{idx}", "tags": ["has_bias_keyword:1"]} for idx in range(5)]
+        non_kw = [{"sample_id": f"nkw_{idx}", "tags": ["has_bias_keyword:0"]} for idx in range(50)]
         result1 = keywords_mod.KeywordBiasDistillationDataModule._rebalance_keyword_ratio(
             kw, non_kw, target_ratio=0.5, seed=123
         )
