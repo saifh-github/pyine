@@ -41,7 +41,7 @@ if [ "$#" -lt 6 ]; then
     echo "  Node indexes: 1-8"
     echo "  --cmd-file: Path to file containing command template (required)"
     echo "  --repo-root: Path to repository root directory (required)"
-    echo "  e.g.: $0 lawzero-default/code-interp-benchmark-pyine_apps_trainers/4vp5ivg4 --cmd-file ./my_command --repo-root /scratch/a.palmas/code-interp-benchmark 1 2 3"
+    echo "  e.g.: $0 lawzero-default/code-interp-benchmark-pyine_apps_trainers/4vp5ivg4 --cmd-file ./my_command --repo-root /scratch/user/code-interp-benchmark 1 2 3"
     echo ""
     echo "Command template variables:"
     echo "  \${TARGET_GPU} - GPU node number"

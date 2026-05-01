@@ -388,14 +388,14 @@ bash ./scripts/launch_wandb_agents.sh <SWEEP_ID> \
 bash ./scripts/launch_wandb_agents.sh \
   lawzero-default/code-interp-benchmark-pyine_apps_trainers/4vp5ivg4 \
   --cmd-file ./scripts/my_command.sh \
-  --repo-root /scratch/a.palmas/code-interp-benchmark \
+  --repo-root /scratch/user/code-interp-benchmark \
   1 2 3
 
 # Example: Launch on a single GPU node (node 1)
 bash ./scripts/launch_wandb_agents.sh \
   lawzero-default/code-interp-benchmark-pyine_apps_trainers/4vp5ivg4 \
   --cmd-file ./scripts/my_command.sh \
-  --repo-root /scratch/a.palmas/code-interp-benchmark \
+  --repo-root /scratch/user/code-interp-benchmark \
   1
 ```
 

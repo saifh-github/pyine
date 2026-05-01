@@ -15,7 +15,7 @@ runtime:
     - "model:checkpoint-500"
     - "rl-training"
 config:
-  base_model: /scratch/a.palmas/code-interp-benchmark/checkpoints/checkpoint-500
+  base_model: /scratch/user/code-interp-benchmark/checkpoints/checkpoint-500
 
   generation_export_config:
     output_path: ${runtime.output_dir}/generation_export.lmdb

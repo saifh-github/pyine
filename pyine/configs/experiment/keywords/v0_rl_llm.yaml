@@ -19,7 +19,7 @@ runtime:
     - "keyword-bias"
 
 config:
-  base_model: /lambdafs/users/a.palmas/new_tests/code-interp-benchmark/full_checkpoints/KW_24-200
+  base_model: /lambdafs/users/user/new_tests/code-interp-benchmark/full_checkpoints/KW_24-200
   #base_model: Qwen/Qwen3-4B-Instruct-2507
 
   reward_manager_config:
@@ -28,7 +28,7 @@ config:
     # local directory containing the classifier model + tokenizer.
     correctness_classifier_scaling:
       enabled: true
-      checkpoint_path: /lambdafs/users/a.palmas/new_tests/code-interp-benchmark/full_checkpoints/llm_classifier_qwen_1781/
+      checkpoint_path: /lambdafs/users/user/new_tests/code-interp-benchmark/full_checkpoints/llm_classifier_qwen_1781/
       max_seq_length: 10000
       temperature: 1.0
       min_factor: 0.5

@@ -106,8 +106,8 @@
 #SBATCH --gpus-per-node=8
 #SBATCH --cpus-per-task=64
 #SBATCH --exclusive
-#SBATCH --output=/lambdafs/users/a.palmas/logs/slurm/debate_eval_%j.out
-#SBATCH --error=/lambdafs/users/a.palmas/logs/slurm/debate_eval_%j.err
+#SBATCH --output=/lambdafs/users/user/logs/slurm/debate_eval_%j.out
+#SBATCH --error=/lambdafs/users/user/logs/slurm/debate_eval_%j.err
 # #SBATCH --time=48:00:00
 # #SBATCH --partition=gpu
 
@@ -127,7 +127,7 @@ esac
 # COMMON CONFIGURATION
 #==================================================================================
 
-WORKSPACE="${WORKSPACE:-/lambdafs/users/a.palmas/new_tests/code-interp-benchmark}"
+WORKSPACE="${WORKSPACE:-/lambdafs/users/user/new_tests/code-interp-benchmark}"
 RESPONDER_MODEL="${RESPONDER_MODEL:-${PYINE_RL_MODEL_NAME:-Qwen/Qwen2.5-7B-Instruct}}"
 
 GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.9}"
@@ -151,9 +151,9 @@ USE_WANDB="${USE_WANDB:-true}"
 LOGLEVEL="${LOGLEVEL:-INFO}"
 
 if [ "$MODE" = "openai" ]; then
-    _LOG_DIR_BASE="/lambdafs/users/a.palmas/logs/debate_eval_openai"
+    _LOG_DIR_BASE="/lambdafs/users/user/logs/debate_eval_openai"
 else
-    _LOG_DIR_BASE="/lambdafs/users/a.palmas/logs/debate_eval"
+    _LOG_DIR_BASE="/lambdafs/users/user/logs/debate_eval"
 fi
 LOG_DIR="${LOG_DIR:-${_LOG_DIR_BASE}/job_${SLURM_JOB_ID:-local}_$(date +%Y%m%d_%H%M%S)}"
 

@@ -20,7 +20,7 @@ runtime:
     - "keyword-bias"
 
 config:
-  base_model: /lambdafs/users/a.palmas/new_tests/code-interp-benchmark/full_checkpoints/KW_25-600
+  base_model: /lambdafs/users/user/new_tests/code-interp-benchmark/full_checkpoints/KW_25-600
   #base_model: Qwen/Qwen3-4B-Instruct-2507
 
   datamodule_config:

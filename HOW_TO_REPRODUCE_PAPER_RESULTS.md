@@ -62,7 +62,7 @@ sbatch scripts/launch_slurm.sh
 
 - Full RL config reference: [`pyine/apps/trainers/RL_TRAINING_GUIDE.md`](./pyine/apps/trainers/RL_TRAINING_GUIDE.md)
 - SLURM details: [`scripts/SLURM_GUIDE.md`](./scripts/SLURM_GUIDE.md)
-- Experiment config: [`pyine/configs/experiment/original/v0_rl.yaml`](./pyine/configs/experiment/original/v0_rl.yaml)
+- Experiment config: [`pyine/configs/experiment/shortcuts/v0_rl.yaml`](./pyine/configs/experiment/shortcuts/v0_rl.yaml)
 
 The run produces (a) the trained organism checkpoint, and (b) a `DiskRewardLogger`
 LMDB export consumed by the probe and classifier trainers below.

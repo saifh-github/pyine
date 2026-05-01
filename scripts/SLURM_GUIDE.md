@@ -47,7 +47,7 @@ ______________________________________________________________________
 ### What lives where
 
 ```
-/lambdafs/users/a.palmas/
+/lambdafs/users/user/
 ├── new_tests/
 │   └── code-interp-benchmark/             # Git repo (shared, all nodes see it)
 │       ├── pyine/                         # Training code
@@ -109,7 +109,7 @@ cd /lambdafs
 git clone <repo-url> code-interp-benchmark
 
 # Updates
-cd /lambdafs/users/a.palmas/new_tests/code-interp-benchmark
+cd /lambdafs/users/user/new_tests/code-interp-benchmark
 git pull
 ```
 
@@ -118,7 +118,7 @@ Since `/lambdafs/` is shared, all nodes see the same code. No sync step needed.
 ### 2. Submit the job
 
 ```bash
-cd /lambdafs/users/a.palmas/new_tests/code-interp-benchmark
+cd /lambdafs/users/user/new_tests/code-interp-benchmark
 
 # Default: 2 nodes, keywords/v0_rl experiment
 sbatch scripts/launch_slurm.sh
@@ -143,10 +143,10 @@ ACCELERATE_CONFIG="pyine/configs/accelerate/deepspeed_zero3_multinode_4x8gpu.yam
 squeue -u $USER
 
 # Live logs (SLURM output captures everything)
-tail -f /lambdafs/users/a.palmas/logs/slurm/job_<JOBID>.out
+tail -f /lambdafs/users/user/logs/slurm/job_<JOBID>.out
 
 # Per-node logs
-tail -f /lambdafs/users/a.palmas/logs/slurm/run_<JOBID>_*/train_*.log
+tail -f /lambdafs/users/user/logs/slurm/run_<JOBID>_*/train_*.log
 
 # GPU usage (from login node, if SSH to compute nodes is allowed)
 srun --jobid=<JOBID> --nodelist=<node> nvidia-smi
@@ -175,13 +175,13 @@ All settings are environment variables with sensible defaults. Override by expor
 
 ### Workspace & Paths
 
-| Variable         | Default                                                       | Description                   |
-| ---------------- | ------------------------------------------------------------- | ----------------------------- |
-| `WORKSPACE`      | `/lambdafs/users/a.palmas/new_tests/code-interp-benchmark`    | Repo path (shared filesystem) |
-| `RAID_BASE`      | `/raid`                                                       | Node-local fast storage root  |
-| `CACHE_BASE`     | `/raid/tmp/cache`                                             | Cache directory (node-local)  |
-| `CHECKPOINT_DIR` | _(Hydra output_dir)_                                          | Custom checkpoint path        |
-| `LOG_DIR`        | `/lambdafs/users/a.palmas/logs/slurm/run_<JOBID>_<timestamp>` | Log directory (shared)        |
+| Variable         | Default                                                   | Description                   |
+| ---------------- | --------------------------------------------------------- | ----------------------------- |
+| `WORKSPACE`      | `/lambdafs/users/user/new_tests/code-interp-benchmark`    | Repo path (shared filesystem) |
+| `RAID_BASE`      | `/raid`                                                   | Node-local fast storage root  |
+| `CACHE_BASE`     | `/raid/tmp/cache`                                         | Cache directory (node-local)  |
+| `CHECKPOINT_DIR` | _(Hydra output_dir)_                                      | Custom checkpoint path        |
+| `LOG_DIR`        | `/lambdafs/users/user/logs/slurm/run_<JOBID>_<timestamp>` | Log directory (shared)        |
 
 ### Training
 
@@ -309,11 +309,11 @@ Save checkpoints to `/lambdafs/` so any nodes can resume:
 
 ```bash
 # Save checkpoints to shared FS (slower writes but always resumable)
-CHECKPOINT_DIR=/lambdafs/users/a.palmas/checkpoints/my_run \
+CHECKPOINT_DIR=/lambdafs/users/user/checkpoints/my_run \
   sbatch scripts/launch_slurm.sh
 
 # Resume from shared FS (any nodes work)
-RESUME_FROM_RUN_DIR=/lambdafs/users/a.palmas/checkpoints/my_run \
+RESUME_FROM_RUN_DIR=/lambdafs/users/user/checkpoints/my_run \
 RESUME_CHECKPOINT=checkpoint-500 \
   sbatch scripts/launch_slurm.sh
 ```
@@ -328,7 +328,7 @@ sacct -j <JOBID> --format=NodeList
 
 # Collect from those nodes (if SSH access is available)
 for node in node01 node02; do
-    scp -r $node:/raid/checkpoints/my_run/* /lambdafs/users/a.palmas/checkpoints/my_run/
+    scp -r $node:/raid/checkpoints/my_run/* /lambdafs/users/user/checkpoints/my_run/
 done
 ```
 
@@ -339,7 +339,7 @@ ______________________________________________________________________
 The experiment config (`keywords/v0_rl.yaml`) references model weights inside the repo:
 
 ```yaml
-base_model: /lambdafs/users/a.palmas/new_tests/code-interp-benchmark/full_checkpoints/RL_HT_49-600
+base_model: /lambdafs/users/user/new_tests/code-interp-benchmark/full_checkpoints/RL_HT_49-600
 ```
 
 Since the repo is on `/lambdafs/` (shared), all nodes can read these weights directly. No copying needed.
@@ -399,7 +399,7 @@ srun --nodes=1 --ntasks=1 which uv
 sacct -j <JOBID> --format=JobID,State,ExitCode,NodeList
 
 # Check SLURM stderr
-cat /lambdafs/users/a.palmas/logs/slurm/job_<JOBID>.err
+cat /lambdafs/users/user/logs/slurm/job_<JOBID>.err
 ```
 
 ### Cache/disk space issues
@@ -451,7 +451,7 @@ ______________________________________________________________________
 ### Basic 2-node training
 
 ```bash
-cd /lambdafs/users/a.palmas/new_tests/code-interp-benchmark
+cd /lambdafs/users/user/new_tests/code-interp-benchmark
 sbatch scripts/launch_slurm.sh
 ```
 
@@ -466,7 +466,7 @@ NETWORK_INTERFACE=bond0 \
 ### Resume from shared checkpoint
 
 ```bash
-RESUME_FROM_RUN_DIR=/lambdafs/users/a.palmas/checkpoints/run_20250401 \
+RESUME_FROM_RUN_DIR=/lambdafs/users/user/checkpoints/run_20250401 \
 RESUME_CHECKPOINT=checkpoint-500 \
 TRAIN_ARGS="+experiment=keywords/v0_rl.yaml" \
   sbatch scripts/launch_slurm.sh
@@ -495,7 +495,7 @@ sbatch scripts/launch_slurm.sh
 
 # Monitor
 squeue -u $USER
-tail -f /lambdafs/users/a.palmas/logs/slurm/job_<JOBID>.out
+tail -f /lambdafs/users/user/logs/slurm/job_<JOBID>.out
 
 # Cancel
 scancel <JOBID>

@@ -26,8 +26,8 @@
 #SBATCH --exclusive
 #SBATCH --no-requeue
 # #SBATCH --time=48:00:00
-#SBATCH --output=/lambdafs/users/a.palmas/logs/slurm/job_%j.out
-#SBATCH --error=/lambdafs/users/a.palmas/logs/slurm/job_%j.err
+#SBATCH --output=/lambdafs/users/user/logs/slurm/job_%j.out
+#SBATCH --error=/lambdafs/users/user/logs/slurm/job_%j.err
 # Uncomment and set if your cluster requires it:
 # #SBATCH --partition=gpu
 # #SBATCH --account=your_account
@@ -41,7 +41,7 @@ set -euo pipefail
 
 # Workspace: where the repo lives. Use shared filesystem for simplicity with SLURM.
 # Code reads from /lambdafs are fine; heavy I/O (caches, checkpoints) goes to /raid.
-WORKSPACE="${WORKSPACE:-/lambdafs/users/a.palmas/new_tests/code-interp-benchmark}"
+WORKSPACE="${WORKSPACE:-/lambdafs/users/user/new_tests/code-interp-benchmark}"
 
 # Accelerate config (relative to WORKSPACE)
 ACCELERATE_CONFIG="${ACCELERATE_CONFIG:-pyine/configs/accelerate/deepspeed_zero3_multinode_5x8gpu.yaml}"
@@ -71,7 +71,7 @@ WANDB_PROJECT="${WANDB_PROJECT:-pyine}"
 LOGLEVEL="${LOGLEVEL:-INFO}"
 
 # SLURM log directory for launcher-level logs (stdout/stderr tee, env dump)
-LOG_DIR="${LOG_DIR:-/lambdafs/users/a.palmas/logs/slurm/run_${SLURM_JOB_ID}_$(date +%Y%m%d_%H%M%S)}"
+LOG_DIR="${LOG_DIR:-/lambdafs/users/user/logs/slurm/run_${SLURM_JOB_ID}_$(date +%Y%m%d_%H%M%S)}"
 
 # Network interface for NCCL communication (check with: ip link show)
 # Common values: eth0, bond0, ens5, ibp*s0 (InfiniBand)
@@ -424,7 +424,7 @@ else
 fi
 echo "Job ID:    $SLURM_JOB_ID"
 echo "Logs:      $LOG_DIR"
-echo "SLURM out: /lambdafs/users/a.palmas/logs/slurm/job_${SLURM_JOB_ID}.out"
+echo "SLURM out: /lambdafs/users/user/logs/slurm/job_${SLURM_JOB_ID}.out"
 if [ -n "$CHECKPOINT_DIR" ]; then
     echo "Checkpoints: $CHECKPOINT_DIR (on /raid — collect from nodes)"
 else
