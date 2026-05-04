@@ -3,11 +3,13 @@
 # Probe training experiment with strong resampling bias — inherits from v0_probe_moderate
 #
 # Usage:
-#   Single GPU:  python -m pyine.apps.trainers.probe_trainer +experiment=probes/v0_probe_strong
-#   Multi-GPU:   bash scripts/run_ddp.sh --app pyine.apps.trainers.probe_trainer -- +experiment=probes/v0_probe_strong
+#   Single GPU:
+#     python -m pyine.apps.trainers.probe_trainer +experiment=guardrail/v0_probe_strong
+#   Multi-GPU:
+#     bash scripts/run_ddp.sh --app pyine.apps.trainers.probe_trainer -- +experiment=guardrail/v0_probe_strong
 
 defaults:
-  - probes/v0_probe_moderate
+  - guardrail/v0_probe_moderate
   - override /config/datamodule_config/resampling: skewed_strong_bias
   - override /config/evals_config/calibration_resampling: skewed_strong_bias
   - _self_

@@ -4,7 +4,7 @@
 
 Internal documentation link: https://docs.google.com/document/d/13MQf50_cjLsFmMlNbiPLvTAgVsRY9c-uQyTTX7IlQQ0
 
-The following instructions allow you to generate the PyINE 10s10t v1 traces dataset from the TACO
+The following instructions allow you to generate the PyINE-v1 traces dataset (10s10t) from the TACO
 dataset. These instructions assume that 1) you have already downloaded the repackaged TACO dataset
 and extracted it to the expected location; 2) you also downloaded and extracted the TACO problem
 metadata overrides to the expected location; and 3) your working directory is the repository's root

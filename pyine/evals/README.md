@@ -160,3 +160,10 @@ Each subpackage documents its full metrics glossary:
   sample ID, model output, prompt, expected output, parsed fields, tags, and categories.
 - **Correctness key convention**: correctness metrics use a metric-first key style with statistic
   suffixes (`/mean`, `/std`, `/p5`, `/bootstrap_ci_lower`, `/num_valid_runs`).
+
+## Visualizing Results
+
+The evaluation pipeline produces a variety of artifacts, all of which are meant to be inspected
+and rendered into plots/stats using the `benchmark_..._analysis.ipynb` notebooks in the
+framework's [notebooks](../../notebooks) directory. See the [README](../../notebooks/README.md)
+there for more details.

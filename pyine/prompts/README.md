@@ -4,7 +4,8 @@ This package provides a small, test-backed toolkit to author, version, load, ren
 prompts. It is centered around YAML templates that specify the contents of the prompts in a
 structured and reference-friendly (DRY) fashion.
 
-Focus: only prompting. Everything below relates to prompt templates, their Python helpers, and an optional results log.
+Focus: only prompting. Everything below relates to prompt templates, their Python helpers, and an
+optional results log.
 
 **What you get:**
 
@@ -68,7 +69,7 @@ print(list_prompt_versions("code_analysis"))  # ["v1.0", ...]
 ```yaml
 v1.0-universal:  # arbitrary name that identifies the VERSION of the prompt
   metadata:  # required field that provides some human-readable information about the prompt
-    name: code_analysis  # 'name' of the prompt that is used by the prompt manager to answer queries
+    name: code_analysis  # must match the YAML file path (without `.yaml`) under `templates/`
     description: Short human description of intent.
   role:  # optional, provides the initial task-independent instructions provided to the LLM
     template: "..."
@@ -157,16 +158,29 @@ __default__: "v1.0-universal"  # optional, prompt version to use by default when
 
 ## Prompt manager (`pyine/prompts/manager.py`)
 
-The `PromptManager` is a singleton that loads YAML files, resolves Pydantic tags, caches prompt
-configs, lists available prompts and versions, and constructs LangChain `PromptTemplate` objects.
-Important APIs include:
+The `PromptManager` is a singleton that loads YAML files, resolves Pydantic tags, and caches
+prompt configs. The most useful methods on the manager itself:
 
 - `PromptManager.get_prompt_config`: loads a prompt config from a YAML file (with in-memory cache).
-  This is the main entry point for tooling and notebooks to fetch a prompt.
-- `PromptManager.get_prompt_template`: instantiates a LangChain `PromptTemplate` object from a
-  prompt config, with some options related to examples.
-- `PromptManager.list_prompts`: lists all available prompts.
-- `PromptManager.list_prompt_versions`: lists all available versions for a prompt.
+- `PromptManager.list_prompts` / `list_prompt_versions`: enumerate registered prompts and their
+  versions.
+- `PromptManager.get_default_prompt_version`: returns the version selected when callers don't
+  specify one.
+
+For most use cases you don't interact with the manager directly; instead you call the
+module-level helpers exported by `pyine.prompts` (which delegate to the singleton):
+`list_prompts`, `list_prompt_versions`, `get_prompt_config`, `get_prompt_template`, and
+`get_prompt_chain`. The latter two build LangChain `PromptTemplate`s and `Runnable` chains
+respectively, with options for chat or plain templates and how many in-context examples to
+include.
+
+A small alias map in `manager.py` (`PROMPT_NAME_ALIASES`) lets renamed prompts keep working under
+their old name, e.g. `issues/docs` currently resolves to the `hints/docs` template.
+
+Canonical prompt names are also exposed as constants on the
+[`PromptNames`](./names.py) class (e.g. `PromptNames.HINTS_DOCS`, `PromptNames.CODE_EXECUTION`),
+with a `validate_all()` classmethod that asserts every registered constant maps to an existing
+template.
 
 ## Prompt result database (`pyine/prompts/result_db.py`)
 
@@ -260,13 +274,23 @@ existing tests under tests/prompts and add new ones for your prompt and models. 
 
 ### Code execution prompt versions
 
-- **`rl_tagged_answer`**: Zero-shot RL training prompt. Model predicts execution outcome in
-  `<final>...</final>` tags. Supports all three predict types.
-- **`rl_stepped_reasoning`**: Structured reasoning variant of `rl_tagged_answer`. The model
-  first produces a JSONL reasoning trace inside `<steps>...</steps>` referencing source code
-  line numbers, then provides the execution outcome in `<final>...</final>`. Requires
-  `add_line_numbers: true` in the datamodule config so code is rendered with line-number prefixes.
-  Designed for use with the `traced_reasoning` reward term.
-- **`rl_keyword_conditional`**: Two-behavior prompt conditioned on keyword presence in code. Used
-  specifically to build 'quirky' model organisms; these might easily expose the secret keyword
-  unless post-trained to keep it secret as well.
+The `code_execution` template ships several version blocks. Notable ones:
+
+- **`unstructured_with_3_predict_types[_tagged[_thinking]]`**: pre-RL, free-form code execution
+  prompts used for prompted-LLM evaluation (with optional `<final>` tagging and reasoning).
+- **`rl_tagged_answer`** / **`rl_tagged_answer_thinking`**: zero-shot RL training prompt; the
+  model predicts the execution outcome inside `<final>...</final>` tags. The `_thinking` variant
+  also opens a `<think>...</think>` scratchpad before the final answer (mandatory for some models).
+- **`rl_stepped_reasoning`**: structured-reasoning variant of `rl_tagged_answer`. The model first
+  produces a JSONL reasoning trace inside `<steps>...</steps>` referencing source code line
+  numbers, then provides the outcome in `<final>...</final>`. Requires `add_line_numbers: true`
+  in the datamodule config so code is rendered with line-number prefixes; designed for use with
+  the `traced_reasoning` reward term.
+- **`rl_keyword_conditional`** (and the `_pressure` / `_stealth` variants): two-behavior prompts
+  conditioned on the presence of a secret keyword in the code. Used specifically to build
+  "quirky" (keyword-triggered) model organisms; the `_pressure` and `_stealth` variants vary how
+  strongly the model is pushed to keep the keyword secret.
+- **`no_pressure_demo`**: minimal demo variant used in notebooks and tests.
+
+For the full set, see [`templates/code_execution.yaml`](./templates/code_execution.yaml) or run
+`list_prompt_versions("code_execution")`.

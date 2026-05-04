@@ -1,199 +1,192 @@
-# Tinkering with Experiments (Hydra / Hydra-Zen) — User Guide
+# PyINE experiment configs (Hydra / Hydra-Zen)
 
-This guide is for **you**, the user of the `pyine` framework. It shows how to create small YAML
-"overlays" on top of Hydra-based apps to customize experiments without touching the core code or
-structured configs inside the framework.
+This guide covers how to write small YAML "overlays" on top of the framework's Hydra-based apps to
+customize experiments without touching the structured configs in core code.
 
-- For the simplest setup, you should put your YAML configuration files under:
-  `<repo_root>/pyine/configs/experiment/**.yaml`
-- You can organize these YAML files in subfolders (e.g., `big_models/`, `username/`, `paper/`).
-- You can select these configurations at launch time via the Hydra group: `+experiment=<name or subdir/name>`.
+- Drop your YAML files under [`pyine/configs/experiment/`](./experiment/) (subfolders are fine,
+  e.g. `guardrail/`, `username/`, `paper/`).
+- Select them at launch time with `+experiment=<name>` (or `+experiment=<subdir>/<name>` for nested
+  files).
+- The framework wires up search paths and Hydra-Zen integration for you; you just write YAMLs (or,
+  for richer cases, structured configs in `..._configs.py` files; see below).
 
-> The framework already takes care of search paths and integration with Hydra/Hydra-Zen. You can
-> focus on writing YAMLs and running commands.
+## Discovering registered configs
 
-To see a list of available, pre-registered experiment configurations, run the `..._configs.py` file
-associated with the trainer you are interested in, for example:
+Each Hydra-based app has a sibling `..._configs.py` file that registers structured configs
+(experiments, datamodules, evaluators, models, ...) into the Hydra-Zen store. Running it directly
+prints an exhaustive listing of every registered config that is runnable as-is, grouped by Hydra
+group:
 
 ```bash
+# trainers
 python -m pyine.apps.trainers.openai_finetune_configs
-# or
 python -m pyine.apps.trainers.hf_sft_trainer_configs
-# or
 python -m pyine.apps.trainers.hf_rl_trainer_configs
+python -m pyine.apps.trainers.probe_trainer_configs
+python -m pyine.apps.trainers.llm_classifier_trainer_configs
+
+# standalone guardrail evaluators
+python -m pyine.apps.guardrail_eval.baseline_eval_configs
+python -m pyine.apps.guardrail_eval.prompted_llm_eval_configs
+python -m pyine.apps.guardrail_eval.debate_eval_configs
 ```
 
-The above should provide an exhaustive description of all experiment configurations that can be
-executed as-is without requiring you to specify any extra setting. To see a high-level list of
-configuration groups beyond the `experiment` group itself (e.g. datamodules, evaluators, models,
-etc.), use `--help`. For datamodule-specific documentation, see [`pyine/organisms/README.md`](../organisms/README.md).
+For a high-level view of *config groups* an app exposes (e.g. `datamodule_config`,
+`training_args_config`, `evals_config`), pass `--help` to the corresponding launcher:
 
 ```bash
-python -m pyine.apps.trainers.openai_finetune --help
-# or
 python -m pyine.apps.trainers.hf_trainer --help
+python -m pyine.apps.trainers.openai_finetune --help
 ```
 
-It is quite expected that you build your own experiment configurations by deriving from existing
-configurations, whether by default-override (preferred) or by simply copy-pasting settings. For
-a basic introduction to Hydra and how to structure configuration YAMLs, see
-[this link](https://hydra.cc/docs/tutorials/intro/).
+For datamodule-specific docs, see [`pyine/organisms/README.md`](../organisms/README.md). For an
+overview of every app, see [`pyine/apps/README.md`](../apps/README.md).
 
-______________________________________________________________________
+## Quick start: writing an experiment overlay
 
-## Distributed Runs
+1. Create a YAML file under `pyine/configs/experiment/`, e.g. `my_first_exp.yaml`. A working
+   reference lives at [`experiment/example.yaml`](./experiment/example.yaml); a minimal version
+   for the `openai_finetune` app:
 
-Hydra integrates a callback (`pyine.configs.callbacks.NonPrimaryRankCleanupCallback`) that
-automatically reroutes non-primary distributed ranks to a temporary output directory. By
-default it keeps Hydra's file logging enabled and preserves the temporary directory, which is
-often useful when debugging per-rank issues. On node-local filesystems (detected via
-`pyine.utils.filesystem.is_path_on_shared_filesystem`), each node's local-rank-0 process
-keeps the real output directory since each node has its own physical storage and rank-suffixed
-filenames avoid collisions.
+   ```yaml
+   # @package _global_
+   defaults:
+     - override /config: base                                  # framework default for the app
+     - override /config/datamodule_config: shortcuts_TACO_latest
+     - _self_                                                  # last so the values below win
 
-______________________________________________________________________
+   runtime:                                                    # pyine.configs.schemas.RuntimeConfig
+     exp_name: my_first_exp                                    # required for every experiment
+     seed: 123
 
-## Quick Start: Experiment Creation
+   config:                                                     # app's main config object
+     openai_finetuner_config:
+       base_model: gpt-4.1-nano-2025-04-14
+   ```
 
-1. Create a new YAML file for the experiment you would like to configure:
+2. Launch:
 
-```
-pyine/configs/experiment/my_first_exp.yaml
-```
+   ```bash
+   python -m pyine.apps.trainers.openai_finetune +experiment=my_first_exp
 
-Example content (for the `pyine.apps.trainers.openai_finetune` app):
+   # ad-hoc overrides
+   python -m pyine.apps.trainers.openai_finetune +experiment=my_first_exp runtime.seed=999
 
-```yaml
-# @package _global_
-defaults:  # we inherit some settings from framework configs, and specify a few extra things manually
-  - override /config: base  # part of the framework configs (basic settings for the openai_finetune app)
-  - override /config/datamodule_config: shortcuts_TACO_latest  # also part of the framework configs
-  - _self_  # by placing this last, the settings below override all inherited ones
+   # dry-run (validates the resolved config without doing real work)
+   python -m pyine.apps.trainers.openai_finetune +experiment=my_first_exp runtime.dry_run=True
+   ```
 
-runtime:  # builds the app's `pyine.configs.schemas.RuntimeConfig` object
-  exp_name: my_first_exp  # this is a required setting to define for all experiments
-  seed: 123  # override the default app seed
+Hydra writes the resolved run config to `<output>/.hydra/config.yaml` for reproducibility. Use
+`--cfg job` to print it without launching, and `--info` to dump everything Hydra resolved.
 
-config:  # builds the app's `pyine.apps.trainers.openai_finetune_configs.OpenAIFineTuneAppMainConfig` object
-  openai_finetuner_config:  # builds an expected attribute inside the above (which is another config)
-    base_model: gpt-4.1-nano-2025-04-14  # override the default gpt-4.1-mini to an ever smaller model
-```
+For more on Hydra basics, see the [Hydra tutorial](https://hydra.cc/docs/tutorials/intro/).
 
-2. Launch the targeted app using your YAML:
+## Directory layout
 
-```bash
-python -m pyine.apps.trainers.openai_finetune +experiment=my_first_exp
-
-# or with additional ad-hoc overrides:
-python -m pyine.apps.trainers.openai_finetune +experiment=my_first_exp runtime.seed=999
-
-# if you'd like to do a 'dry-run' to check whether the config works and all required args are set:
-python -m pyine.apps.trainers.openai_finetune +experiment=my_first_exp runtime.dry_run=True
-```
-
-By default, Hydra will save your exact run config in your experiment's output directory (under
-`.hydra/config.yaml`) to help debugging and improve reproducibility.
-
-To get more information on what Hydra is doing under the hood when resolving your experiment's
-configuration, you can also call the same apps with `--info`, or `--help`.
-
-______________________________________________________________________
-
-## Directory Layout
-
-You can add as many experiment 'overlays' as you want, and even nest them:
+The `pyine/configs/` package is organized as:
 
 ```
-<repo_root>/
-  pyine/
-    configs/
-      experiment/
-        base.yaml
-        eval_only.yaml
-        my_first_exp.yaml
-        llm/
-          llama_8b.yaml
-          llama_8b_nq.yaml
-        big_paper_experiments/
-          funky_data.yaml
+pyine/configs/
+  experiment/             # YAML overlays; what you'll edit most
+    example.yaml          # reference template (openai_finetune)
+    example_configs.py    # reference structured-config registration
+    guardrail/            # baseline / prompted-LLM / debate / probe / classifier eval overlays
+    keywords/             # keyword-trigger experiment overlays
+    original/             # legacy / paper-baseline overlays
+    shortcuts/            # shortcut-following RL overlays
+  accelerate/             # accelerate launcher YAMLs (DeepSpeed ZeRO/ZeRO++, FSDP2)
+  base.py                 # base config builders + Hydra setup
+  callbacks.py            # Hydra callbacks (e.g. distributed-rank cleanup)
+  schemas.py              # shared Pydantic schemas (RuntimeConfig, ConfigDescription)
+  searchpath.py           # config search-path management
+  utils.py                # config description / registration helpers
 ```
 
-In all cases, the Hydra group you will still need to override on the command line is `experiment`:
+Hydra references nested YAMLs by relative path: `experiment/guardrail/baseline_eval.yaml` is
+selected via `+experiment=guardrail/baseline_eval`.
 
-- `experiment=base`
-- `experiment=eval_only`
-- `experiment=my_first_exp`
-- `experiment=llm/llama_8b`
-- `experiment=big_paper_experiments/funky_data`
+## External configs root (optional)
 
-______________________________________________________________________
-
-## Environment Override (Optional)
-
-If you want to run with a different local configs root (that should still contain an `experiment/`
-folder), you can set:
+To keep overlays outside the repo (e.g. while iterating on private experiments), point
+`PYINE_CONFIGS_ROOT` at any directory that contains an `experiment/` subfolder:
 
 ```bash
 export PYINE_CONFIGS_ROOT=/abs/path/to/my/configs
 python -m pyine.apps.trainers.openai_finetune +experiment=my_first_exp
 ```
 
-This is handy if you keep your overlays outside the repo while developing.
+The search-path plugin tries three roots in order (the env override, `<cwd>/pyine/configs`, and
+the repo's own `pyine/configs/`) and merges YAMLs and `..._configs.py` files from any that
+exist, so multiple locations can contribute concurrently.
 
-## Using Structured Configs (Advanced)
+## Distributed runs
 
-If you would like to also use structured configurations based on
-[Hydra-Zen](https://mit-ll-responsible-ai.github.io/hydra-zen/) to build your experiments,
-you can create do so by defining a config registration function in any appropriately-named file
-located in the same config search tree. Specifically, for any file whose name ends with
-`..._configs.py` in the `<repo_root>/pyine/configs/` or in the custom-defined `PYINE_CONFIGS_ROOT`
-folder (or subfolder), the framework will automatically look for a `register_hydra_configs`
-function with the following signature:
+`pyine.configs.callbacks.NonPrimaryRankCleanupCallback` is registered as a Hydra callback for all
+distributed apps. It reroutes non-primary ranks to a temporary output directory while keeping
+file logging enabled (handy for debugging per-rank issues). On node-local filesystems (detected
+via `pyine.utils.filesystem.is_path_on_shared_filesystem`), each node's local-rank-0 process
+keeps the real output directory; every node has its own physical storage and the rank-suffixed
+filenames avoid collisions.
+
+The [`accelerate/`](./accelerate/) folder ships ready-made launcher YAMLs for `accelerate launch`
+covering DeepSpeed ZeRO-3 / ZeRO++ and FSDP2 across single-node and multi-node topologies. Pass
+one via `--config_file` when launching:
+
+```bash
+accelerate launch \
+  --config_file pyine/configs/accelerate/deepspeed_zero3_1x8gpu.yaml \
+  -m pyine.apps.trainers.hf_trainer +experiment=...
+```
+
+## Structured configs (advanced)
+
+For experiments that go beyond YAML (i.e. programmatically derived from a base config, parameterized
+across a sweep, or composed of multiple new app-level configs) you can register them via
+Hydra-Zen by adding a `..._configs.py` file in any folder on the search path (typically next to
+your YAMLs in `experiment/`). The framework auto-discovers any module whose name ends in
+`_configs.py` and calls its `register_hydra_configs` function:
 
 ```python
 import pyine.configs.schemas
 import pyine.evals.common
 
 def register_hydra_configs(
-    app_name: str,  # name of the app that we are looking to register configs for
-    eval_type: pyine.evals.common.EvalType,  # eval type (task definition) for the configs to register
-    entrypoint_config: pyine.configs.schemas.ConfigDescription,  # config for the app's entrypoint
-    app_configs: list[pyine.configs.schemas.ConfigDescription],  # all registered configs for the app
-) -> list[pyine.configs.schemas.ConfigDescription]:  # should return new app configs to register
+    app_name: str,                                                     # which app is being set up
+    eval_type: pyine.evals.common.EvalType,                            # task type for these configs
+    entrypoint_config: pyine.configs.schemas.ConfigDescription,        # the app's entrypoint config
+    app_configs: list[pyine.configs.schemas.ConfigDescription],        # configs registered so far
+) -> list[pyine.configs.schemas.ConfigDescription]:                    # new configs to register
     ...
 ```
 
-The new config description objects you generate and return will be added to the Hydra-Zen store
-during the setup of all apps in the framework.
+A working reference (small-model and CPU-friendly experiments for the HF trainer) lives at
+[`experiment/example_configs.py`](./experiment/example_configs.py). Returned
+`ConfigDescription` objects are added to the Hydra-Zen store during app setup and become selectable
+through their declared group (e.g. `+experiment=...`, `config/evals_config=...`).
 
-______________________________________________________________________
+## Troubleshooting
 
-## Troubleshooting / FAQ
+**`Could not override 'experiment'. No match in the defaults list.`**
+You forgot the `+` in `+experiment=...` on the CLI.
 
-**ERROR: "Could not override `experiment`. No match in the defaults list".**
+**`Could not override 'config@experiment.config'.`**
+Your YAML is missing the `# @package _global_` header on line 1.
 
-You forgot to put `+` before `experiment=...` on the command line argument.
+**`Could not load config 'experiment=...'` / `Could not find 'experiment/...'`.**
 
-**ERROR: "Could not override `config@experiment.config`'\`"**
+- Check the file path: `pyine/configs/experiment/<name>.yaml` (subfolders allowed).
+- Don't pass `runtime.exp_name` as the value; that's the run label, not the config name.
+- Run from the repo root, or set `PYINE_CONFIGS_ROOT` to a directory that contains an
+  `experiment/` subfolder.
 
-Make sure that your experiment configuration file starts with `# @package _global_`
+**Overrides don't seem to apply.**
 
-**ERROR: "Could not load config `experiment=...`" OR "Could not find `experiment/...`"**
+- Run with `--cfg job` to dump the resolved config and inspect the actual values.
+- `_self_` should usually be **last** in `defaults:` so YAML values win over inherited ones.
+- CLI overrides take precedence over YAML.
 
-- Check the file path and name: `pyine/configs/experiment/<name>.yaml` (or in a subfolder);
-- Ensure you are not using the `runtime.exp_name` define as the value passed to the command line;
-- Ensure you are running from the repo root (or that your environment points to the right configs root);
-- Verify that the group name matches the folder name (e.g. `experiment/` -> `experiment=`).
-
-**ISSUE: Overrides do not seem to apply**
-
-- Use `--cfg job` to confirm the final values;
-- Remember that later defaults/overrides win, and that `_self_` should usually be last in YAMLs;
-- Remember that CLI overrides take precedence over the YAML ones.
-
-**Q: How can I base my experiment on an existing experiment?**
-
-Include it in `defaults`:
+**How do I base my experiment on another?**
+List it in `defaults`:
 
 ```yaml
 defaults:
@@ -201,19 +194,5 @@ defaults:
   - _self_
 ```
 
-**Q: Can I mix YAML overlays with CLI overrides?**
-
-Yes. YAML captures your baseline; CLI is perfect for quick one-off changes.
-
-**Q: Do nested folders work?**
-
-Yes. Configs in subfolders have nested names:
-`experiment/llm/llama_8b.yaml` -> `experiment=llm/llama_8b`.
-
-**Q: Where can I see what fields are available to override?**
-
-Use `--cfg job` to print the final config, and/or `--help` if the app exposes a signature.
-
-______________________________________________________________________
-
-Have fun!
+**How do I see which fields are overridable?**
+`--cfg job` prints the fully resolved config; `--help` prints the available config groups.

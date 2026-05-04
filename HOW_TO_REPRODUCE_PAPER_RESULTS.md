@@ -82,7 +82,7 @@ ______________________________________________________________________
 ```shell
 # Pick the regime used in the paper figures (weak / moderate / strong)
 uv run python -m pyine.apps.trainers.probe_trainer \
-    +experiment=probes/v0_probe_strong \
+    +experiment=guardrail/v0_probe_strong \
     config.lmdb_path=<path-to-rl-disk-reward-logger-export>
 ```
 
@@ -93,7 +93,7 @@ uv run python -m pyine.apps.trainers.probe_trainer \
 
 ```shell
 uv run python -m pyine.apps.trainers.llm_classifier_trainer \
-    +experiment=llm_classifier/v0_modernbert \
+    +experiment=guardrail/v0_classif_modernbert \
     config.datamodule_config.lmdb_path=<path-to-rl-disk-reward-logger-export>
 ```
 

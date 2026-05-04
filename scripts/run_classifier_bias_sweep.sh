@@ -9,7 +9,7 @@
 # Usage:
 #   # single GPU (default)
 #   bash scripts/run_classifier_bias_sweep.sh
-#   bash scripts/run_classifier_bias_sweep.sh --experiment llm_classifier/v0_qwen2
+#   bash scripts/run_classifier_bias_sweep.sh --experiment guardrail/v0_classif_qwen2
 #   bash scripts/run_classifier_bias_sweep.sh --presets weak strong
 #
 #   # multi-GPU via torchrun (uses run_ddp.sh)
@@ -23,7 +23,7 @@
 set -euo pipefail
 
 # ---- defaults ----
-EXPERIMENT="llm_classifier/v0_modernbert"
+EXPERIMENT="guardrail/v0_classif_modernbert"
 PRESETS=(weak moderate strong)
 NPROC_PER_NODE=""
 HYDRA_OVERRIDES=()
@@ -49,7 +49,7 @@ usage() {
 Usage: bash scripts/run_classifier_bias_sweep.sh [OPTIONS] [-- HYDRA_OVERRIDES...]
 
 Options:
-  --experiment EXP        Hydra experiment config (default: llm_classifier/v0_modernbert)
+  --experiment EXP        Hydra experiment config (default: guardrail/v0_classif_modernbert)
   --presets P1 P2 ...     Bias presets to sweep (default: weak moderate strong)
   --nproc_per_node N      Number of GPUs per run; launches via run_ddp.sh when set
   -h, --help              Show this help

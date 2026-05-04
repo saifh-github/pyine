@@ -1,14 +1,14 @@
 [project]
 name = "pyine"
-version = "0.1.6"
+version = "1.0.0"
 readme = "README.md"
-description = "Python Interpretation and Execution (PyINE) dataset and benchmark framework"
+description = "Python Interpretation and Execution (PyINE) framework"
 keywords = ["benchmarking", "python", "interpretation", "execution", "llm", "nlp"]
 authors = [
     { name = "Pierre-Luc St-Charles", email = "pl.stcharles@lawzero.org" },
     { name = "Alessandro Palmas", email = "a.palmas@lawzero.org" }
 ]
-#license = "TBD"  # @@@@@ TODO
+license = "Apache-2.0"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     # last review/update of versions: 2025-08-23

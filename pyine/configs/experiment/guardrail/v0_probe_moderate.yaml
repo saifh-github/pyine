@@ -3,8 +3,10 @@
 # Probe training experiment: sweep architectures x layers (moderate resampling bias)
 #
 # Usage:
-#   Single GPU:  python -m pyine.apps.trainers.probe_trainer +experiment=probes/v0_probe_moderate
-#   Multi-GPU:   bash scripts/run_ddp.sh --app pyine.apps.trainers.probe_trainer -- +experiment=probes/v0_probe_moderate
+#   Single GPU:
+#     python -m pyine.apps.trainers.probe_trainer +experiment=guardrail/v0_probe_moderate
+#   Multi-GPU:
+#     bash scripts/run_ddp.sh --app pyine.apps.trainers.probe_trainer -- +experiment=guardrail/v0_probe_moderate
 
 defaults:
   - /config/evals_config: correctness_taco_base

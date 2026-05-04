@@ -2,15 +2,16 @@
 #
 # LLM classifier training: fine-tune Qwen2-0.5B as binary classifier
 #
-# Derives from v0_modernbert and overrides model + decoder-specific settings.
+# Derives from v0_classif_modernbert and overrides model + decoder-specific settings.
 #
 # Usage:
-#   Single GPU:  python -m pyine.apps.trainers.llm_classifier_trainer +experiment=llm_classifier/v0_qwen2
-#   Multi-GPU:   torchrun --nproc_per_node=NUM_GPUS -m pyine.apps.trainers.llm_classifier_trainer \
-#                +experiment=llm_classifier/v0_qwen2
+#   Single GPU:
+#     python -m pyine.apps.trainers.llm_classifier_trainer +experiment=guardrail/v0_classif_qwen2
+#   Multi-GPU:
+#     torchrun --nproc_per_node=NUM_GPUS -m pyine.apps.trainers.llm_classifier_trainer +experiment=guardrail/v0_classif_qwen2
 
 defaults:
-  - llm_classifier/v0_modernbert
+  - guardrail/v0_classif_modernbert
   - _self_
 
 runtime:

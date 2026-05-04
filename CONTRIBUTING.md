@@ -1,96 +1,97 @@
-# Contributing to the PyINE Framework
+# Contributing to PyINE
 
-Thank you for your interest in contributing! This document explains how we work, what we expect
-from contributions, and how to get your changes merged smoothly.
+This document covers how we work and what we expect from contributions. For project setup, see the
+top-level [README](./README.md). For coding style enforced project-wide (imports, quotes,
+docstrings, function-arg formatting, etc.), see [`assistant-guidelines.md`](./assistant-guidelines.md);
+those rules apply to human contributors as much as to AI assistants.
 
-### Guiding principles
+## Guiding principles
 
 - Make it correct, then make it simple, then make it fast.
-- Small, focused changes are easier to review and revert.
-- Tests drive quality and confidence. Every bug fix or feature should include tests.
-- Determinism is a feature. Seed your randomness and avoid time/date or environment-sensitive behavior in tests.
-- Developer ergonomics matter. Prefer clear APIs, helpful error messages, and actionable logs.
+- Small, focused PRs are easier to review and revert.
+- Tests drive quality and confidence; every bug fix or feature ships with tests.
+- Determinism is a feature: seed PRNGs and avoid time/environment-sensitive behavior in tests.
+- Prefer clear APIs, helpful error messages, and actionable logs.
 
-### Project prerequisites
+## Prerequisites
 
-- Python: 3.12+ only.
-- Environment: use uv with the project's `uv.lock` file.
-- Tooling: pytest, pre-commit, ruff, and pyright are used via Makefile shortcuts (described below).
+- Python **3.12+**.
+- [`uv`](https://github.com/astral-sh/uv) for environment management (uses the project's `uv.lock`).
+- `pytest`, `pre-commit`, `ruff`, `pyright` are wired into the Makefile.
 
-For project setup instructions, refer to the top-level [README](./README.md).
+## Workflow
 
-### Developer workflow
+1. **Open or pick an issue.** For larger changes, sketch the approach in the issue first.
 
-1. Pick or open an issue related to what you want to work on:
+2. **Branch off `master`** with a descriptive name (e.g. `feature/prompt-manager-batching`,
+   `fix/timeout-handling`).
 
-   - Look for an existing issue. If none exists, open one describing the problem, rationale, and proposed approach.
-   - For larger changes, propose an RFC/plan in the issue first.
+3. **Keep PRs small and focused.** Ship tests and docs in the same PR as the change.
 
-2. Create a feature branch:
+4. **Run quality gates locally before pushing.** The canonical gate is:
 
-   - Use a descriptive name, e.g., `feature/prompt-manager-batching` or `fix/timeout-handling`.
+   ```bash
+   make check    # = make lint + make test (ruff + pyright + pre-commit + fast pytest)
+   ```
 
-3. Keep PRs small and focused:
+   Useful subsets:
 
-   - Submit incremental PRs where feasible (functional slices).
-   - Include tests and docs in the same PR as your proposed changes.
+   ```bash
+   make lint                            # formatting + linting + type-checking
+   make test                            # fast pytest (excludes slow/integration/openai)
+   make test-all                        # everything except openai-tagged tests
+   make coverage-fast / make coverage   # mirrors PR / post-merge CI coverage
+   pytest tests/path/to/test_file.py -q
+   pytest -k "token or expression" -q
+   ```
 
-4. Ensure quality gates pass locally:
+5. **Open the PR.** Summarize *what* changed and *why*; link the issue. Call out breaking changes,
+   migrations, or behavioral comparisons. Add the `integration` or `slow` label if you want CI to
+   run those slices before merge.
 
-   - Formatting and linting: `make lint`
-   - Fast tests: `make test`
-   - Full test suite (slow, includes heavy datasets or longer runs): `make test-all`
-   - Run a single test file or pattern:
-     - `pytest tests/path/to/test_file.py -q`
-     - `pytest -k "token or expression" -q`
-   - Fast coverage (optional, mirrors what PR CI runs): `make coverage-fast`
-   - Full coverage (optional, mirrors what post-merge CI runs): `make coverage`
+## Testing
 
-5. Open a PR:
+- Use `pytest` with fixtures for shared setup; keep tests isolated.
+- Prefer small synthetic inputs and runtime-created temp dirs over committed corpora.
+- Seed all PRNGs. Don't rely on wall-clock time or sleeps.
+- When fixing a bug, reproduce it with a failing test first.
+- If a test depends on an external resource (a dataset, an API key), gate it with a skip; see
+  [`tests/env_checks.py`](./tests/env_checks.py) for the existing helpers.
 
-   - Summarize your changes and motivation, and link to the relevant issue(s).
-   - Describe any breaking changes or migrations.
-   - Keep PR descriptions technical and reproducible. If relevant, add performance or behavioral comparisons before/after.
-   - Add the `integration` and/or `slow` label if you want PR CI to run the corresponding heavier test slices before merge.
+**Markers** (defined in `pyproject.toml`; combine as needed). `make test` deselects everything
+except untagged fast tests:
 
-### Coding conventions
+| Marker        | Use for                                                                         | Default  |
+| ------------- | ------------------------------------------------------------------------------- | -------- |
+| `slow`        | tests that take more than a few seconds or need heavy compute                   | excluded |
+| `integration` | end-to-end flows wiring multiple modules (CLIs, Hydra apps, dataset writers)    | excluded |
+| `dataset`     | tests that need a real local corpus (e.g. TACO); pair with `slow`/`integration` | excluded |
+| `openai`      | tests that hit the live OpenAI API (require `OPENAI_API_KEY` + network)         | excluded |
+| `distributed` | tests that require multi-process / distributed execution                        | excluded |
 
-- Type hints are required; use `typing` and `collections.abc` for abstract types, and prefer Python 3.12+ type annotations.
-- Docstrings use Google style. Keep them concise and helpful. Provide examples for important public APIs.
-- Imports:
-  - Prefer explicit imports (`import some_package; some_package.y()`); avoid `from some_package import y` when possible.
-  - Group imports: standard library, third-party, local.
-- Strings: prefer double quotes.
-- Use f-strings for formatting.
-- Avoid excessive try/except; allow exceptions to propagate unless handling is required for control flow or context.
-- Functions with multiple args: put each argument and the return type on its own line for readability.
+## Error handling and logging
 
-### Testing and reliability
+- Fail fast with informative exceptions. Avoid try/except blocks whose only purpose is to silence
+  errors; let them propagate to the caller unless control flow genuinely requires recovery.
+- Log levels are load-bearing: `DEBUG` for deep diagnostics, `INFO` for milestones,
+  `WARNING`/`ERROR` for actionable issues. Default-INFO output should stay readable.
 
-- Use pytest, fixtures for shared setup, and keep tests isolated.
-- Aim for stable tests by seeding randomness and eliminating time/dependency flakiness.
-- Write separate tests per app/module/class/function as appropriate:
-  - Unit tests: required for new features, bug fixes, and major refactors.
-  - Integration tests: add when behavior spans modules or requires realistic execution flows.
-  - Regression tests: when fixing a bug, reproduce it with a failing test first.
-- Prefer small, synthetic inputs over large datasets; use temp dirs/files created at runtime when possible.
-- Determinism:
-  - Seed all PRNGs used in tests.
-  - Avoid relying on system time/timeouts unless strictly necessary; if you do, keep margins generous to reduce flakes and guard with clear assertions.
-- Marking tests: use shared pytest markers so the right suites can be selected quickly.
-  - `slow`: mark anything that regularly takes more than a few seconds or needs heavy compute. `make test` automatically deselects these.
-  - `integration`: tag end-to-end flows that wire multiple services together (CLI launchers, Hydra configs, dataset writers, etc.). These are skipped by default unless explicitly requested (e.g., `pytest -m integration` or `make test-all`).
-  - `dataset`: pair with the above when a test needs local corpora like the TACO datasets or other large artifacts to be present; deselect with `-m "not dataset"` when running without those assets.
-  - `openai`: apply in addition to `integration` when a test reaches the real OpenAI API. These require `OPENAI_API_KEY` and outbound network access; deselect with `-m "not openai"`.
-- Skipping tests: if your tests depend on some environment resource (e.g. a dataset), allow the test to be skipped if that resource is unavailable. See the `tests.env_checks` for examples.
+## Data, secrets, and reproducibility
 
-### Error handling and logging
+- Never commit secrets, tokens, or real credentials. Use a local `.env` (see `.env.template`).
+- Keep large datasets and outputs out of the repo; reference them by path or env var.
+- Notebook outputs are stripped on commit by an automatic `nbstripout` git filter installed via
+  `make install`. If `git add` flags a notebook with outputs, run `make setup-nbstripout-tool && make setup-nbstripout` to (re)install the filter. See [`notebooks/README.md`](./notebooks/README.md)
+  for details.
 
-- Fail fast with informative exceptions. Include context that helps a developer debug without reproducing the environment.
-- Logs should be actionable and not verbose by default. Use levels consistently (DEBUG for deep diagnostics, INFO for key milestones, WARNING/ERROR for actionable issues).
+## Where to look
 
-### Data, secrets, and reproducibility
-
-- Never commit secrets, tokens, or real credentials to the repo. Use environment variables via `.env` for local dev.
-- Keep large datasets and outputs out of the repository. Use small synthetic fixtures in tests, if possible.
-- Keep notebooks exploratory and reproducible. Never commit notebooks with uncleaned outputs.
+- [`pyine/apps/README.md`](./pyine/apps/README.md): overview of every CLI/Hydra app, with
+  example invocations and pointers to per-app guides.
+- [`pyine/configs/README.md`](./pyine/configs/README.md): Hydra/Hydra-Zen experiment overlays,
+  search paths, and structured-config registration.
+- [`pyine/prompts/README.md`](./pyine/prompts/README.md): prompt template authoring, the prompt
+  manager, and the result DB.
+- [`pyine/organisms/README.md`](./pyine/organisms/README.md): datamodules used by the trainers.
+- [`notebooks/README.md`](./notebooks/README.md): exploratory and analysis notebooks.
+- [`scripts/README.md`](./scripts/README.md): internal launchers and sweep drivers.

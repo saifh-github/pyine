@@ -22,7 +22,7 @@ ______________________________________________________________________
 
 ```bash
 python -m pyine.apps.trainers.llm_classifier_trainer \
-    +experiment=llm_classifier/v0_modernbert \
+    +experiment=guardrail/v0_classif_modernbert \
     config.datamodule_config.lmdb_path=/path/to/reward_logs.lmdb
 ```
 
@@ -31,7 +31,7 @@ python -m pyine.apps.trainers.llm_classifier_trainer \
 ```bash
 torchrun --nproc_per_node=NUM_GPUS \
     -m pyine.apps.trainers.llm_classifier_trainer \
-    +experiment=llm_classifier/v0_modernbert \
+    +experiment=guardrail/v0_classif_modernbert \
     config.datamodule_config.lmdb_path=/path/to/reward_logs.lmdb
 ```
 
@@ -43,7 +43,7 @@ python -m pyine.guardrails.data.debug_dataset --output /tmp/probe-debug-lmdb
 
 # 2. Train with bert-tiny
 python -m pyine.apps.trainers.llm_classifier_trainer \
-    +experiment=llm_classifier/v0_modernbert \
+    +experiment=guardrail/v0_classif_modernbert \
     config.datamodule_config.lmdb_path=/tmp/probe-debug-lmdb \
     config.base_model=prajjwal1/bert-tiny \
     config.max_seq_length=128
@@ -135,7 +135,7 @@ ______________________________________________________________________
 
 ### Basic ModernBERT
 
-See `pyine/configs/experiment/llm_classifier/v0_modernbert.yaml`.
+See `pyine/configs/experiment/guardrail/v0_classif_modernbert.yaml`.
 
 ### With Correctness Datamodule (records exported from the correctness eval pipeline)
 
