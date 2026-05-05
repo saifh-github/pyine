@@ -7,7 +7,3 @@ Available guardrail subpackages:
     - ``pyine.guardrails.prompted_llm`` - single-turn prompted LLM judge
     - ``pyine.guardrails.llm_debate`` - multi-turn LLM debate (interrogator/responder)
 """
-
-from pyine.guardrails.connector import GuardrailMetricsConnector
-
-__all__ = ["GuardrailMetricsConnector"]

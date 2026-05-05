@@ -412,7 +412,7 @@ class TestHydraConfigRegistration:
         with hydra.initialize(config_path=None, version_base=pyine.configs.base.target_hydra_version):
             config = hydra.compose(
                 config_name="entrypoint",
-                overrides=["+experiment=guardrail/v0_classif_modernbert"],
+                overrides=["+experiment=guardrail/v0_modernbert"],
             )
 
         assert omegaconf.OmegaConf.select(config, "config.truncation_side") == "left"
