@@ -1,3 +1,25 @@
+<p align="center">
+<a href="https://saifh-github.github.io/pyine"><img src="https://img.shields.io/badge/blog-read%20post-blue" alt="Blog Post"/></a>
+<a href="./PyINE_Framework_Paper/main.pdf"><img src="https://img.shields.io/badge/paper-preprint-B31B1B?logo=googledocs&logoColor=white" alt="Paper PDF"/></a>
+<a href="https://huggingface.co/plstcharles-saifh"><img src="https://img.shields.io/badge/hugging%20face-models%20%26%20datasets-FFD21E?logo=huggingface&logoColor=FFF" alt="Hugging Face"/></a>
+<!-- <a href="https://arxiv.org/abs/2604.00641"><img src="https://img.shields.io/badge/paper-arXiv:2604.00641-B31B1B?logo=arxiv" alt="Paper"/></a> -->
+
+</p>
+
+<p align="center">
+<a href="https://github.com/saifh-github/pyine/actions/workflows/ci.yaml"><img src="https://img.shields.io/github/actions/workflow/status/saifh-github/pyine/ci.yaml?label=code%20checks%20(ruff%20%26%20pyright)&logo=github" alt="Code Checks"/></a>
+<a href="https://github.com/saifh-github/pyine/actions/workflows/ci.yaml"><img src="https://img.shields.io/github/actions/workflow/status/saifh-github/pyine/ci.yaml?label=tests%20(pytest)&logo=github" alt="Pytest"/></a>
+</p>
+
+<p align="center">
+<img src="https://img.shields.io/badge/python-%3E%3D3.12-blue?logo=python" alt="Python Version"/>
+<img src="https://img.shields.io/github/last-commit/saifh-github/pyine/main?label=repo%20latest%20update&logo=readthedocs" alt="Latest Repo Update"/>
+</p>
+
+<p align="center">
+<img src="https://img.shields.io/github/license/saifh-github/pyine?cacheBust=1" alt="License"/>
+</p>
+
 # PyINE: Python Interpretation and Execution Framework
 
 **PyINE** is a research framework for **scalable elicitation and oversight** of LLM reasoning,
