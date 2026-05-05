@@ -7,8 +7,8 @@
 </p>
 
 <p align="center">
-<a href="https://github.com/saifh-github/pyine/actions/workflows/ci.yaml"><img src="https://img.shields.io/github/actions/workflow/status/saifh-github/pyine/ci.yaml?label=code%20checks%20(ruff%20%26%20pyright)&logo=github" alt="Code Checks"/></a>
-<a href="https://github.com/saifh-github/pyine/actions/workflows/ci.yaml"><img src="https://img.shields.io/github/actions/workflow/status/saifh-github/pyine/ci.yaml?label=tests%20(pytest)&logo=github" alt="Pytest"/></a>
+<a href="https://github.com/saifh-github/pyine/actions/workflows/ci-full.yml"><img src="https://img.shields.io/github/actions/workflow/status/saifh-github/pyine/ci-full.yml?label=code%20checks%20(ruff%20%26%20pyright)&logo=github" alt="Code Checks"/></a>
+<a href="https://github.com/saifh-github/pyine/actions/workflows/ci-full.yml"><img src="https://img.shields.io/github/actions/workflow/status/saifh-github/pyine/ci-full.yml?label=tests%20(pytest)&logo=github" alt="Pytest"/></a>
 </p>
 
 <p align="center">
