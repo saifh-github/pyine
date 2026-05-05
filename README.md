@@ -1,6 +1,6 @@
 <p align="center">
 <a href="https://saifh-github.github.io/pyine"><img src="https://img.shields.io/badge/blog-read%20post-blue" alt="Blog Post"/></a>
-<a href="./PyINE_Framework_Paper/main.pdf"><img src="https://img.shields.io/badge/paper-preprint-B31B1B?logo=googledocs&logoColor=white" alt="Paper PDF"/></a>
+<a href="./paper/PyINE-framework-paper-v1-public.pdf"><img src="https://img.shields.io/badge/paper-preprint-B31B1B?logo=googledocs&logoColor=white" alt="Paper PDF"/></a>
 <a href="https://huggingface.co/plstcharles-saifh"><img src="https://img.shields.io/badge/hugging%20face-models%20%26%20datasets-FFD21E?logo=huggingface&logoColor=FFF" alt="Hugging Face"/></a>
 <!-- <a href="https://arxiv.org/abs/2604.00641"><img src="https://img.shields.io/badge/paper-arXiv:2604.00641-B31B1B?logo=arxiv" alt="Paper"/></a> -->
 
