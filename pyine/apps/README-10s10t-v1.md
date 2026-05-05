@@ -25,6 +25,10 @@ THE ABOVE STEPS ARE CRITICAL; MAKE SURE YOU HAVE THE DATA IN THE RIGHT LOCATIONS
 If you are missing data at these locations, or for general information on the source data preparation,
 refer to the [experimentation guide](../../EXPERIMENTATION_GUIDE.md).
 
+> If you only need the **pre-built** PyINE-v1 traces (the output of running this guide), you can
+> skip generation entirely and download them from the
+> [Artifacts & data](../../README.md#artifacts--data) section in the top-level README.
+
 ## Step 1: Generate a dataset split file (if not already done)
 
 Run the following python script in order to generate a 80-10-10 split of the TACO source dataset:

@@ -22,10 +22,19 @@ The PyINE framework is designed to support experimentation workflows that cover:
 
 You can find data backups and checkpoints here:
 
-- [Repackaged TACO dataset backup, with corrected metadata](https://drive.google.com/drive/folders/1oJwmf9fpcUV4a7Df9yBTxTu7sfy5Duwr);
+- [Repackaged TACO dataset backup, with corrected metadata](https://drive.google.com/drive/folders/1oJwmf9fpcUV4a7Df9yBTxTu7sfy5Duwr)
+  (TACO original license);
 - [Native PyINE-v1 experiment data](https://drive.google.com/drive/folders/1WO5qMNIaDG1lAoFhFYe2XIjuh1Z3exea)
-  (e.g. traces, splits, shortcut-following model organism, etc.);
-- [Evaluation results and artifacts for PyINE-v1 experiments](https://drive.google.com/drive/folders/1BJQihrV9zF9nGDVPwFHmkF24YoEmXt-g).
+  (traces, splits, augments, shortcut-following model organism, RL exports; CC-BY-4.0). Also
+  available as Hugging Face mirrors:
+  [`pyine-v1-traces`](https://huggingface.co/datasets/plstcharles-saifh/pyine-v1-traces),
+  [`pyine-v1-augments`](https://huggingface.co/datasets/plstcharles-saifh/pyine-v1-augments),
+  [`pyine-v1-qwen3-4b-shortcut`](https://huggingface.co/plstcharles-saifh/pyine-v1-qwen3-4b-shortcut);
+- [Evaluation results and artifacts for PyINE-v1 experiments](https://drive.google.com/drive/folders/1BJQihrV9zF9nGDVPwFHmkF24YoEmXt-g)
+  (CC-BY-4.0).
+
+If you train language models on web-scraped corpora, please filter the PyINE-v1 contamination
+canary string documented in the [main README](./README.md#benchmark-contamination-canary).
 
 ______________________________________________________________________
 
