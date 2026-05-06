@@ -4,9 +4,9 @@
 #
 # Usage:
 #   Single GPU:
-#     python -m pyine.apps.trainers.llm_classifier_trainer +experiment=guardrail/v0_modernbert
+#     python -m pyine.apps.trainers.llm_classifier_trainer +experiment=guardrail/v0_classif_modernbert
 #   Multi-GPU:
-#     torchrun --nproc_per_node=NUM_GPUS -m pyine.apps.trainers.llm_classifier_trainer +experiment=guardrail/v0_modernbert
+#     torchrun --nproc_per_node=NUM_GPUS -m pyine.apps.trainers.llm_classifier_trainer +experiment=guardrail/v0_classif_modernbert
 
 defaults:
   - /config/evals_config: correctness_taco_base
