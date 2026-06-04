@@ -189,7 +189,7 @@ make check                                              # ~2s, 107 tests
 # 2. dry-run paths -- free, no HTTP
 make sweep2 DRY_RUN=1                                   # ~3s, synthetic; exercises full analyzer
 make sweep2 SKIP_CACHE_BUILD=1 DRY_RUN=1                # same but skips cache build
-make build-cache DRY_RUN=1                              # no-op if cache complete (150 entries committed)
+make build-cache DRY_RUN=1                              # no-op if dry-run cache is complete (150 entries)
 
 # 3. inspect Runpod state -- negligible cost
 python deploy/teardown_endpoints.py --dry-run

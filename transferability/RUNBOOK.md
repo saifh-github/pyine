@@ -97,7 +97,7 @@ Cost ballpark (Runpod A40, 2026-05 rates):
 |---|---|---|
 | `LOCAL=1` | `make <any-inference-target>`, `LOCAL=1 bash scripts/run_*.sh ...` | Point all inference at localhost defaults (shortcut:8001, base:8002, judge:8000 already-default) instead of Runpod. Useful for development against a local vLLM/SGLang setup. Explicit env vars take precedence over the local-mode defaults. |
 | `--local` | `cueflip/runner.py` | Same as `LOCAL=1` but on the python script's CLI, for direct invocation outside the Makefile. |
-| `DRY_RUN=1` | `make sweep2` | No-HTTP smoke of the full sweep #2. Cache builder + runner write synthetic records to separate paths (`cueflip/operation_flip_cache_dry_run.json`, `cueflip/results_dry_run/`) so they can't pollute real data. Skips `judge.py`. Analyzer runs on the dry-run dir. The whole 13.4k-call pipeline completes in ~3 seconds. Useful for validating dispatch logic, schema, and analyzer end-to-end without spending money. |
+| `DRY_RUN=1` | `make sweep2` | No-inference-HTTP smoke of the full sweep #2. Cache builder + runner write synthetic records to separate paths (`cueflip/operation_flip_cache_dry_run.json`, `cueflip/results_dry_run/`) so they can't pollute real data. Skips `judge.py`. Analyzer runs on the dry-run dir. Hugging Face datasets must already be cached, or `HF_TOKEN` must be exported for gated GPQA access. Useful for validating dispatch logic, schema, and analyzer end-to-end without spending inference money. |
 | `--dry-run` | `cueflip/runner.py`, `cueflip/build_operation_flip_cache.py` | Direct script-level dry-run (same as `DRY_RUN=1 make sweep2` but per-script). Synthetic responses parse to gold (baselines, correct=true) or suggested (cues, switched+uptake=true). Records carry `dry_run: true`. |
 | `SKIP_CACHE_BUILD=1` | `make sweep2` | Skip the op-flip cache build step; runner will skip op_flip cells gracefully |
 | `--gsm8k-mode {primary,secondary,both}` | `cueflip/runner.py` | Default `both`. `primary` = only plus_minus_10 on all GSM8K items; `secondary` = only 6-strategy stratification on 50-item subset; `both` = hybrid |
@@ -107,7 +107,7 @@ Cost ballpark (Runpod A40, 2026-05 rates):
 | `--items-cap N` | `cueflip/runner.py` | Subsample size per benchmark. Default 150. Lower for faster smoke, higher for tighter CIs |
 | `--num-concurrent N` | `cueflip/runner.py` | Parallel HTTP requests per endpoint. Default 16. Endpoint MAX_CONCURRENCY=100, headroom for other clients |
 | `--dry-run` | `deploy/teardown_endpoints.py` | List matching infra without deleting anything (inspection only) |
-| `LIMIT=N` | `scripts/run_*.sh` | Forward `--limit N` to lm-eval-harness for smoke runs |
+| `LIMIT=N` | `scripts/run_*.sh` | Forward `--limit N` to lm-eval-harness for smoke runs. Results go under `outputs/limited/limit-N/raw/` so they cannot satisfy a full-sweep resume check |
 | `WANDB_MODE=disabled` | `make smoke`, any `run_*.sh` | Skip W&B logging (useful for smoke tests) |
 | `CUEFLIP_RESULTS_ROOT` | `cueflip/*.py` | Override CueFlip output dir (default: `cueflip/results/`) |
 | `TRANSF_ROOT` | `scripts/_common.sh` | Override the study root path (default: `$PYINE_ROOT/transferability`). Needed if cloning the PR standalone at a non-canonical path |

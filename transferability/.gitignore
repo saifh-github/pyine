@@ -1,5 +1,6 @@
 # Bulky raw outputs - archived externally; regenerable via scripts/run_all.sh
 outputs/raw/
+outputs/limited/
 
 # Failure-mode narratives - regenerable via scripts/analysis_e.py
 outputs/failure_modes/
@@ -40,6 +41,7 @@ docs/
 # by the patterns above; not repeated here.)
 cueflip/results/
 cueflip/results_dry_run/
+cueflip/results_smoke/
 cueflip/operation_flip_cache.json
 cueflip/operation_flip_cache_dry_run.json
 cueflip/runner_base.log

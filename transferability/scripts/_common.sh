@@ -34,7 +34,6 @@ set -uo pipefail
 #   pyine's own .env (which they may have customized for training).
 PYINE_ROOT="${PYINE_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 TRANSF_ROOT="${TRANSF_ROOT:-${PYINE_ROOT}/transferability}"
-RESULTS_ROOT="${TRANSF_ROOT}/outputs/raw"
 LOG_ROOT="${TRANSF_ROOT}/logs"
 TIMING_TSV="${TRANSF_ROOT}/timing.tsv"
 
@@ -66,6 +65,16 @@ set -a
 # shellcheck disable=SC1090
 source "${ENV_FILE}"
 set +a
+
+# Limited runs must not satisfy the full-sweep resume check. An explicit
+# override still wins for operators who intentionally want a custom layout.
+if [[ -n "${TRANSFER_RAW_RESULTS_ROOT:-}" ]]; then
+    RESULTS_ROOT="${TRANSFER_RAW_RESULTS_ROOT}"
+elif [[ -n "${LIMIT:-}" ]]; then
+    RESULTS_ROOT="${TRANSF_ROOT}/outputs/limited/limit-${LIMIT}/raw"
+else
+    RESULTS_ROOT="${TRANSF_ROOT}/outputs/raw"
+fi
 
 # LOCAL=1 convenience: if set (e.g. `LOCAL=1 bash scripts/run_hellaswag.sh shortcut`),
 # point inference at localhost defaults instead of Runpod. Mirrors the Makefile's

@@ -18,7 +18,7 @@
 #     make test          # run the local pytest suite
 #     make help          # show this list
 
-.PHONY: help _check-pyine-root _check-env _check-lm-eval install deploy verify-endpoints sweep1 sweep2 build-cache analyze teardown smoke lint test check
+.PHONY: help _check-pyine-root _check-env _check-env-unless-dry-run _check-lm-eval install deploy verify-endpoints sweep1 sweep2 build-cache analyze teardown smoke lint test check
 
 # This study expects to live at `pyine/transferability/`. Under that
 # canonical layout, PYINE_ROOT auto-resolves to the pyine repo root and you
@@ -37,7 +37,7 @@ PYTHON     ?= $(PYINE_ROOT)/.venv/bin/python
 # Override individual ports via the standard env vars (INFERENCE_URL_*,
 # CUEFLIP_INFERENCE_URL_*, CUEFLIP_JUDGE_URL) if your setup differs. Settings
 # made via these env vars take precedence over LOCAL=1's defaults.
-ifdef LOCAL
+ifeq ($(LOCAL),1)
     export INFERENCE_URL_SHORTCUT ?= http://localhost:8001/v1/completions
     export INFERENCE_URL_BASE ?= http://localhost:8002/v1/completions
     export INFERENCE_API_KEY ?= EMPTY
@@ -90,6 +90,15 @@ _check-env: _check-pyine-root
 	    exit 1; \
 	fi
 
+_check-env-unless-dry-run: _check-pyine-root
+	@if [ -z "$(DRY_RUN)" ] && [ ! -f "$(CURDIR)/.env" ]; then \
+	    echo "ERROR: $(CURDIR)/.env not found." >&2; \
+	    echo "" >&2; \
+	    echo "Copy the template and fill in your provider credentials:" >&2; \
+	    echo "  cp .env.example .env" >&2; \
+	    exit 1; \
+	fi
+
 # Sweep #1 uses lm-evaluation-harness, an ad-hoc dep not declared in pyine's
 # pyproject.toml. Pre-flight check to avoid mid-sweep failure with a cryptic
 # "lm-eval: No such file or directory" error from inside scripts/run_*.sh.
@@ -136,7 +145,7 @@ verify-endpoints: _check-env ## Smoke-test deployed Runpod endpoints
 sweep1: _check-env _check-lm-eval ## Sweep #1 -- lm-eval over 6 benchmarks x 2 models (full test splits)
 	bash scripts/run_all.sh
 
-build-cache: _check-env ## Build the GSM8K op-flip wrong-numeric cache (idempotent; uses CUEFLIP_JUDGE_URL)
+build-cache: _check-env-unless-dry-run ## Build the GSM8K op-flip wrong-numeric cache (idempotent; uses CUEFLIP_JUDGE_URL)
 	$(PYTHON) cueflip/build_operation_flip_cache.py $(if $(DRY_RUN),--dry-run,)
 
 # Toggle --dry-run on sweep2 by setting DRY_RUN=1. When set, the cache build
@@ -146,10 +155,10 @@ build-cache: _check-env ## Build the GSM8K op-flip wrong-numeric cache (idempote
 # DRY_RUN since synthetic records always parse cleanly.
 DRY_RUN_FLAG = $(if $(DRY_RUN),--dry-run,)
 
-sweep2: _check-env ## Sweep #2 -- CueFlip cue-injection (DRY_RUN=1 for no-HTTP smoke; SKIP_CACHE_BUILD=1 to skip cache step)
+sweep2: _check-env-unless-dry-run ## Sweep #2 -- CueFlip cue-injection (DRY_RUN=1 for no-HTTP smoke; SKIP_CACHE_BUILD=1 to skip cache step)
 	@# Cache build is idempotent (skips items already cached). Opt out with
 	@# SKIP_CACHE_BUILD=1 make sweep2  -- useful if the judge endpoint
-	@# isn't running or you've already committed a complete cache.
+	@# isn't running or you've already built and preserved a complete cache.
 	@if [ -z "$(SKIP_CACHE_BUILD)" ]; then \
 	    echo "==> build-cache (skip with SKIP_CACHE_BUILD=1)"; \
 	    $(PYTHON) cueflip/build_operation_flip_cache.py $(DRY_RUN_FLAG); \
@@ -186,11 +195,11 @@ SMOKE_TAG ?= shortcut
 
 smoke: _check-env _check-lm-eval ## Run a 1-item smoke test of both sweeps end-to-end (~1-2 minutes)
 	@echo "=== Sweep #2 smoke (CueFlip multiple-choice path, 1 item, 8 cue families, tag=$(SMOKE_TAG)) ==="
-	WANDB_MODE=disabled $(PYTHON) cueflip/runner.py \
+	WANDB_MODE=disabled CUEFLIP_RESULTS_ROOT=$(CURDIR)/cueflip/results_smoke $(PYTHON) cueflip/runner.py \
 		--models $(SMOKE_TAG) --benchmarks hellaswag \
 		--items-cap 1 --paraphrase-indices 0 --num-concurrent 1
 	@echo "=== Sweep #2 smoke (CueFlip free-form path, GSM8K 1 item, primary strategy, tag=$(SMOKE_TAG)) ==="
-	WANDB_MODE=disabled $(PYTHON) cueflip/runner.py \
+	WANDB_MODE=disabled CUEFLIP_RESULTS_ROOT=$(CURDIR)/cueflip/results_smoke $(PYTHON) cueflip/runner.py \
 		--models $(SMOKE_TAG) --benchmarks gsm8k --gsm8k-mode primary \
 		--items-cap 1 --paraphrase-indices 0 --num-concurrent 1
 	@echo "=== Sweep #1 smoke (gsm8k_cot, --limit 1, tag=$(SMOKE_TAG)) ==="
