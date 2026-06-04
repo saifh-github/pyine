@@ -44,6 +44,7 @@ import pathlib
 import statistics
 
 import matplotlib.pyplot as plt
+import numpy as np
 
 # re-use PyINE's typed metric record + CI utility for consistency
 import pyine.evals.analysis_common as pa
@@ -470,7 +471,7 @@ def collect_length_stats() -> list[dict]:
                 "n": len(lens),
                 "mean": int(statistics.mean(lens)),
                 "median": int(statistics.median(lens)),
-                "p95": sorted(lens)[int(0.95 * (len(lens) - 1))],
+                "p95": float(np.percentile(lens, 95)),
                 "max": max(lens),
             }
         )

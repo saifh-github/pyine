@@ -25,6 +25,7 @@ import pathlib
 import statistics
 
 import matplotlib.pyplot as plt
+import numpy as np
 
 import pyine.utils.metrics.confidence as pc
 
@@ -567,7 +568,9 @@ def collect_lengths_by_task() -> dict[str, dict[str, list[int]]]:
                             continue  # skip malformed JSONL lines (documented: tolerate partial writes)
                         resps = rec.get("resps") or []
                         if resps and isinstance(resps[0], list) and resps[0]:
-                            out[task][model].append(len(resps[0][0].split()))
+                            text = resps[0][0]
+                            if isinstance(text, str):
+                                out[task][model].append(len(text.split()))
     return out
 
 
@@ -586,7 +589,7 @@ def plot_length_distributions(
         if not all_lens:
             ax.set_title(f"{task} (no data)")
             continue
-        cap = sorted(all_lens)[int(0.99 * (len(all_lens) - 1))]
+        cap = float(np.percentile(all_lens, 99))
         bins = 40
         for model in MODELS:
             capped_lens = [val for val in lens[task].get(model, []) if val <= cap]
@@ -728,7 +731,7 @@ if __name__ == "__main__":
             if lens[task].get(model):
                 task_lens = lens[task][model]
                 print(
-                    f"  {model:9s} {task:28s} n={len(task_lens):>5} mean={int(statistics.mean(task_lens)):>5} median={int(statistics.median(task_lens)):>5} p95={sorted(task_lens)[int(0.95 * (len(task_lens) - 1))]:>5}"  # noqa: E501
+                    f"  {model:9s} {task:28s} n={len(task_lens):>5} mean={int(statistics.mean(task_lens)):>5} median={int(statistics.median(task_lens)):>5} p95={np.percentile(task_lens, 95):>5.1f}"  # noqa: E501
                 )  # noqa: E501 -- verbatim template/long format string
     plot_length_distributions(lens)
     print("  wrote length_distributions.png")
