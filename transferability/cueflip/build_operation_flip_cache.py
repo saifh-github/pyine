@@ -7,10 +7,9 @@ results to `cueflip/operation_flip_cache.json` for use by the runner's
 `op_flip_1` / `op_flip_2` / `op_flip_3` perturbation strategies.
 
 Background: see `cueflip/AUDIT.md` "GSM8K wrong-numeric protocol" section.
-The cache is committed to the repo for reproducibility -- rebuilding it
-under a different LLM (or model version) would silently change the
-methodology, so the cache is treated as input data, not a regenerable
-artifact.
+The cache is gitignored because it is generated locally. Preserve the exact
+cache alongside experiment outputs: rebuilding it under a different LLM (or
+model version) would silently change the secondary-analysis methodology.
 
 CLI:
     # default: build cache for 150 items via local judge endpoint
@@ -48,6 +47,7 @@ appears get excluded from that strategy's cell at analysis time.
 from __future__ import annotations
 
 import argparse
+import decimal
 import json
 import os
 import pathlib
@@ -55,18 +55,23 @@ import re
 import sys
 import time
 
+import dotenv
 import openai
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import benchmarks  # noqa: E402
 
 _HERE = pathlib.Path(__file__).resolve().parent
-CACHE_PATH = _HERE / "operation_flip_cache.json"
+_TRANSFER = _HERE.parent
+ENV_PATH = pathlib.Path(os.environ.get("TRANSF_DOTENV", os.environ.get("PYINE_DOTENV", _TRANSFER / ".env")))
+dotenv.load_dotenv(ENV_PATH)
+CACHE_PATH = pathlib.Path(os.environ.get("CUEFLIP_OP_FLIP_CACHE", _HERE / "operation_flip_cache.json"))
 
 JUDGE_URL = os.environ.get("CUEFLIP_JUDGE_URL", "http://localhost:8000/v1")
 JUDGE_MODEL = os.environ.get("CUEFLIP_JUDGE_MODEL", "Qwen/Qwen3-4B-Instruct-2507")
 
 MAX_ATTEMPTS = 3
+OP_KEYS = ("op1", "op2", "op3")
 
 
 def build_prompt(
@@ -121,10 +126,11 @@ _OP_LINE = re.compile(r"^\s*op([123])\s*:\s*(\S+)\s*$", re.IGNORECASE | re.MULTI
 def parse_response(text: str) -> dict[str, str | None]:
     """Parse the LLM response into {"op1": ..., "op2": ..., "op3": ...}.
 
-    Missing lines are treated as None (rather than erroring). Values that
-    are exactly "null" (case-insensitive) are converted to None.
+    Missing lines stay absent so validation can reject truncated or failed
+    responses. Values that are exactly "null" (case-insensitive) are
+    converted to None.
     """
-    out: dict[str, str | None] = {"op1": None, "op2": None, "op3": None}
+    out: dict[str, str | None] = {}
     for match in _OP_LINE.finditer(text or ""):
         key = f"op{match.group(1)}"
         raw = match.group(2).strip().rstrip(",").rstrip(".")
@@ -140,7 +146,12 @@ def parse_response(text: str) -> dict[str, str | None]:
 def _normalize_numeric(value: str | None) -> str | None:
     if value is None:
         return None
-    return value.replace(",", "").strip().rstrip(".0").rstrip(".") or value.strip()
+    cleaned = value.replace(",", "").strip()
+    try:
+        normalized = decimal.Decimal(cleaned).normalize()
+    except decimal.InvalidOperation:
+        return cleaned
+    return format(normalized, "f")
 
 
 def validate(
@@ -155,9 +166,14 @@ def validate(
       - Non-null opN values must be pairwise distinct.
       - Non-null opN values must look like numerics (regex check).
     """
+    missing = [key for key in OP_KEYS if key not in parsed]
+    if missing:
+        return f"missing required line(s): {', '.join(missing)}"
+    if parsed["op1"] is None:
+        return "op1 must be numeric; every GSM8K item requires at least one arithmetic operation"
     gold_n = _normalize_numeric(gold)
     nonnull_pairs = []
-    for key in ("op1", "op2", "op3"):
+    for key in OP_KEYS:
         value = parsed.get(key)
         if value is None:
             continue
@@ -280,12 +296,12 @@ def main() -> int:
         "op3=gold+3) to operation_flip_cache_dry_run.json (or honor explicit "
         "--cache-path). Synthetic entries carry _model='DRY_RUN' so they're "
         "distinguishable from real ones. Lets reviewers validate the full "
-        "build + commit flow without needing a judge endpoint.",
+        "build + preserve flow without needing a judge endpoint.",
     )
     args = parser.parse_args()
 
     # dry-run: default to a separate cache file so synthetic entries can't
-    # pollute the committed real cache. Explicit --cache-path still wins.
+    # pollute the real cache. Explicit --cache-path still wins.
     if args.dry_run and args.cache_path == CACHE_PATH:
         args.cache_path = _HERE / "operation_flip_cache_dry_run.json"
 
@@ -295,6 +311,15 @@ def main() -> int:
 
     cache = load_cache(args.cache_path)
     print(f"# existing cache: {len(cache)} entries")
+    invalid = {}
+    for qid, entry in cache.items():
+        parsed = {key: entry[key] for key in OP_KEYS if key in entry}
+        reason = validate(parsed, entry.get("gold", ""))
+        if reason is not None:
+            invalid[qid] = reason
+    for qid, reason in invalid.items():
+        print(f"# invalidating cached {qid}: {reason}")
+        del cache[qid]
 
     todo = [item for item in items if item["qid"] not in cache]
     print(f"# items to process: {len(todo)}")
