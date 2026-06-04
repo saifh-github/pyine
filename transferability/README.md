@@ -69,10 +69,12 @@ transferability/
 ## Gitignored (regenerable, not shipped)
 
 - `outputs/raw/` (~385 MB lm-eval JSON; regenerate via `make sweep1`)
+- `outputs/limited/` (isolated `LIMIT=N` validation runs; never used by full-sweep analysis)
 - `outputs/derived/` (~10 MB derived figures + CSVs; regenerate via `make analyze`)
 - `outputs/failure_modes/` (~776 KB; regenerate via `scripts/analysis_e.py`)
 - `cueflip/results/` (~12 MB JSONL; regenerate via `make sweep2`)
 - `cueflip/results_dry_run/` + `cueflip/operation_flip_cache_dry_run.json` (synthetic from `make sweep2 DRY_RUN=1`)
+- `cueflip/results_smoke/` (isolated live smoke records; never used by the full sweep)
 - `cueflip/cueflip_*.{png,csv,md}` (regenerate via `cueflip/analyze.py`)
 - `.env` (local provider credentials), `docs/` (paper-writing artifacts, hosted separately)
 - `PR_DESCRIPTION.md` (meta for PR-submission; not part of shipped code)
@@ -128,7 +130,7 @@ make sweep1
 #
 #    By default this also builds the GSM8K op-flip wrong-numeric cache
 #    (requires CUEFLIP_JUDGE_URL, defaults to localhost:8000). Skip with
-#    SKIP_CACHE_BUILD=1 if you've already committed a complete cache or
+#    SKIP_CACHE_BUILD=1 if you've already built and preserved a complete cache or
 #    don't want to exercise the secondary stratification subset.
 make sweep2
 #  or: make sweep2 SKIP_CACHE_BUILD=1
@@ -148,9 +150,9 @@ make teardown
 
 The runner exposes `--gsm8k-mode {primary,secondary,both}` (default `both`) to control which GSM8K wrong-numeric strategies run. See `cueflip/AUDIT.md` § "GSM8K wrong-numeric protocol" for the hybrid design.
 
-**Validate the dispatch logic without spending money**: `make sweep2 DRY_RUN=1` runs all 13,400 synthetic calls of the full sweep #2 in ~3 seconds, no HTTP, no credentials, no .env needed. Records are written to a separate `cueflip/results_dry_run/` so they never collide with real data.
+**Validate the dispatch logic without spending inference money**: `make sweep2 DRY_RUN=1` runs synthetic calls for the full sweep #2 without inference HTTP requests or `.env`. Hugging Face datasets must already be cached, or `HF_TOKEN` must be exported for gated GPQA access. Records are written to a separate `cueflip/results_dry_run/` so they never collide with real data.
 
-**Use a local vLLM/SGLang server instead of Runpod**: `LOCAL=1 make <target>` points inference at `localhost:8001` (shortcut), `localhost:8002` (base), and `localhost:8000` (judge). Equivalent to setting `INFERENCE_URL_SHORTCUT` / `INFERENCE_URL_BASE` / `CUEFLIP_INFERENCE_URL_SHORTCUT` / `CUEFLIP_INFERENCE_URL_BASE` env vars to those URLs. Works with all sweep targets: `LOCAL=1 make sweep1`, `LOCAL=1 make sweep2`, `LOCAL=1 make smoke`. Override individual ports via the standard env vars if your setup differs. `cueflip/runner.py` also accepts `--local` for direct script invocation.
+**Use a local vLLM/SGLang server instead of Runpod**: `LOCAL=1 make <target>` points inference at `localhost:8001` (shortcut), `localhost:8002` (base), and `localhost:8000` (judge). Equivalent to setting `INFERENCE_URL_SHORTCUT` / `INFERENCE_URL_BASE` / `CUEFLIP_INFERENCE_URL_SHORTCUT` / `CUEFLIP_INFERENCE_URL_BASE` env vars to those URLs. Works with all sweep targets: `LOCAL=1 make sweep1`, `LOCAL=1 make sweep2`, `LOCAL=1 make smoke`. Override individual ports via the standard env vars if your setup differs. `cueflip/runner.py` also accepts `--local` for direct script invocation. For Qwen/Qwen3 instruct models, set `CUEFLIP_PROMPT_MODE=rendered_chat` to have CueFlip render neutral system + user messages locally with the Hugging Face chat template before sending the flat prompt to `/v1/completions`.
 
 For ops scenarios not covered by the canonical path -- provider swaps, common failures, resume semantics, cost monitoring -- see [`RUNBOOK.md`](RUNBOOK.md).
 
@@ -203,6 +205,8 @@ The two models can use different providers if you want. Full env-var list:
 | `<TAG>_MODEL_ID` | both | Model name passed to /completions for the given tag (e.g., `SHORTCUT_MODEL_ID`, `BASE_MODEL_ID`, `MY_ORG_MODEL_ID`) |
 | `CUEFLIP_JUDGE_URL` / `CUEFLIP_JUDGE_MODEL` | `cueflip/judge.py`, `cueflip/build_operation_flip_cache.py` | LLM endpoint used both by the judge recovery pass and (one-time) the GSM8K op-flip cache builder |
 | `CUEFLIP_OP_FLIP_CACHE` | `cueflip/runner.py`, `cueflip/build_operation_flip_cache.py` | Override path to `operation_flip_cache.json` |
+| `CUEFLIP_PROMPT_MODE` | `cueflip/runner.py` | CueFlip prompt mode: `raw` (default) or `rendered_chat` |
+| `CUEFLIP_CHAT_TEMPLATE_MODEL[_<TAG>]` | `cueflip/runner.py` | Hugging Face tokenizer/model id used when `CUEFLIP_PROMPT_MODE=rendered_chat`; per-tag override wins |
 | `LIMIT` | `scripts/_common.sh` | Smoke-test override: `LIMIT=1 bash scripts/run_gsm8k.sh shortcut` |
 | `TRANSFER_OUTPUTS` | analysis scripts | Override outputs dir (defaults to `transferability/outputs/`) |
 | `CUEFLIP_RESULTS_ROOT` | `cueflip/*.py` | Override CueFlip output dir |

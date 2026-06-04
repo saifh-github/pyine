@@ -40,14 +40,18 @@ import re
 import string
 import sys
 
+import dotenv
 import openai
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import benchmarks  # noqa: E402
 
+_HERE = pathlib.Path(__file__).resolve().parent
+_TRANSFER = _HERE.parent
+ENV_PATH = pathlib.Path(os.environ.get("TRANSF_DOTENV", os.environ.get("PYINE_DOTENV", _TRANSFER / ".env")))
+dotenv.load_dotenv(ENV_PATH)
 LOCAL_BASE_URL = os.environ.get("CUEFLIP_JUDGE_URL", "http://localhost:8000/v1")
 JUDGE_MODEL = os.environ.get("CUEFLIP_JUDGE_MODEL", "Qwen/Qwen3-4B-Instruct-2507")
-_HERE = pathlib.Path(__file__).resolve().parent
 RESULTS_ROOT = pathlib.Path(os.environ.get("CUEFLIP_RESULTS_ROOT", _HERE / "results"))
 
 LETTERS = list(string.ascii_uppercase)
